@@ -73,7 +73,7 @@ try {
 }
 
 // Dist path inference
-const distDir = path.resolve(process.cwd(), 'dist/digital-newspaper/browser');
+const distDir = path.resolve(process.cwd(), 'dist/digital-newspaper');
 if (!fs.existsSync(distDir)) {
   fail(`Dist directory not found: ${distDir}`);
 }
