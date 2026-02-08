@@ -7,7 +7,8 @@
     "server": "node server.js",
     "dev": "concurrently \"npm run server\" \"npm start\"",
     "build": "ng build",
-    "watch": "ng build --watch --configuration development"
+    "watch": "ng build --watch --configuration development",
+    "deploy": "node deploy.js"
   },
   "private": true,
   "dependencies": {
@@ -30,6 +31,7 @@
     "@angular/cli": "^21.0.0",
     "@angular/compiler-cli": "^21.0.0",
     "concurrently": "^8.2.2",
+    "ftp-deploy": "^2.4.7",
     "typescript": "~5.9.0"
   }
 }
