@@ -1,0 +1,34 @@
+# Node modules
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Angular build output
+dist/
+.angular/
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment files
+.env
+.env.local
+
+# Test coverage
+coverage/
+
+# Logs
+*.log
+logs/
+
+# OS files
+Thumbs.db
+
+# Optional: Temporary files
+*.tmp
+*.temp

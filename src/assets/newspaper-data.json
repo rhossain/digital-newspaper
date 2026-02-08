@@ -1,0 +1,811 @@
+{
+  "editions": [
+    {
+      "date": "2026-02-08",
+      "pages": []
+    },
+    {
+      "date": "2026-02-06",
+      "pages": []
+    },
+    {
+      "date": "2026-02-05",
+      "pages": [
+        {
+          "id": 1,
+          "thumbnail": "https://eamardesh.com/_next/image?url=https%3A%2F%2Fimages.dailyamardesh.com%2Fcompressedepaper%2Fdate_05-02-2026_edition_2_page_1_219698_881354_updated_Page_1_2nd%20Edition_compressed_ba0afdf8-27b2-4434-93bc-31fec2c85f4d.jpg&w=128&q=75",
+          "fullImage": "https://images.dailyamardesh.com/compressedepaper/date_05-02-2026_edition_2_page_1_219698_881354_updated_Page_1_2nd Edition_compressed_ba0afdf8-27b2-4434-93bc-31fec2c85f4d.jpg",
+          "sections": []
+        },
+        {
+          "id": 2,
+          "thumbnail": "https://eamardesh.com/_next/image?url=https%3A%2F%2Fimages.dailyamardesh.com%2Fcompressedepaper%2Fdate_05-02-2026_edition_2_page_2_189879_602589_updated_Page_2_2nd%20Edition_compressed_0a3515f6-40b7-4b22-9b56-7a5aea045d94.jpg&w=128&q=75",
+          "fullImage": "https://images.dailyamardesh.com/compressedepaper/date_05-02-2026_edition_2_page_2_189879_602589_updated_Page_2_2nd Edition_compressed_0a3515f6-40b7-4b22-9b56-7a5aea045d94.jpg",
+          "sections": []
+        },
+        {
+          "id": 3,
+          "thumbnail": "https://eamardesh.com/_next/image?url=https%3A%2F%2Fimages.dailyamardesh.com%2Fcompressedepaper%2Fdate_05-02-2026_edition_2_page_3_4836_48920_updated_Page_3_2nd%20Edition_compressed_19279ece-1228-45ac-aec2-74053977b421.jpg&w=128&q=75",
+          "fullImage": "https://images.dailyamardesh.com/compressedepaper/date_05-02-2026_edition_2_page_3_4836_48920_updated_Page_3_2nd Edition_compressed_19279ece-1228-45ac-aec2-74053977b421.jpg",
+          "sections": []
+        }
+      ]
+    },
+    {
+      "date": "2026-02-04",
+      "pages": [
+        {
+          "id": 1,
+          "thumbnail": "https://eamardesh.com/_next/image?url=https%3A%2F%2Fimages.dailyamardesh.com%2Fcompressedepaper%2Fdate_03-02-2026_edition_2_page_1_871854_405156_updated_Page_1_2nd%20Edition_compressed_c8dceadc-c015-406a-bd1f-c5f8bf14fb97.jpg&w=128&q=75",
+          "fullImage": "https://images.dailyamardesh.com/compressedepaper/date_03-02-2026_edition_2_page_1_871854_405156_updated_Page_1_2nd%20Edition_compressed_c8dceadc-c015-406a-bd1f-c5f8bf14fb97.jpg",
+          "sections": [
+            {
+              "id": "headline",
+              "title": "ভোটের প্রচারে ভারত নিয়ে নীরব বিএনপি-জামায়াত",
+              "x": 4,
+              "y": 17,
+              "width": 62,
+              "height": 34,
+              "content": "",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl7_row6_date_03-02-2026_edition_2_page1_797270_307072_updated_watermarked_ceb41941-aad1-4872-b149-63ba51f2aab4.jpg",
+              "pageId": 1,
+              "linkedSectionIds": [
+                "section-1770230326538"
+              ],
+              "showCaption": false
+            },
+            {
+              "id": "politics",
+              "title": "উগ্র হিন্দুত্ববাদী ভারত একঘরে",
+              "x": 65,
+              "y": 17,
+              "width": 33,
+              "height": 33,
+              "content": "<h2>Political Landscape Shifts</h2><p><strong>Political Correspondent</strong></p><p>The political arena witnessed significant movements this week as key figures from both sides of the aisle engaged in heated debates over policy proposals.</p><p>Observers note that the current climate reflects broader changes in public sentiment, with constituents demanding more accountability and transparency from their elected representatives.</p><p>Party leaders have promised to address these concerns in upcoming sessions, though critics remain skeptical about the timeline for meaningful reform.</p>",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl6_row5_date_03-02-2026_edition_2_page1_230182_717989_updated_watermarked_50d72a43-6d2a-48da-a697-045f8df6acb0.jpg",
+              "pageId": 1,
+              "linkedSectionIds": [],
+              "showCaption": false
+            },
+            {
+              "id": "business",
+              "title": "নারী সাফ চ্যাম্পিয়নশিপ ভারতকে হারাল বাংলাদেশের মেয়েরা",
+              "x": 3,
+              "y": 51,
+              "width": 17,
+              "height": 18,
+              "content": "<h2>Markets Show Mixed Signals</h2><p><strong>Business Editor</strong></p><p>Financial markets displayed volatility today as investors digested new economic data and corporate earnings reports.</p><p>Tech stocks led gains in the morning session, while energy sector shares faced pressure from fluctuating commodity prices. Analysts suggest caution as uncertainty persists regarding monetary policy direction.</p>",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl8_row7_date_03-02-2026_edition_2_page1_17959_170649_updated_watermarked_48d5d29c-d726-4fc7-bb6e-57c7234e0582.jpg",
+              "pageId": 1,
+              "linkedSectionIds": [
+                "section-1770230444475"
+              ],
+              "showCaption": true
+            },
+            {
+              "id": "sports",
+              "title": "চট্টগ্রামের সীতাকুণ্ডে বক্তব্য দেন ডা. শফিকুর রহমান",
+              "x": 50,
+              "y": 50,
+              "width": 32,
+              "height": 33,
+              "content": "<h2>Championship Race Intensifies</h2><p><strong>Sports Desk</strong></p><p>The championship race heated up this weekend with stunning performances from underdogs and favorites alike.</p><p>Star athletes delivered career-best performances, thrilling fans and setting new records in the process. The competition remains fierce as teams prepare for the crucial final stretch of the season.</p><p>Coaches are carefully managing player fatigue while strategizing for upcoming crucial matches that could determine final standings.</p>",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl10_row9_date_03-02-2026_edition_2_page1_189457_506197_updated_watermarked_675b6fa9-1ed2-4670-9b2b-8ca802d67cbe.jpg",
+              "pageId": 1,
+              "linkedSectionIds": [
+                "environment"
+              ]
+            },
+            {
+              "id": "weather",
+              "title": "যশোরে বক্তব্য দেন তারেক রহমান",
+              "x": 18,
+              "y": 50,
+              "width": 32,
+              "height": 33,
+              "content": "<h2>Weather Forecast</h2><p>Partly cloudy skies expected throughout the week with occasional showers. Temperatures ranging from 18-25°C. Weekend outlook suggests clearing conditions.</p>",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl9_row8_date_03-02-2026_edition_2_page1_603473_214539_updated_watermarked_1ad0ea23-a877-4ce4-a308-aeab49e06f71.jpg",
+              "pageId": 1,
+              "linkedSectionIds": [
+                "education"
+              ]
+            },
+            {
+              "id": "section-1770224598892",
+              "title": "রমজানের আগমনী বার্তা নিয়ে আজ পবিত্র শবেবরাত",
+              "x": 3,
+              "y": 70,
+              "width": 16,
+              "height": 17,
+              "content": "",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl13_row12_date_03-02-2026_edition_2_page1_15133_243975_updated_watermarked_709a38c3-c445-4feb-9456-fa15502e0e81.jpg",
+              "pageId": 1,
+              "linkedSectionIds": [
+                "section-1770230512950"
+              ],
+              "showCaption": true
+            },
+            {
+              "id": "section-1770224971362",
+              "title": "হাসিনা টিউলিপ আজমিনা ববির কারাদণ্ড",
+              "x": 18,
+              "y": 82,
+              "width": 64,
+              "height": 17,
+              "content": "",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl16_row15_date_03-02-2026_edition_2_page1_393488_759352_updated_watermarked_d5ea75b2-1fc8-4baa-bff3-201cbf7290aa.jpg",
+              "pageId": 1,
+              "linkedSectionIds": [
+                "culture"
+              ],
+              "showCaption": true
+            },
+            {
+              "id": "section-1770225072438",
+              "title": "বিএনপি প্রার্থী কাইয়ুমের বৈধতা চ্যালেঞ্জ করে নাহিদের রিট",
+              "x": 81,
+              "y": 63,
+              "width": 17,
+              "height": 25,
+              "content": "",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl12_row11_date_03-02-2026_edition_2_page1_802759_432630_updated_watermarked_058a7e9e-bcbd-4003-8b8c-dd2f9a5e83ab.jpg",
+              "pageId": 1,
+              "linkedSectionIds": []
+            },
+            {
+              "id": "section-1770225160713",
+              "title": "নামাজের সময়সূচি",
+              "x": 82,
+              "y": 50,
+              "width": 16,
+              "height": 13,
+              "content": "",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl11_row10_date_03-02-2026_edition_2_page1_280377_428252_updated_watermarked_21b1abbd-a626-442c-896d-09b52cebc0ec.jpg",
+              "pageId": 1,
+              "linkedSectionIds": []
+            },
+            {
+              "id": "section-1770225217044",
+              "title": "ছুটি পবিত্র শবেবরাত উপলক্ষে",
+              "x": 3,
+              "y": 86,
+              "width": 17,
+              "height": 13,
+              "content": "",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl14_row13_date_03-02-2026_edition_2_page1_390833_270153_updated_watermarked_063e0a3f-af47-404d-bf90-95fe27778c0e.jpg",
+              "pageId": 1,
+              "linkedSectionIds": []
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "thumbnail": "https://eamardesh.com/_next/image?url=https%3A%2F%2Fimages.dailyamardesh.com%2Fcompressedepaper%2Fdate_03-02-2026_edition_2_page_2_71683_53028_updated_Page_2_2nd%20Edition_compressed_a0e731b3-82b4-4fea-a569-779b4221df66.jpg&w=128&q=75",
+          "fullImage": "https://images.dailyamardesh.com/compressedepaper/date_03-02-2026_edition_2_page_2_71683_53028_updated_Page_2_2nd%20Edition_compressed_a0e731b3-82b4-4fea-a569-779b4221df66.jpg",
+          "sections": [
+            {
+              "id": "local-lead",
+              "title": "ভাঙ্গায় জনসভায় মাওলানা মামুনুল হক",
+              "x": 3,
+              "y": 6,
+              "width": 48,
+              "height": 20,
+              "content": "<h2>New Community Initiative Brings Hope</h2><p><strong>Local Reporter</strong></p><p>A groundbreaking community initiative was launched today, bringing together local organizations, businesses, and residents in an unprecedented collaboration aimed at improving quality of life for all community members.</p><p>The program focuses on three key pillars: education, sustainability, and social cohesion. Organizers have already secured significant funding and support from various stakeholders.</p><p>\"This is just the beginning,\" said the initiative coordinator. \"We've seen tremendous enthusiasm from the community, and we're confident this will make a lasting positive impact.\"</p><p>Volunteer registration is now open for those interested in participating.</p>",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl4_row3_date_03-02-2026_edition_2_page2_772750_819539_updated_watermarked_c8f2f77e-7aa1-415e-97cf-5f3b38333417.jpg",
+              "pageId": 2,
+              "linkedSectionIds": []
+            },
+            {
+              "id": "education",
+              "title": "যশোরে বক্তব্য দেন তারেক রহমান 2",
+              "x": 3,
+              "y": 24,
+              "width": 48,
+              "height": 27,
+              "content": "<h2>Schools Embrace Technology</h2><p><strong>Education Correspondent</strong></p><p>Local schools are undergoing significant modernization efforts, integrating cutting-edge technology into classrooms and updating curricula to better prepare students for future challenges.</p><p>The initiative includes teacher training programs and infrastructure upgrades across multiple institutions.</p>",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl5_row4_date_03-02-2026_edition_2_page2_191123_385648_updated_watermarked_59ea87b4-72d3-4ca6-9924-55414f1f3f0f.jpg",
+              "pageId": 2,
+              "linkedSectionIds": [
+                "weather"
+              ]
+            },
+            {
+              "id": "environment",
+              "title": "চট্টগ্রামের সীতাকুণ্ডে বক্তব্য দেন ডা. শফিকুর রহমান 2",
+              "x": 50,
+              "y": 5,
+              "width": 48,
+              "height": 51,
+              "content": "<h2>City Goes Green</h2><p><strong>Environment Reporter</strong></p><p>The municipality announced ambitious plans to increase green spaces by 30% over the next three years, including new parks, urban forests, and community gardens.</p><p>The project aims to improve air quality and provide recreational spaces for residents.</p>",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl2_row1_date_03-02-2026_edition_2_page2_165218_608200_updated_watermarked_956578be-cf8a-4d65-8174-285cf324be03.jpg",
+              "pageId": 2,
+              "linkedSectionIds": [
+                "sports"
+              ]
+            },
+            {
+              "id": "culture",
+              "title": "হাসিনা টিউলিপ আজমিনা ববির কারাদণ্ড 2",
+              "x": 2,
+              "y": 51,
+              "width": 49,
+              "height": 14,
+              "content": "<h2>Festival Season Begins</h2><p>The annual cultural festival kicks off this weekend with performances, exhibitions, and workshops celebrating local heritage and contemporary arts. Free admission for all events.</p>",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl6_row5_date_03-02-2026_edition_2_page2_139440_498862_updated_watermarked_5ac0eafc-c81f-4602-a74e-016a3d1acefa.jpg",
+              "pageId": 2,
+              "linkedSectionIds": [
+                "section-1770224971362"
+              ],
+              "showCaption": true
+            },
+            {
+              "id": "section-1770230326538",
+              "title": "ভোটের প্রচারে ভারত নিয়ে নীরব বিএনপি-জামায়াত 2",
+              "x": 50,
+              "y": 56,
+              "width": 48,
+              "height": 44,
+              "content": "",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl7_row6_date_03-02-2026_edition_2_page2_989129_494463_updated_watermarked_2e941c6c-5ab8-45ad-a660-45cc857ddc43.jpg",
+              "pageId": 2,
+              "linkedSectionIds": [
+                "headline"
+              ],
+              "showCaption": true
+            },
+            {
+              "id": "section-1770230444475",
+              "title": "নারী সাফ চ্যাম্পিয়নশিপ ভারতকে হারাল বাংলাদেশের মেয়েরা 2",
+              "x": 3,
+              "y": 64,
+              "width": 48,
+              "height": 14,
+              "content": "",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl8_row7_date_03-02-2026_edition_2_page2_614898_654785_updated_watermarked_e32daf8d-22de-4004-9fa8-9c1b32b4a745.jpg",
+              "pageId": 2,
+              "linkedSectionIds": [
+                "business"
+              ],
+              "showCaption": true
+            },
+            {
+              "id": "section-1770230512950",
+              "title": "রমজানের আগমনী বার্তা নিয়ে আজ পবিত্র শবেবরাত 2",
+              "x": 3,
+              "y": 78,
+              "width": 48,
+              "height": 21,
+              "content": "",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl9_row8_date_03-02-2026_edition_2_page2_769020_403386_updated_watermarked_17724e68-65b8-4ac7-a997-6996a881848d.jpg",
+              "pageId": 2,
+              "linkedSectionIds": [
+                "section-1770224598892"
+              ],
+              "showCaption": true
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "thumbnail": "https://eamardesh.com/_next/image?url=https%3A%2F%2Fimages.dailyamardesh.com%2Fcompressedepaper%2Fdate_03-02-2026_edition_2_page_3_864338_869503_updated_Page_3_2nd%20Edition_compressed_84683b1e-725e-4310-9e57-6ffacc35134b.jpg&w=128&q=75",
+          "fullImage": "https://images.dailyamardesh.com/compressedepaper/date_03-02-2026_edition_2_page_3_864338_869503_updated_Page_3_2nd%20Edition_compressed_84683b1e-725e-4310-9e57-6ffacc35134b.jpg",
+          "sections": [
+            {
+              "id": "interview",
+              "title": "Exclusive Interview",
+              "x": 10,
+              "y": 10,
+              "width": 80,
+              "height": 40,
+              "pageId": 3,
+              "linkedSectionIds": [
+                "politics"
+              ],
+              "content": "<h2>In Conversation: Visionary Leader</h2><p><strong>Feature Writer</strong></p><p>In an exclusive interview, we sat down with a pioneering figure whose work has transformed the industry and inspired countless others to pursue innovation.</p><p><em>Q: What drives your passion for this work?</em></p><p>\"I've always believed that meaningful change comes from understanding people's needs and working tirelessly to address them. It's not about individual achievement—it's about creating systems that benefit everyone.\"</p><p><em>Q: What advice would you give to young professionals?</em></p><p>\"Stay curious, embrace failure as a learning opportunity, and never underestimate the power of collaboration. The best solutions come from diverse perspectives working together.\"</p><p>The full interview reveals insights into leadership, innovation, and the future of the industry.</p>"
+            },
+            {
+              "id": "lifestyle",
+              "title": "Healthy Living",
+              "x": 10,
+              "y": 55,
+              "width": 45,
+              "height": 20,
+              "pageId": 3,
+              "content": "<h2>Wellness in Modern Times</h2><p><strong>Lifestyle Section</strong></p><p>Experts share practical tips for maintaining physical and mental well-being in today's fast-paced world, from nutrition advice to stress management techniques.</p>"
+            },
+            {
+              "id": "tech",
+              "title": "Tech Corner",
+              "x": 60,
+              "y": 55,
+              "width": 30,
+              "height": 20,
+              "pageId": 3,
+              "content": "<h2>Technology Trends</h2><p>The latest developments in artificial intelligence, sustainable tech, and digital innovation that are shaping our future.</p>"
+            },
+            {
+              "id": "opinion",
+              "title": "Opinion",
+              "x": 10,
+              "y": 80,
+              "width": 80,
+              "height": 15,
+              "pageId": 3,
+              "content": "<h2>Editorial: Looking Forward</h2><p>As we navigate these changing times, it's crucial to maintain perspective and focus on shared values that unite us as a community.</p>"
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "thumbnail": "https://eamardesh.com/_next/image?url=https%3A%2F%2Fimages.dailyamardesh.com%2Fcompressedepaper%2Fdate_03-02-2026_edition_1_page_4_859800_878696_Page_4_compressed_b5123675-31bd-4cf8-8346-eb311f3237d8.jpg&w=128&q=75",
+          "fullImage": "https://images.dailyamardesh.com/compressedepaper/date_03-02-2026_edition_1_page_4_859800_878696_Page_4_compressed_b5123675-31bd-4cf8-8346-eb311f3237d8.jpg",
+          "sections": [
+            {
+              "id": "section-1770535078574",
+              "title": "4-01",
+              "x": 2,
+              "y": 6,
+              "width": 28,
+              "height": 34,
+              "content": "",
+              "imageUrl": "assets/cropped/4_01_1770546082473.jpg",
+              "pageId": 4,
+              "linkedSectionIds": [],
+              "showCaption": true
+            }
+          ]
+        },
+        {
+          "id": 5,
+          "thumbnail": "https://eamardesh.com/_next/image?url=https%3A%2F%2Fimages.dailyamardesh.com%2Fcompressedepaper%2Fdate_03-02-2026_edition_1_page_5_692499_587734_Page_5_compressed_fbf5a745-efce-480c-8b16-311333aa7a7f.jpg&w=128&q=75",
+          "fullImage": "https://images.dailyamardesh.com/compressedepaper/date_03-02-2026_edition_1_page_5_692499_587734_Page_5_compressed_fbf5a745-efce-480c-8b16-311333aa7a7f.jpg",
+          "sections": []
+        }
+      ]
+    },
+    {
+      "date": "2026-02-03",
+      "pages": [
+        {
+          "id": 1,
+          "thumbnail": "https://eamardesh.com/_next/image?url=https%3A%2F%2Fimages.dailyamardesh.com%2Fcompressedepaper%2Fdate_02-02-2026_edition_2_page_1_124550_957281_updated_Page_1_2nd%20Edition_compressed_24d63528-9de0-4a8d-8a5d-36289a50d1cd.jpg&w=128&q=75",
+          "fullImage": "https://images.dailyamardesh.com/compressedepaper/date_02-02-2026_edition_2_page_1_124550_957281_updated_Page_1_2nd Edition_compressed_24d63528-9de0-4a8d-8a5d-36289a50d1cd.jpg",
+          "sections": [
+            {
+              "id": "section-1770233075168",
+              "title": "ডা. শফিকের কথিত পোস্টে তোলপাড়",
+              "x": 2,
+              "y": 17,
+              "width": 49,
+              "height": 34,
+              "content": "<h2>ডা. শফিকের কথিত পোস্টে তোলপাড়</h2>\n<p>• পরিকল্পিত ষড়যন্ত্রে অ্যাকাউন্টটি হ্যাক হয়েছে : জামায়াত • হ্যাক করার ক্ষেত্রে বঙ্গভবন কর্মকর্তার সরকারি মেইল ব্যবহার • আইডি হ্যাকের দাবির যৌক্তিকতা নিয়ে প্রশ্ন বিএনপির • ছাত্রদলের বিক্ষোভ মিছিল ও সমাবেশ</p>\n<br>\n<strong>স্টাফ রিপোর্টার</strong>\n<p>জামায়াতে ইসলামীর আমির ডা. শফিকুর রহমানের ভেরিফায়েড এক্স (সাবেক টুইটার) হ্যান্ডেল থেকে কর্মজীবী নারীদের বিষয়ে করা কথিত একটি পোস্ট নিয়ে দেশজুড়ে ব্যাপক তোলপাড় সৃষ্টি হয়েছে। রাজনৈতিক অঙ্গনেও চলছে ব্যাপক আলোচনা-সমালোচনা। ‘পোস্টের জের ধরে সামাজিক মাধ্যমে জামায়াতে ইসলামী ও দলটির আমিরকে নারীবিদ্বেষী আখ্যা দিয়ে নানা নেতিবাচক মন্তব্য করা হচ্ছে। বিষয়টি নিয়ে কড়া সমালোচনা করেছে নির্বাচনি মাঠের প্রধান প্রতিপক্ষ দেশের অন্যতম প্রধান রাজনৈতিক দল বিএনপিও। এমনকি পোস্টটিকে ঘিরে নারী অবমাননার অভিযোগ তুলে ছাত্রদল প্রতিবাদ মিছিলও করেছে।</p>\n<p>তবে জামায়াতে ইসলামী দাবি করেছে, তাদের আমিরের ভেরিফায়েড এক্স হ্যান্ডেল হ্যাক করা হয়েছিল। একটি মহল ষড়যন্ত্রের অংশ হিসেবে পরিকল্পিতভাবে হ্যাক করে এ ধরনের আপত্তিকর পোস্ট দিয়েছে বলে দাবি দলটির। তাদের দলের আরেক দায়িত্বশীল নেতার ফেসবুক পেজ হ্যাক করে আমিরের ওই পোস্টের বাংলা ভার্সন ছড়ানো হয় বলে জানিয়েছে দলটি। এই হ্যাকের ক্ষেত্রে বঙ্গভবনের (রাষ্ট্রপতির দপ্তর একজন কর্মকর্তার ইমেইল আইডি ব্যবহার করা হয়েছে বলেও জামায়াত জরুরি সংবাদ সম্মেলন করে দাবি করেছে। করে।</p>\n<p>সংবাদ সম্মেলনে জামায়াত বলেছে, শনিবার বিকেলে আপত্তিকর পোস্টের বিষয়টি নজরে আসার পর তাদের আইটি টিমের তৎপরতায় জামায়াত আমিরের অ্যাকাউন্টটি পুনরায় নিয়ন্ত্রণে নেওয়া হয়। হ্যাকের বিষয়টি ওই অ্যাকাউন্টে ঘোষণার পাশাপাশি শনিবার রাতেই দলের পক্ষ থেকে বিবৃতি, হাতিরঝিল থানায় জিডি এবং গতকাল রোববার কেন্দ্রীয় কার্যালয়ে সংবাদ সম্মেলনে বিস্তারিত তুলে ধরা হয়। পরে এ বিষয়ে তদন্ত করে ব্যবস্থা নিতে নির্বাচন কমিশন এবং সাইবার ট্রাইব্যুনালেও জানায় জামায়াত । অবশ্য আইডি হ্যাক করে বিতর্কিত পোস্ট দেওয়ার পর আবার আইডির নিয়ন্ত্রণ ফিরে পাওয়া নিয়ে জামায়াতের বক্তব্যের বিষয়ে নতুন করে কেউ কেউ বিতর্ক করছেন।</p>\n<p>সূত্র মতে, সম্প্রতি আন্তর্জাতিক গণমাধ্যম আল-জাজিরার ইউটিউব চ্যানেলে দেওয়া এক সাক্ষাৎকারে ‘জামায়াতের আমির পদে নারী আসা সম্ভব নয়' বলে বক্তব্য দেন ডা. শফিকুর রহমান। সাক্ষাৎকারে আমির পদে নারী আসা কেন সম্ভব নয় তার পক্ষে কিছু যুক্তি তুলে ধরেন। ওই সাক্ষাৎকারের তথ্য বিকৃত করে অ্যাকাউন্ট হ্যাক করে পোস্ট করা</p>\n\n।। পৃষ্ঠা ২ : কলাম ৪",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl7_row6_date_02-02-2026_edition_2_page1_455253_921569_updated_watermarked_8ecbb47b-7938-47ac-9eda-e14bd4ea8a13.jpg",
+              "pageId": 1,
+              "linkedSectionIds": [
+                "section-1770283626616"
+              ],
+              "showCaption": true
+            },
+            {
+              "id": "section-1770275411313",
+              "title": "বাংলা একাডেমি প্রাঙ্গণে আয়োজন করা হয় প্রতীকী বইমেলার",
+              "x": 49,
+              "y": 18,
+              "width": 49,
+              "height": 22,
+              "content": "",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl6_row5_date_02-02-2026_edition_2_page1_420228_20458_updated_watermarked_45ebe7d8-bdef-4de0-aa72-5ecdf704c4ae.jpg",
+              "pageId": 1,
+              "linkedSectionIds": [],
+              "showCaption": false
+            },
+            {
+              "id": "section-1770275523458",
+              "title": "ঢাকা বিশ্ববিদ্যালয় ক্যাম্পাসে হিজাব দিবস পালন",
+              "x": 2,
+              "y": 50,
+              "width": 33,
+              "height": 17,
+              "content": "",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl14_row13_date_02-02-2026_edition_2_page1_384544_462645_updated_watermarked_a30aca3e-2c6d-4b04-bac0-555bf416552a.jpg",
+              "pageId": 1,
+              "linkedSectionIds": [],
+              "showCaption": false
+            },
+            {
+              "id": "section-1770281976464",
+              "title": "৫৩ আসনে সহিংসতার শঙ্কা সর্বোচ্চ সতর্কতায় পুলিশ",
+              "x": 3,
+              "y": 67,
+              "width": 32,
+              "height": 32,
+              "content": "",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl13_row12_date_02-02-2026_edition_2_page1_39223_141130_updated_watermarked_f0b5bd07-ad6e-48a6-8b59-f08dd992521a.jpg",
+              "pageId": 1,
+              "linkedSectionIds": [
+                "section-1770283344435"
+              ],
+              "showCaption": false
+            },
+            {
+              "id": "section-1770282090856",
+              "title": "নির্বাচন করতে পারবেন না বিএনপি নেতা মঞ্জুরুল-গফুর",
+              "x": 34,
+              "y": 50,
+              "width": 17,
+              "height": 50,
+              "content": "",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl10_row9_date_02-02-2026_edition_2_page1_91427_342052_updated_watermarked_4bbd9e41-06b6-44de-b2c8-95ffda5a14e9.jpg",
+              "pageId": 1,
+              "linkedSectionIds": [
+                "section-1770282990900"
+              ],
+              "showCaption": false
+            },
+            {
+              "id": "section-1770282205773",
+              "title": "নির্বাচনের আগে সাইবার হামলার উচ্চ ঝুঁকি",
+              "x": 50,
+              "y": 40,
+              "width": 17,
+              "height": 31,
+              "content": "",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl9_row8_date_02-02-2026_edition_2_page1_516292_791621_updated_watermarked_675ec8b8-fea0-44a8-81eb-3c55d7a0426e.jpg",
+              "pageId": 1,
+              "linkedSectionIds": [
+                "section-1770283745287"
+              ],
+              "showCaption": false
+            },
+            {
+              "id": "section-1770282288221",
+              "title": "বাংলাদেশের সমর্থনে ভারতের বিরুদ্ধে ম্যাচ বয়কটের সিদ্ধান্ত পাকিস্তানের",
+              "x": 65,
+              "y": 40,
+              "width": 33,
+              "height": 31,
+              "content": "",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl8_row7_date_02-02-2026_edition_2_page1_977993_605129_updated_watermarked_79f890c8-731e-42aa-8d1a-3d920c66b735.jpg",
+              "pageId": 1,
+              "linkedSectionIds": [
+                "section-1770282841924"
+              ],
+              "showCaption": false
+            },
+            {
+              "id": "section-1770282405611",
+              "title": "অবৈধ ও বড় লেনদেন মনিটর করছে বিএফআইইউ",
+              "x": 49,
+              "y": 70,
+              "width": 33,
+              "height": 29,
+              "content": "",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl12_row11_date_02-02-2026_edition_2_page1_379763_860988_updated_watermarked_e53bf1ea-7ac0-4e7b-8d43-069d57d498c4.jpg",
+              "pageId": 1,
+              "linkedSectionIds": [
+                "section-1770283041852"
+              ],
+              "showCaption": false
+            },
+            {
+              "id": "section-1770282509669",
+              "title": "সাংবাদিকদের নজরুল ইসলাম",
+              "x": 82,
+              "y": 70,
+              "width": 16,
+              "height": 29,
+              "content": "",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl11_row10_date_02-02-2026_edition_2_page1_783643_60216_updated_watermarked_94fba6ff-d279-4b1a-81af-a096b91bc04f.jpg",
+              "pageId": 1,
+              "linkedSectionIds": [
+                "section-1770283437033"
+              ],
+              "showCaption": false
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "thumbnail": "https://eamardesh.com/_next/image?url=https%3A%2F%2Fimages.dailyamardesh.com%2Fcompressedepaper%2Fdate_02-02-2026_edition_2_page_2_80599_532751_updated_Page_2_2nd%20Ediiton_compressed_b945ba3c-8513-480c-87d0-1bb4f3b7c127.jpg&w=128&q=75",
+          "fullImage": "https://images.dailyamardesh.com/compressedepaper/date_02-02-2026_edition_2_page_2_80599_532751_updated_Page_2_2nd Ediiton_compressed_b945ba3c-8513-480c-87d0-1bb4f3b7c127.jpg",
+          "sections": [
+            {
+              "id": "section-1770282649017",
+              "title": "ডিএনসিসির প্রশাসক এজাজের বিদেশ গমনে নিষেধাজ্ঞা",
+              "x": 3,
+              "y": 6,
+              "width": 32,
+              "height": 22,
+              "content": "",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl2_row1_date_02-02-2026_edition_2_page2_559156_131345_updated_watermarked_522f47a8-d8e3-4d0f-a4cc-b9ca5861c788.jpg",
+              "pageId": 2,
+              "linkedSectionIds": [],
+              "showCaption": false
+            },
+            {
+              "id": "section-1770282717801",
+              "title": "খাগড়াছড়িতে দাঁড়িপাল্লার সমর্থনে গণমিছিল",
+              "x": 3,
+              "y": 27,
+              "width": 32,
+              "height": 14,
+              "content": "",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl5_row4_date_02-02-2026_edition_2_page2_71626_934317_updated_watermarked_4fdd81d0-bdaf-4adf-8ee5-1cb0e71f1ae4.jpg",
+              "pageId": 2,
+              "linkedSectionIds": [],
+              "showCaption": false
+            },
+            {
+              "id": "section-1770282841924",
+              "title": "বাংলাদেশের সমর্থনে ভারতের বিরুদ্ধে ম্যাচ বয়কটের সিদ্ধান্ত পাকিস্তানের 2",
+              "x": 2,
+              "y": 40,
+              "width": 33,
+              "height": 18,
+              "content": "",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl6_row5_date_02-02-2026_edition_2_page2_561900_544261_updated_watermarked_819867eb-755d-4ce8-97a4-e9f4e5d98126.jpg",
+              "pageId": 2,
+              "linkedSectionIds": [
+                "section-1770282288221"
+              ],
+              "showCaption": false
+            },
+            {
+              "id": "section-1770282990900",
+              "title": "নির্বাচন করতে পারবেন না বিএনপি নেতা মঞ্জুরুল-গফুর 2",
+              "x": 3,
+              "y": 57,
+              "width": 33,
+              "height": 17,
+              "content": "",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl8_row7_date_02-02-2026_edition_2_page2_778421_711322_updated_watermarked_cdd8b22a-b01b-431d-b312-cd7449039bc7.jpg",
+              "pageId": 2,
+              "linkedSectionIds": [
+                "section-1770282090856"
+              ],
+              "showCaption": true
+            },
+            {
+              "id": "section-1770283041852",
+              "title": "অবৈধ ও বড় লেনদেন মনিটর করছে বিএফআইইউ 2",
+              "x": 3,
+              "y": 73,
+              "width": 33,
+              "height": 26,
+              "content": "",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl9_row8_date_02-02-2026_edition_2_page2_870325_669358_updated_watermarked_afdaecfd-5ee1-49e0-8475-bfb73c11fa0f.jpg",
+              "pageId": 2,
+              "linkedSectionIds": [
+                "section-1770282405611"
+              ],
+              "showCaption": false
+            },
+            {
+              "id": "section-1770283220417",
+              "title": "নিম্ন ও উচ্চকক্ষের সদস্যরা গোপন ব্যালটে রাষ্ট্রপতি নির্বাচন",
+              "x": 34,
+              "y": 5,
+              "width": 17,
+              "height": 50,
+              "content": "",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl4_row3_date_02-02-2026_edition_2_page2_246226_734974_updated_watermarked_9c3df29f-af45-4361-80d7-dd7d4796bdd4.jpg",
+              "pageId": 2,
+              "linkedSectionIds": [],
+              "showCaption": false
+            },
+            {
+              "id": "section-1770283344435",
+              "title": "৫৩ আসনে সহিংসতার শঙ্কা সর্বোচ্চ সতর্কতায় পুলিশ 2",
+              "x": 34,
+              "y": 54,
+              "width": 17,
+              "height": 14,
+              "content": "",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl7_row6_date_02-02-2026_edition_2_page2_914162_972163_updated_watermarked_426be0a2-6efe-450d-bda0-13a0e3851f95.jpg",
+              "pageId": 2,
+              "linkedSectionIds": [
+                "section-1770281976464"
+              ],
+              "showCaption": true
+            },
+            {
+              "id": "section-1770283437033",
+              "title": "সাংবাদিকদের নজরুল ইসলাম 2",
+              "x": 34,
+              "y": 68,
+              "width": 17,
+              "height": 31,
+              "content": "",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl10_row9_date_02-02-2026_edition_2_page2_671736_150871_updated_watermarked_047332dc-b6e5-44e9-82bd-1848798ab4a1.jpg",
+              "pageId": 2,
+              "linkedSectionIds": [
+                "section-1770282509669"
+              ],
+              "showCaption": true
+            },
+            {
+              "id": "section-1770283626616",
+              "title": "ডা. শফিকের কথিত পোস্টে তোলপাড় 2",
+              "x": 50,
+              "y": 5,
+              "width": 50,
+              "height": 54,
+              "content": "",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl3_row2_date_02-02-2026_edition_2_page2_523711_530676_updated_watermarked_3b93b841-c824-4702-a57d-33eceb1a6bf8.jpg",
+              "pageId": 2,
+              "linkedSectionIds": [
+                "section-1770233075168"
+              ],
+              "showCaption": false
+            },
+            {
+              "id": "section-1770283745287",
+              "title": "নির্বাচনের আগে সাইবার হামলার উচ্চ ঝুঁকি 2",
+              "x": 50,
+              "y": 58,
+              "width": 48,
+              "height": 41,
+              "content": "",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl11_row10_date_02-02-2026_edition_2_page2_556679_792179_updated_watermarked_bf6ee074-93d9-4afc-a688-0a2beb735cec.jpg",
+              "pageId": 2,
+              "linkedSectionIds": [
+                "section-1770282205773"
+              ],
+              "showCaption": false
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "thumbnail": "https://eamardesh.com/_next/image?url=https%3A%2F%2Fimages.dailyamardesh.com%2Fcompressedepaper%2Fdate_02-02-2026_edition_2_page_3_800024_563263_updated_Page_3_2nd%20edition_compressed_5ec9a194-05a5-47aa-95fa-b90bad94c7a2.jpg&w=128&q=75",
+          "fullImage": "https://images.dailyamardesh.com/compressedepaper/date_02-02-2026_edition_2_page_3_800024_563263_updated_Page_3_2nd edition_compressed_5ec9a194-05a5-47aa-95fa-b90bad94c7a2.jpg",
+          "sections": [
+            {
+              "id": "section-1770284143198",
+              "title": "পূবালী ব্যাংক অ্যাপস",
+              "x": 3,
+              "y": 6,
+              "width": 95,
+              "height": 11,
+              "content": "",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl2_row1_date_02-02-2026_edition_2_page3_218230_906066_updated_watermarked_9bc29955-a1dd-4482-85d1-f97938ad714b.jpg",
+              "pageId": 3,
+              "linkedSectionIds": [],
+              "showCaption": false
+            },
+            {
+              "id": "section-1770284279181",
+              "title": "প্রধান উপদেষ্টা ড. মুহাম্মদ ইউনূসের সঙ্গে ইউরোপীয় চেম্বার অব কমার্স ইন বাংলাদেশের চেয়ারপারসন নুরিয়া লোপেজ",
+              "x": 3,
+              "y": 16,
+              "width": 48,
+              "height": 18,
+              "content": "",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl3_row2_date_02-02-2026_edition_2_page3_589111_388096_updated_watermarked_8df7e2fa-dee8-4e49-9c37-660fa95daf05.jpg",
+              "pageId": 3,
+              "linkedSectionIds": [],
+              "showCaption": false
+            },
+            {
+              "id": "section-1770284412876",
+              "title": "বাংলাদেশকে মুক্ত বাণিজ্য চুক্তি করার পরামর্শ ইইউর",
+              "x": 2,
+              "y": 33,
+              "width": 33,
+              "height": 30,
+              "content": "",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl6_row5_date_02-02-2026_edition_2_page3_488810_643403_updated_watermarked_bd1da861-4174-4716-9353-3f13bc3b515f.jpg",
+              "pageId": 3,
+              "linkedSectionIds": [],
+              "showCaption": false
+            },
+            {
+              "id": "section-1770284589319",
+              "title": "গণতন্ত্রের লড়াইয়ে হিমালয়ের মতো দাঁড়িয়েছিলেন খালেদা জিয়া",
+              "x": 3,
+              "y": 61,
+              "width": 32,
+              "height": 16,
+              "content": "",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl12_row11_date_02-02-2026_edition_2_page3_909040_266064_updated_watermarked_7049fc57-caac-449e-8bd3-1cadeef73144.jpg",
+              "pageId": 3,
+              "linkedSectionIds": [],
+              "showCaption": true
+            },
+            {
+              "id": "section-1770284738671",
+              "title": "কোরআনের নির্দেশ মতে নারীদের আমির হওয়ার সুযোগ নেই",
+              "x": 3,
+              "y": 77,
+              "width": 32,
+              "height": 22,
+              "content": "",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl11_row10_date_02-02-2026_edition_2_page3_311288_287519_updated_watermarked_4e5aae62-2426-4c67-be6a-1243845e76ec.jpg",
+              "pageId": 3,
+              "linkedSectionIds": [],
+              "showCaption": false
+            },
+            {
+              "id": "section-1770284788839",
+              "title": "নির্বাচনি জনসভায় খুলনা ও যশোর যাচ্ছেন তারেক রহমান",
+              "x": 33,
+              "y": 33,
+              "width": 17,
+              "height": 41,
+              "content": "",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl5_row4_date_02-02-2026_edition_2_page3_977633_643669_updated_watermarked_ab8838ee-b421-455e-8480-e0f31cdee319.jpg",
+              "pageId": 3,
+              "linkedSectionIds": [],
+              "showCaption": false
+            },
+            {
+              "id": "section-1770285073261",
+              "title": "সাংবাদিকদের স্বরাষ্ট্র উপদেষ্টা ",
+              "x": 34,
+              "y": 73,
+              "width": 17,
+              "height": 26,
+              "content": "",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl10_row9_date_02-02-2026_edition_2_page3_8780_137947_updated_watermarked_f21dca14-b13b-4ff2-aa70-5327ac6bf2f3.jpg",
+              "pageId": 3,
+              "linkedSectionIds": [],
+              "showCaption": false
+            },
+            {
+              "id": "section-1770285198658",
+              "title": "রাজধানীতে নাগরিক অধিকার রক্ষায় প্রার্থীদের নানা প্ৰতিশ্ৰুতি",
+              "x": 49,
+              "y": 16,
+              "width": 49,
+              "height": 42,
+              "content": "",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl4_row3_date_02-02-2026_edition_2_page3_552395_282633_updated_watermarked_87ad3813-82a3-44c1-89bc-38516664961f.jpg",
+              "pageId": 3,
+              "linkedSectionIds": [],
+              "showCaption": false
+            },
+            {
+              "id": "section-1770285309822",
+              "title": "রাজধানী ঢাকায় তীব্র বায়ুদূষণে অতিষ্ঠ জনজীবন",
+              "x": 50,
+              "y": 57,
+              "width": 48,
+              "height": 16,
+              "content": "",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl7_row6_date_02-02-2026_edition_2_page3_69069_419395_updated_watermarked_2d62d805-f4f5-4650-9358-81cc3f9d9779.jpg",
+              "pageId": 3,
+              "linkedSectionIds": [],
+              "showCaption": false
+            },
+            {
+              "id": "section-1770285377454",
+              "title": "আশুলিয়ায় হত্যার পর লাশ পোড়ানো মামলার রায়",
+              "x": 50,
+              "y": 72,
+              "width": 33,
+              "height": 26,
+              "content": "",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl9_row8_date_02-02-2026_edition_2_page3_782277_546698_updated_watermarked_25c61d1a-f76a-4f5e-9c2f-1a71326469bf.jpg",
+              "pageId": 3,
+              "linkedSectionIds": [],
+              "showCaption": false
+            },
+            {
+              "id": "section-1770285883266",
+              "title": "জনসচেতনতায় মাঠে নামছে দুদক",
+              "x": 81,
+              "y": 72,
+              "width": 18,
+              "height": 26,
+              "content": "",
+              "imageUrl": "https://images.dailyamardesh.com/cropped-images/image_sl8_row7_date_02-02-2026_edition_2_page3_28368_564145_updated_watermarked_158f7a62-49ef-4bf8-9a2c-750c61be9193.jpg",
+              "pageId": 3,
+              "linkedSectionIds": [],
+              "showCaption": false
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

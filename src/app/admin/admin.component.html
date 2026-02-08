@@ -1,0 +1,382 @@
+<div class="admin-container">
+  <!-- Header -->
+  <header class="admin-header">
+    <div class="header-content">
+      <h1>📰 Newspaper Admin Panel</h1>
+      <div class="header-actions">
+        <button class="btn btn-secondary" (click)="goToViewer()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M15 18l-6-6 6-6"/>
+          </svg>
+          Back to Viewer
+        </button>
+        <button class="btn btn-success" (click)="saveAllData()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+            <polyline points="17 21 17 13 7 13 7 21"></polyline>
+            <polyline points="7 3 7 8 15 8"></polyline>
+          </svg>
+          Save All
+        </button>
+        <button class="btn btn-primary" (click)="downloadJSON()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="7 10 12 15 17 10"></polyline>
+            <line x1="12" y1="15" x2="12" y2="3"></line>
+          </svg>
+          Download JSON
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Date Selector Bar -->
+  <div class="date-selector-bar">
+    <div class="date-info">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+        <line x1="16" y1="2" x2="16" y2="6"></line>
+        <line x1="8" y1="2" x2="8" y2="6"></line>
+        <line x1="3" y1="10" x2="21" y2="10"></line>
+      </svg>
+      <span class="date-label">Editing Edition:</span>
+      <strong class="current-date">{{ formatDisplayDate(selectedDate) }}</strong>
+    </div>
+    
+    <div class="date-controls">
+      <label class="date-control-label">Select Date:</label>
+      <select [(ngModel)]="selectedDate" (change)="onDateChange()" class="date-select">
+        <option *ngFor="let date of availableDates" [value]="date">
+          {{ formatDisplayDate(date) }}
+        </option>
+      </select>
+      
+      <button class="btn btn-sm btn-primary" (click)="createNewDate()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="12" y1="5" x2="12" y2="19"></line>
+          <line x1="5" y1="12" x2="19" y2="12"></line>
+        </svg>
+        New Date
+      </button>
+    </div>
+  </div>
+
+  <div class="admin-body">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <h2>Pages</h2>
+        <button class="btn btn-sm btn-primary" (click)="newPage()">+ Add Page</button>
+      </div>
+      
+      <div class="page-list">
+        <div 
+          *ngFor="let page of pages"
+          class="page-item"
+          [class.active]="selectedPage?.id === page.id"
+          (click)="selectPage(page)"
+        >
+          <div class="page-thumbnail">
+            <img [src]="page.thumbnail || page.fullImage" [alt]="'Page ' + page.id" />
+          </div>
+          <div class="page-info">
+            <h3>Page {{ page.id }}</h3>
+            <p>{{ page.sections.length }} sections</p>
+          </div>
+          <div class="page-actions">
+            <button class="btn-icon" (click)="editPage(page); $event.stopPropagation()" title="Edit">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+              </svg>
+            </button>
+            <button class="btn-icon btn-delete" (click)="deletePage(page); $event.stopPropagation()" title="Delete">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="3 6 5 6 21 6"></polyline>
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+      <!-- Page Editor Modal -->
+      <div class="modal-overlay" *ngIf="isEditingPage">
+        <div class="modal">
+          <div class="modal-header">
+            <h2>{{ isEditingExistingPage() ? 'Edit' : 'New' }} Page</h2>
+            <button class="btn-close" (click)="cancelPageEdit()">&times;</button>
+          </div>
+          <div class="modal-body">
+            <div class="form-group">
+              <label>Page ID</label>
+              <input type="number" [(ngModel)]="pageForm.id" [disabled]="isEditingDisabled()" class="form-control" />
+            </div>
+            <div class="form-group">
+              <label>Full Image URL</label>
+              <input type="text" [(ngModel)]="pageForm.fullImage" class="form-control" placeholder="https://example.com/page-image.jpg" />
+            </div>
+            <div class="form-group">
+              <label>Thumbnail URL (optional)</label>
+              <input type="text" [(ngModel)]="pageForm.thumbnail" class="form-control" placeholder="Leave empty to use full image" />
+            </div>
+            <div class="image-preview" *ngIf="pageForm.fullImage">
+              <img [src]="pageForm.fullImage" alt="Preview" />
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" (click)="cancelPageEdit()">Cancel</button>
+            <button class="btn btn-primary" (click)="savePage()">Save Page</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Section Editor -->
+      <div class="content-panel" *ngIf="selectedPage && !isEditingSection">
+        <div class="panel-header">
+          <h2>Page {{ selectedPage.id }} - Sections</h2>
+          <button class="btn btn-primary" (click)="newSection()">+ Add Section</button>
+        </div>
+
+        <div class="sections-grid">
+          <div 
+            *ngFor="let section of selectedPage.sections"
+            class="section-card"
+          >
+            <div class="section-preview" *ngIf="section.imageUrl">
+              <img [src]="section.imageUrl" [alt]="section.title" />
+            </div>
+            <div class="section-preview placeholder" *ngIf="!section.imageUrl">
+              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                <polyline points="21 15 16 10 5 21"></polyline>
+              </svg>
+            </div>
+            <div class="section-info">
+              <h3>{{ section.title }}</h3>
+              <p class="section-coords">
+                Position: {{ section.x }}%, {{ section.y }}% | 
+                Size: {{ section.width }}% × {{ section.height }}%
+              </p>
+              <p class="section-links" *ngIf="section.linkedSectionIds && section.linkedSectionIds.length > 0">
+                🔗 {{ section.linkedSectionIds.length }} linked section(s)
+              </p>
+            </div>
+            <div class="section-actions">
+              <button class="btn btn-sm btn-secondary" (click)="editSection(section)">Edit</button>
+              <button class="btn btn-sm btn-danger" (click)="deleteSection(section)">Delete</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="empty-state" *ngIf="selectedPage.sections.length === 0">
+          <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+            <line x1="9" y1="9" x2="15" y2="15"></line>
+            <line x1="15" y1="9" x2="9" y2="15"></line>
+          </svg>
+          <h3>No sections yet</h3>
+          <p>Add your first section to get started</p>
+          <button class="btn btn-primary" (click)="newSection()">+ Add Section</button>
+        </div>
+      </div>
+
+      <!-- Section Form -->
+      <div class="content-panel" *ngIf="isEditingSection">
+        <div class="panel-header">
+          <h2>{{ selectedSection ? 'Edit' : 'New' }} Section</h2>
+          <button class="btn btn-secondary" (click)="cancelSectionEdit()">Cancel</button>
+        </div>
+
+        <div class="section-form">
+          <div class="form-row">
+            <div class="form-group">
+              <label>Section ID</label>
+              <input type="text" [(ngModel)]="sectionForm.id" [disabled]="!!selectedSection" class="form-control" />
+            </div>
+            <div class="form-group">
+              <label>Title *</label>
+              <input type="text" [(ngModel)]="sectionForm.title" class="form-control" placeholder="Section headline" />
+            </div>
+          </div>
+
+          <div class="form-group">            <label class="checkbox-label">
+              <input type="checkbox" [(ngModel)]="sectionForm.showCaption" class="form-checkbox" />
+              <span>Show caption in viewer</span>
+            </label>
+            <small class="form-help">Display section title and page number below the image</small>
+          </div>
+
+          <div class="form-group">            <label>Position & Size</label>
+            <div class="crop-controls">
+              <div class="form-row">
+                <div class="form-group-sm">
+                  <label>X (%)</label>
+                  <input type="number" [(ngModel)]="sectionForm.x" min="0" max="100" class="form-control" />
+                </div>
+                <div class="form-group-sm">
+                  <label>Y (%)</label>
+                  <input type="number" [(ngModel)]="sectionForm.y" min="0" max="100" class="form-control" />
+                </div>
+                <div class="form-group-sm">
+                  <label>Width (%)</label>
+                  <input type="number" [(ngModel)]="sectionForm.width" min="0" max="100" class="form-control" />
+                </div>
+                <div class="form-group-sm">
+                  <label>Height (%)</label>
+                  <input type="number" [(ngModel)]="sectionForm.height" min="0" max="100" class="form-control" />
+                </div>
+              </div>
+              <button class="btn btn-primary btn-full" (click)="openImageCropper()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+                  <circle cx="12" cy="13" r="4"></circle>
+                </svg>
+                Visual Crop Selector
+              </button>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>Section Image Source</label>
+            <div style="margin-bottom: 12px;">
+              <label style="display: block; margin-bottom: 8px; cursor: pointer;">
+                <input type="radio" [(ngModel)]="imageSourceOption" value="auto-crop" name="imageSource" style="margin-right: 8px;" />
+                Auto-crop from full page image (uses x, y, width, height coordinates)
+              </label>
+              <label style="display: block; margin-bottom: 8px; cursor: pointer;">
+                <input type="radio" [(ngModel)]="imageSourceOption" value="external-url" name="imageSource" style="margin-right: 8px;" />
+                External image URL
+              </label>
+              <label style="display: block; margin-bottom: 8px; cursor: pointer;">
+                <input type="radio" [(ngModel)]="imageSourceOption" value="upload" name="imageSource" style="margin-right: 8px;" />
+                Upload image from local storage
+              </label>
+            </div>
+            
+            <div *ngIf="imageSourceOption === 'external-url'">
+              <input type="text" [(ngModel)]="sectionForm.imageUrl" class="form-control" placeholder="Enter image URL" />
+            </div>
+            
+            <div *ngIf="imageSourceOption === 'upload'" style="display: flex; gap: 8px; align-items: center;">
+              <input type="text" [(ngModel)]="sectionForm.imageUrl" class="form-control" placeholder="Selected image path" readonly style="flex: 1;" />
+              <input type="file" #fileInput accept="image/*" style="display: none;" (change)="onImageFileSelected($event)" />
+              <button type="button" class="btn btn-primary" (click)="fileInput.click()">
+                📁 Browse
+              </button>
+            </div>
+            
+            <div *ngIf="imageSourceOption === 'auto-crop'" style="color: #6b7280; font-size: 14px; margin-top: 8px;">
+              Image will be automatically cropped from the full page using the coordinates below
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>Content (HTML) *</label>
+            <textarea [(ngModel)]="sectionForm.content" class="form-control" rows="10" placeholder="<h2>Title</h2><p>Content...</p>"></textarea>
+          </div>
+
+          <div class="form-group">
+            <label>Linked Sections</label>
+            <div class="linked-sections-selector">
+              <div 
+                *ngFor="let section of getAvailableSections()"
+                class="link-item"
+                [class.selected]="isLinked(section.id)"
+                (click)="toggleLinkedSection(section.id)"
+              >
+                <input type="checkbox" [checked]="isLinked(section.id)" />
+                <span>{{ section.title }} (Page {{ section.pageId }})</span>
+              </div>
+              <div *ngIf="getAvailableSections().length === 0" class="empty-message">
+                No other sections available
+              </div>
+            </div>
+          </div>
+
+          <div class="form-actions">
+            <button class="btn btn-secondary" (click)="cancelSectionEdit()">Cancel</button>
+            <button class="btn btn-primary" (click)="saveSection()">Save Section</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Welcome State -->
+      <div class="content-panel" *ngIf="!selectedPage">
+        <div class="welcome-state">
+          <svg width="120" height="120" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+            <polyline points="14 2 14 8 20 8"></polyline>
+            <line x1="16" y1="13" x2="8" y2="13"></line>
+            <line x1="16" y1="17" x2="8" y2="17"></line>
+          </svg>
+          <h2>Welcome to Newspaper Admin</h2>
+          <p>Select a page from the sidebar or create a new one to get started</p>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<!-- Image Cropper Modal -->
+<div class="modal-overlay cropper-overlay" *ngIf="showImageCropper">
+  <div class="modal modal-large">
+    <div class="modal-header">
+      <h2>Visual Crop Selector</h2>
+      <button class="btn-close" (click)="closeCropper()">&times;</button>
+    </div>
+    <div class="modal-body cropper-body">
+      <div class="cropper-instructions">
+        <p>📍 Click and drag on the image to select the section area</p>
+        <p>The coordinates will be automatically calculated in percentages</p>
+      </div>
+      
+      <div class="cropper-container">
+        <img 
+          #cropperImage
+          [src]="selectedPage?.fullImage" 
+          alt="Full page"
+          (load)="onCropperImageLoad($event)"
+        />
+        <div 
+          class="crop-overlay"
+          (mousedown)="onCropperMouseDown($event)"
+          (mousemove)="onCropperMouseMove($event)"
+          (mouseup)="onCropperMouseUp()"
+          (mouseleave)="onCropperMouseUp()"
+        ></div>
+        <div 
+          class="crop-selection"
+          [style.left]="getCropStyle().left"
+          [style.top]="getCropStyle().top"
+          [style.width]="getCropStyle().width"
+          [style.height]="getCropStyle().height"
+          [style.display]="(isDrawing || (cropperEndX > 0 && cropperEndY > 0)) ? 'block' : 'none'"
+        ></div>
+      </div>
+
+      <div class="crop-info" *ngIf="sectionForm && (sectionForm.width ?? 0) > 0">
+        <div class="info-item">
+          <strong>X:</strong> {{ sectionForm.x }}%
+        </div>
+        <div class="info-item">
+          <strong>Y:</strong> {{ sectionForm.y }}%
+        </div>
+        <div class="info-item">
+          <strong>Width:</strong> {{ sectionForm.width }}%
+        </div>
+        <div class="info-item">
+          <strong>Height:</strong> {{ sectionForm.height }}%
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" (click)="closeCropper()">Cancel</button>
+      <button class="btn btn-primary" (click)="applyCrop()" [disabled]="(sectionForm.width ?? 0) === 0">Apply Selection</button>
+    </div>
+  </div>
+</div>
