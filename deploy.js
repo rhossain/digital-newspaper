@@ -39,6 +39,12 @@ if (!HOST || !USER || !PASS) {
   fail('Missing required env HOSTINGER_HOST / HOSTINGER_USER / HOSTINGER_PASS\nCreate a .env file with these variables.');
 }
 
+// Validate webhook secret format (should be hash, not URL)
+const WEBHOOK_SECRET = process.env.GITHUB_WEBHOOK_SECRET;
+if (WEBHOOK_SECRET && WEBHOOK_SECRET.includes('://')) {
+  fail('GITHUB_WEBHOOK_SECRET should be a hash (hex string), not a URL!\nCurrent value: ' + WEBHOOK_SECRET + '\nExpected format: c307cd680eca6807532c5984b4b76d7462ea3900101ca189c53f7c3a5adf513e');
+}
+
 // Get current branch
 let branch = 'unknown';
 try {
