@@ -394,11 +394,52 @@
 }
 
 .form-group label {
-  display: block;
+  display: inline-flex;
+  align-items: center;
   margin-bottom: 0.5rem;
   font-weight: 600;
   color: #374151;
   font-size: 0.875rem;
+}
+
+.input-mode-options {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.radio-option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 400;
+  cursor: pointer;
+  padding: 0.5rem 1rem;
+  border: 2px solid #e5e7eb;
+  border-radius: 6px;
+  transition: all 0.2s;
+}
+
+.radio-option:hover {
+  border-color: #3b82f6;
+  background-color: #eff6ff;
+}
+
+.radio-option input[type="radio"] {
+  cursor: pointer;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
+.radio-option input[type="radio"]:checked + span {
+  color: #3b82f6;
+  font-weight: 600;
+}
+
+.radio-option span {
+  font-size: 0.875rem;
+  color: #374151;
 }
 
 .form-control {

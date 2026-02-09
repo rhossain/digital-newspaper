@@ -116,12 +116,58 @@
               <input type="number" [(ngModel)]="pageForm.id" [disabled]="isEditingDisabled()" class="form-control" />
             </div>
             <div class="form-group">
-              <label>Full Image URL</label>
-              <input type="text" [(ngModel)]="pageForm.fullImage" class="form-control" placeholder="https://example.com/page-image.jpg" />
+              <label>Full Image</label>
+              <div class="input-mode-options">
+                <label class="radio-option">
+                  <input type="radio" name="fullImageMode" value="url" [(ngModel)]="fullImageInputMode" />
+                  <span>External URL</span>
+                </label>
+                <label class="radio-option">
+                  <input type="radio" name="fullImageMode" value="file" [(ngModel)]="fullImageInputMode" />
+                  <span>Upload File</span>
+                </label>
+              </div>
+              <input 
+                *ngIf="fullImageInputMode === 'url'" 
+                type="text" 
+                [(ngModel)]="pageForm.fullImage" 
+                class="form-control" 
+                placeholder="https://example.com/page-image.jpg" 
+              />
+              <input 
+                *ngIf="fullImageInputMode === 'file'" 
+                type="file" 
+                (change)="onFullImageFileSelected($event)" 
+                accept="image/*" 
+                class="form-control" 
+              />
             </div>
             <div class="form-group">
-              <label>Thumbnail URL (optional)</label>
-              <input type="text" [(ngModel)]="pageForm.thumbnail" class="form-control" placeholder="Leave empty to use full image" />
+              <label>Thumbnail (optional)</label>
+              <div class="input-mode-options">
+                <label class="radio-option">
+                  <input type="radio" name="thumbnailMode" value="url" [(ngModel)]="thumbnailInputMode" />
+                  <span>External URL</span>
+                </label>
+                <label class="radio-option">
+                  <input type="radio" name="thumbnailMode" value="file" [(ngModel)]="thumbnailInputMode" />
+                  <span>Upload File</span>
+                </label>
+              </div>
+              <input 
+                *ngIf="thumbnailInputMode === 'url'" 
+                type="text" 
+                [(ngModel)]="pageForm.thumbnail" 
+                class="form-control" 
+                placeholder="Leave empty to use full image" 
+              />
+              <input 
+                *ngIf="thumbnailInputMode === 'file'" 
+                type="file" 
+                (change)="onThumbnailFileSelected($event)" 
+                accept="image/*" 
+                class="form-control" 
+              />
             </div>
             <div class="image-preview" *ngIf="pageForm.fullImage">
               <img [src]="pageForm.fullImage" alt="Preview" />

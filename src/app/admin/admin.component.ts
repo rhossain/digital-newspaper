@@ -38,6 +38,12 @@ export class AdminComponent implements OnInit {
     sections: []
   };
   
+  // Image input modes
+  fullImageInputMode: 'url' | 'file' = 'url';
+  thumbnailInputMode: 'url' | 'file' = 'url';
+  fullImageFile: File | null = null;
+  thumbnailFile: File | null = null;
+  
   sectionForm: Partial<NewsSection> = {
     id: '',
     title: '',
@@ -146,11 +152,19 @@ export class AdminComponent implements OnInit {
       fullImage: '',
       sections: []
     };
+    this.fullImageInputMode = 'url';
+    this.thumbnailInputMode = 'url';
+    this.fullImageFile = null;
+    this.thumbnailFile = null;
   }
 
   editPage(page: NewspaperPage) {
     this.isEditingPage = true;
     this.pageForm = { ...page };
+    this.fullImageInputMode = 'url';
+    this.thumbnailInputMode = 'url';
+    this.fullImageFile = null;
+    this.thumbnailFile = null;
   }
 
   savePage() {
@@ -731,5 +745,29 @@ export class AdminComponent implements OnInit {
 
   isEditingDisabled(): boolean {
     return !!this.pages.find(p => p.id === this.pageForm.id);
+  }
+
+  onFullImageFileSelected(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    if (input.files && input.files[0]) {
+      this.fullImageFile = input.files[0];
+      const reader = new FileReader();
+      reader.onload = (e: ProgressEvent<FileReader>) => {
+        this.pageForm.fullImage = e.target?.result as string;
+      };
+      reader.readAsDataURL(this.fullImageFile);
+    }
+  }
+
+  onThumbnailFileSelected(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    if (input.files && input.files[0]) {
+      this.thumbnailFile = input.files[0];
+      const reader = new FileReader();
+      reader.onload = (e: ProgressEvent<FileReader>) => {
+        this.pageForm.thumbnail = e.target?.result as string;
+      };
+      reader.readAsDataURL(this.thumbnailFile);
+    }
   }
 }
