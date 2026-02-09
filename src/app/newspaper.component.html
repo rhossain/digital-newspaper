@@ -173,47 +173,45 @@
 
       <!-- Full Section Image -->
       <div class="section-image-container" *ngIf="currentPage">
-        <div class="section-image-wrapper" (click)="openImageModal()" title="Click to view full size">
-          <div class="skeleton-loader section-image-skeleton" *ngIf="sectionImageLoading && croppedSectionImage"></div>
-          <img 
-            *ngIf="croppedSectionImage"
-            [src]="croppedSectionImage" 
-            [alt]="selectedSection.title"
-            class="section-full-image"
-            (load)="onSectionImageLoad()"
-            [style.opacity]="sectionImageLoading ? '0' : '1'"
-          />
-          <div *ngIf="!croppedSectionImage" class="section-image-loading">
-            Loading section image...
+        <div class="section-item">
+          <div class="section-image-wrapper" (click)="openImageModal()" title="Click to view full size">
+            <div class="skeleton-loader section-image-skeleton" *ngIf="sectionImageLoading && croppedSectionImage"></div>
+            <img 
+              *ngIf="croppedSectionImage"
+              [src]="croppedSectionImage" 
+              [alt]="selectedSection.title"
+              class="section-full-image"
+              (load)="onSectionImageLoad()"
+              [style.opacity]="sectionImageLoading ? '0' : '1'"
+            />
+            <div *ngIf="!croppedSectionImage" class="section-image-loading">
+              Loading section image...
+            </div>
+            
+            <!-- Zoom indicator -->
+            <div *ngIf="croppedSectionImage" class="zoom-indicator">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="11" cy="11" r="8"></circle>
+                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                <line x1="11" y1="8" x2="11" y2="14"></line>
+                <line x1="8" y1="11" x2="14" y2="11"></line>
+              </svg>
+            </div>
           </div>
           
-          <!-- Zoom indicator -->
-          <div *ngIf="croppedSectionImage" class="zoom-indicator">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="11" cy="11" r="8"></circle>
-              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-              <line x1="11" y1="8" x2="11" y2="14"></line>
-              <line x1="8" y1="11" x2="14" y2="11"></line>
-            </svg>
+          <div class="section-caption">
+            <p class="section-page-number">Page {{ currentPage.id }}</p>
           </div>
         </div>
 
         <!-- Linked Sections -->
         <div class="linked-sections" *ngIf="linkedSections.length > 0">
-          <div class="linked-sections-header">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
-              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
-            </svg>
-            <h4>Related Sections</h4>
-          </div>
-          
           <div class="linked-section-list">
             <div 
               *ngFor="let linkedSection of linkedSections"
               class="linked-section-item"
             >
-              <div class="linked-section-wrapper" (click)="selectLinkedSection(linkedSection)" title="Click to view this section">
+              <div class="linked-section-wrapper" (click)="openLinkedSectionImage(linkedSection)" title="Click to view full size">
                 <img 
                   *ngIf="getCroppedImageForSection(linkedSection)"
                   [src]="getCroppedImageForSection(linkedSection)!" 
@@ -240,34 +238,34 @@
               </div>
               
               <div class="linked-section-caption">
-                <h5>{{ linkedSection.title }}</h5>
-                <p class="linked-page-number">Page {{ linkedSection.pageId }}</p>
+                <p class="linked-page-number">
+                  Page {{ linkedSection.pageId }}
+                  <button class="go-to-section-btn" (click)="selectLinkedSection(linkedSection)" title="Go to this section">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <line x1="5" y1="12" x2="19" y2="12"></line>
+                      <polyline points="12 5 19 12 12 19"></polyline>
+                    </svg>
+                  </button>
+                </p>
               </div>
             </div>
           </div>
         </div>
+      </div>
 
-        <div class="section-image-caption" *ngIf="selectedSection.showCaption !== false">
-          <div class="caption-header">
-            <div class="caption-text">
-              <h3>{{ selectedSection.title }}</h3>
-              <p>Page {{ currentPage.id }}</p>
-            </div>
-            <button 
-              *ngIf="selectedSection.content" 
-              class="read-article-button"
-              (click)="openContentModal()"
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                <polyline points="14 2 14 8 20 8"></polyline>
-                <line x1="16" y1="13" x2="8" y2="13"></line>
-                <line x1="16" y1="17" x2="8" y2="17"></line>
-              </svg>
-              <span>Read Article</span>
-            </button>
-          </div>
-        </div>
+      <div class="read-article-section" *ngIf="selectedSection.content && selectedSection.showCaption !== false">
+        <button 
+          class="read-article-button"
+          (click)="openContentModal()"
+        >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+              <polyline points="14 2 14 8 20 8"></polyline>
+              <line x1="16" y1="13" x2="8" y2="13"></line>
+              <line x1="16" y1="17" x2="8" y2="17"></line>
+            </svg>
+            <span>Read Article</span>
+          </button>
       </div>
     </div>
 
@@ -292,12 +290,27 @@
         <span>&times;</span>
       </button>
       
-      <img 
-        *ngIf="croppedSectionImage"
-        [src]="croppedSectionImage" 
-        [alt]="selectedSection?.title"
-        class="modal-full-image"
-      />
+      <div class="modal-images-container">
+        <!-- Main/Selected Image -->
+        <div class="modal-image-item" *ngIf="modalImage">
+          <img 
+            [src]="modalImage" 
+            [alt]="modalImageTitle"
+            class="modal-full-image"
+          />
+          <div class="modal-image-label" *ngIf="modalImageTitle">{{ modalImageTitle }}</div>
+        </div>
+        
+        <!-- Linked Section Images -->
+        <div class="modal-image-item" *ngFor="let linkedSection of modalLinkedSections">
+          <img 
+            [src]="getCroppedImageForSection(linkedSection)!" 
+            [alt]="linkedSection.title"
+            class="modal-full-image"
+          />
+          <div class="modal-image-label">{{ linkedSection.title }}</div>
+        </div>
+      </div>
     </div>
   </div>
 

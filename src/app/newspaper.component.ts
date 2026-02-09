@@ -23,6 +23,11 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   linkedSections: NewsSection[] = [];
   private imageElement: HTMLImageElement | null = null;
   
+  // Modal image state
+  modalImage: string | null = null;
+  modalImageTitle: string = '';
+  modalLinkedSections: NewsSection[] = [];
+  
   // Image loading states
   thumbnailsLoading: { [key: number]: boolean } = {};
   sectionImageLoading = false;
@@ -258,11 +263,63 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   }
 
   openImageModal() {
-    this.showImageModal = true;
+    if (this.croppedSectionImage && this.selectedSection && this.currentPage) {
+      // Collect all sections: main + linked
+      const allSections: NewsSection[] = [
+        { ...this.selectedSection, pageId: this.currentPage.id },
+        ...this.linkedSections
+      ];
+      
+      // Sort by page number
+      allSections.sort((a, b) => {
+        const pageA = a.pageId || 0;
+        const pageB = b.pageId || 0;
+        return pageA - pageB;
+      });
+      
+      // Set first section as main modal image
+      const firstSection = allSections[0];
+      this.modalImage = firstSection.pageId === this.currentPage.id ? this.croppedSectionImage : this.getCroppedImageForSection(firstSection);
+      this.modalImageTitle = firstSection.title;
+      
+      // Rest of the sections
+      this.modalLinkedSections = allSections.slice(1);
+      this.showImageModal = true;
+    }
   }
 
   closeImageModal() {
     this.showImageModal = false;
+    this.modalImage = null;
+    this.modalImageTitle = '';
+    this.modalLinkedSections = [];
+  }
+
+  openLinkedSectionImage(linkedSection: NewsSection) {
+    // Show all sections in page order
+    if (this.selectedSection && this.currentPage) {
+      // Collect all sections: main + linked
+      const allSections: NewsSection[] = [
+        { ...this.selectedSection, pageId: this.currentPage.id },
+        ...this.linkedSections
+      ];
+      
+      // Sort by page number
+      allSections.sort((a, b) => {
+        const pageA = a.pageId || 0;
+        const pageB = b.pageId || 0;
+        return pageA - pageB;
+      });
+      
+      // Set first section as main modal image
+      const firstSection = allSections[0];
+      this.modalImage = firstSection.pageId === this.currentPage.id ? this.croppedSectionImage : this.getCroppedImageForSection(firstSection);
+      this.modalImageTitle = firstSection.title;
+      
+      // Rest of the sections
+      this.modalLinkedSections = allSections.slice(1);
+      this.showImageModal = true;
+    }
   }
 
   private loadLinkedSections(section: NewsSection) {
@@ -284,6 +341,13 @@ export class NewspaperComponent implements OnInit, OnDestroy {
         }
       }
     }
+    
+    // Sort linked sections by pageId to maintain consistent order
+    this.linkedSections.sort((a, b) => {
+      const pageA = a.pageId || 0;
+      const pageB = b.pageId || 0;
+      return pageA - pageB;
+    });
   }
 
   selectLinkedSection(linkedSection: NewsSection) {
