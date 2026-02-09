@@ -786,7 +786,7 @@
   position: relative;
   animation: slideUp 0.3s ease;
   border-radius: 8px;
-  padding: 20px;
+  padding: 20px 20px 0;
 }
 
 .modal-images-container {
@@ -836,15 +836,15 @@
 
 .modal-close-button {
   position: absolute;
-  top: 15px;
-  right: 15px;
+  top: 10px;
+  right: 10px;
   background-color: #f44336;
   color: white;
   border: none;
-  width: 40px;
-  height: 40px;
+  width: 30px;
+  height: 30px;
   border-radius: 50%;
-  font-size: 28px;
+  font-size: 24px;
   cursor: pointer;
   display: flex;
   align-items: center;

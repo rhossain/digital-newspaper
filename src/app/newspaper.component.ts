@@ -1,14 +1,16 @@
 import { Component, OnInit, OnDestroy, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { Router, ActivatedRoute } from '@angular/router';
 import { NewspaperDataService, NewsSection, NewspaperPage, NewspaperEdition } from './services/newspaper-data.service';
 import { ToasterService } from './services/toaster.service';
+import { ShareButtonsComponent } from './shared/share-buttons/share-buttons.component';
 import { Subscription } from 'rxjs';
 
 @Component({
   selector: 'app-newspaper',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, ShareButtonsComponent],
   templateUrl: './newspaper.component.html',
   styleUrls: ['./newspaper.component.css']
 })
@@ -27,6 +29,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   modalImage: string | null = null;
   modalImageTitle: string = '';
   modalLinkedSections: NewsSection[] = [];
+  pendingSectionSlug: string | null = null;
   
   // Image loading states
   thumbnailsLoading: { [key: number]: boolean } = {};
@@ -45,18 +48,41 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   constructor(
     private dataService: NewspaperDataService,
     private toaster: ToasterService,
-    private cdr: ChangeDetectorRef
+    private cdr: ChangeDetectorRef,
+    private router: Router,
+    private route: ActivatedRoute
   ) {}
 
   ngOnInit() {
     this.todayDate = this.dataService.getTodayDate();
     this.selectedDate = this.todayDate;
     
+    // Subscribe to route parameters
+    const routeSubscription = this.route.paramMap.subscribe(params => {
+      const dateParam = params.get('date');
+      const sectionParam = params.get('section');
+      
+      if (dateParam) {
+        this.selectedDate = dateParam;
+        this.dataService.setCurrentDate(dateParam);
+      }
+      
+      // Store section parameter for later use after data loads
+      if (sectionParam) {
+        this.pendingSectionSlug = sectionParam;
+      }
+    });
+    this.subscriptions.push(routeSubscription);
+    
     // Subscribe to date changes
     const dateSubscription = this.dataService.currentDate$.subscribe(date => {
       this.selectedDate = date;
       this.updateDisplayDate();
       this.checkIfToday();
+      // Update URL when date changes (unless there's a pending section to navigate to)
+      if (!this.pendingSectionSlug) {
+        this.updateUrl();
+      }
     });
     this.subscriptions.push(dateSubscription);
     
@@ -79,7 +105,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     this.dataService.loadData().subscribe({
       next: () => {
         this.availableDates = this.dataService.getAvailableDates();
-        this.loadCurrentEdition();
+        // loadCurrentEdition will be called by the data$ subscription
         this.isLoading = false;
         this.cdr.detectChanges();
       },
@@ -103,7 +129,13 @@ export class NewspaperComponent implements OnInit, OnDestroy {
         this.thumbnailsLoading[page.id] = true;
       });
       if (this.pages.length > 0) {
-        this.selectPage(this.pages[0]);
+        // Navigate to section if pendingSectionSlug exists, otherwise select first page
+        if (this.pendingSectionSlug) {
+          this.navigateToSection(this.pendingSectionSlug);
+          this.pendingSectionSlug = null; // Clear after use
+        } else {
+          this.selectPage(this.pages[0]);
+        }
       } else {
         this.currentPage = null;
         this.selectedSection = null;
@@ -118,6 +150,28 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     }
     this.updateDisplayDate();
     this.cdr.detectChanges();
+  }
+
+  navigateToSection(sectionSlug: string) {
+    // Find the section across all pages by ID or title-based slug
+    for (const page of this.pages) {
+      // First try to find by ID (for backward compatibility)
+      let section = page.sections.find(s => s.id === sectionSlug);
+      
+      // If not found by ID, try to match by title slug
+      if (!section) {
+        section = page.sections.find(s => {
+          const slug = this.createSectionSlug(s.title, s.id);
+          return slug === sectionSlug;
+        });
+      }
+      
+      if (section) {
+        // Select the page with the target section ID
+        this.selectPage(page, section.id);
+        break;
+      }
+    }
   }
 
   updateDisplayDate() {
@@ -239,6 +293,9 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     if (rightPanel) {
       rightPanel.scrollTop = 0;
     }
+    
+    // Update URL with section
+    this.updateUrl();
   }
 
   onSectionImageLoad() {
@@ -252,6 +309,9 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     this.showImageModal = false;
     this.linkedSections = [];
     this.sectionImageLoading = false;
+    
+    // Update URL to remove section
+    this.updateUrl();
   }
 
   openContentModal() {
@@ -424,5 +484,36 @@ export class NewspaperComponent implements OnInit, OnDestroy {
 
     // Convert canvas to data URL
     this.croppedSectionImage = canvas.toDataURL('image/jpeg', 0.9);
+  }
+
+  private updateUrl() {
+    // Update URL with current date and section if selected
+    if (this.selectedDate) {
+      if (this.selectedSection) {
+        // Use title-based slug with section ID fallback
+        const slug = this.createSectionSlug(this.selectedSection.title, this.selectedSection.id);
+        this.router.navigate(['/', this.selectedDate, slug], { replaceUrl: true });
+      } else {
+        this.router.navigate(['/', this.selectedDate], { replaceUrl: true });
+      }
+    }
+  }
+
+  private createSectionSlug(title: string, sectionId: string): string {
+    // Preserve Unicode characters for non-ASCII languages like Bengali
+    let slug = title
+      .toLowerCase()
+      .trim()
+      .replace(/\s+/g, '-')           // Replace spaces with hyphens
+      .replace(/[^\w\u0980-\u09FF-]/g, '') // Keep alphanumeric, Bengali Unicode, and hyphens
+      .replace(/-+/g, '-')            // Replace multiple hyphens with single hyphen
+      .replace(/^-|-$/g, '');         // Remove leading/trailing hyphens
+    
+    // If slug is empty, use section ID
+    if (!slug || slug.length === 0) {
+      slug = sectionId;
+    }
+    
+    return slug;
   }
 }

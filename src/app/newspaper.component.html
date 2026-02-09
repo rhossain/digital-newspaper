@@ -290,6 +290,13 @@
         <span>&times;</span>
       </button>
       
+      <!-- Share buttons at top with logo -->
+      <app-share-buttons 
+        *ngIf="selectedSection" 
+        [section]="selectedSection" 
+        [selectedDate]="selectedDate">
+      </app-share-buttons>
+      
       <div class="modal-images-container">
         <!-- Main/Selected Image -->
         <div class="modal-image-item" *ngIf="modalImage">
@@ -320,6 +327,13 @@
       <button class="modal-close-button" (click)="closeContentModal()">
         <span>&times;</span>
       </button>
+      
+      <!-- Share buttons at top with logo -->
+      <app-share-buttons 
+        *ngIf="selectedSection" 
+        [section]="selectedSection" 
+        [selectedDate]="selectedDate">
+      </app-share-buttons>
       
       <div class="modal-body" *ngIf="selectedSection">
         <div class="article-body" [innerHTML]="selectedSection.content"></div>

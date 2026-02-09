@@ -8,6 +8,8 @@ import { AdminComponent } from './app/admin/admin.component';
 const routes: Routes = [
   { path: '', component: NewspaperComponent },
   { path: 'admin', component: AdminComponent },
+  { path: ':date', component: NewspaperComponent },
+  { path: ':date/:section', component: NewspaperComponent },
   { path: '**', redirectTo: '' }
 ];
 
