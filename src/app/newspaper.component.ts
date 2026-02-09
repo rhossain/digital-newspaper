@@ -216,8 +216,12 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     
     // Use imageUrl if available, otherwise crop from main image
     if (section.imageUrl) {
-      // Ensure the path starts with / for proper Angular asset resolution
-      const imagePath = section.imageUrl.startsWith('/') ? section.imageUrl : `/${section.imageUrl}`;
+      // Check if it's an external URL (starts with http:// or https://)
+      // If external, use as-is; if relative path, ensure it starts with /
+      const isExternalUrl = section.imageUrl.startsWith('http://') || section.imageUrl.startsWith('https://');
+      const imagePath = isExternalUrl 
+        ? section.imageUrl 
+        : (section.imageUrl.startsWith('/') ? section.imageUrl : `/${section.imageUrl}`);
       this.croppedSectionImage = imagePath;
       console.log('Loading section image from:', imagePath);
     } else {
@@ -307,7 +311,12 @@ export class NewspaperComponent implements OnInit, OnDestroy {
 
     // If section has its own imageUrl, use it instead of cropping
     if (this.selectedSection.imageUrl) {
-      const imagePath = this.selectedSection.imageUrl.startsWith('/') ? this.selectedSection.imageUrl : `/${this.selectedSection.imageUrl}`;
+      // Check if it's an external URL (starts with http:// or https://)
+      // If external, use as-is; if relative path, ensure it starts with /
+      const isExternalUrl = this.selectedSection.imageUrl.startsWith('http://') || this.selectedSection.imageUrl.startsWith('https://');
+      const imagePath = isExternalUrl 
+        ? this.selectedSection.imageUrl 
+        : (this.selectedSection.imageUrl.startsWith('/') ? this.selectedSection.imageUrl : `/${this.selectedSection.imageUrl}`);
       this.croppedSectionImage = imagePath;
       console.log('Using section imageUrl:', imagePath);
       return;
