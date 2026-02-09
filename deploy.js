@@ -93,17 +93,30 @@ try {
 }
 
 // Find dist directory
-const distDir = path.resolve(process.cwd(), 'dist/digital-newspaper');
-if (!fs.existsSync(distDir)) {
-  fail(`Dist directory not found: ${distDir}\nBuild may have failed - check the output above.`);
+const originalDistDir = path.resolve(process.cwd(), 'dist/digital-newspaper');
+if (!fs.existsSync(originalDistDir)) {
+  fail(`Dist directory not found: ${originalDistDir}\nBuild may have failed - check the output above.`);
 }
 
 // Verify dist has content
-const distContents = fs.readdirSync(distDir);
+const distContents = fs.readdirSync(originalDistDir);
 if (distContents.length === 0) {
-  fail(`Dist directory is empty: ${distDir}\nBuild produced no output.`);
+  fail(`Dist directory is empty: ${originalDistDir}\nBuild produced no output.`);
 }
 log(`✓ Build directory validated: ${distContents.length} items`, colors.green);
+
+// CRITICAL: Copy dist to safe temp location BEFORE any branch operations
+// because dist/ is in .gitignore and gets wiped on branch switch
+const TEMP_DIST_DIR = path.join(process.cwd(), '.deploy-dist-temp');
+if (fs.existsSync(TEMP_DIST_DIR)) {
+  fs.rmSync(TEMP_DIST_DIR, { recursive: true });
+}
+log('Copying build to safe location...', colors.blue);
+fs.cpSync(originalDistDir, TEMP_DIST_DIR, { recursive: true });
+log(`✓ Build copied to ${TEMP_DIST_DIR}`, colors.green);
+
+// Use the temp dist for all operations
+const distDir = TEMP_DIST_DIR;
 
 // Create .htaccess
 const htaccessPath = path.join(distDir, '.htaccess');
@@ -392,7 +405,20 @@ async function deploy() {
     console.log(`\n${colors.red}╔════════════════════════════════════════════╗${colors.reset}`);
     console.log(`${colors.red}║          ✗ DEPLOYMENT FAILED ✗             ║${colors.reset}`);
     console.log(`${colors.red}╚════════════════════════════════════════════╝${colors.reset}\n`);
+    
+    // Cleanup temp dist
+    const TEMP_DIST_DIR = path.join(process.cwd(), '.deploy-dist-temp');
+    if (fs.existsSync(TEMP_DIST_DIR)) {
+      fs.rmSync(TEMP_DIST_DIR, { recursive: true });
+    }
+    
     fail(error.message);
+  }
+  
+  // Cleanup temp dist on success
+  const TEMP_DIST_DIR = path.join(process.cwd(), '.deploy-dist-temp');
+  if (fs.existsSync(TEMP_DIST_DIR)) {
+    fs.rmSync(TEMP_DIST_DIR, { recursive: true });
   }
 }
 
