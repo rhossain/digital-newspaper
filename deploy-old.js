@@ -1,10 +1,25 @@
 #!/usr/bin/env node
 /**
- * Production-ready deployment script for digital-newspaper
- * Uses a clean orphan release branch strategy
- * Preserves .env and other gitignored files during branch switches
+ * Automated deployment script for digital-newspaper Angular app.
+ * Usage: npm run deploy
+ *
+ * Branch behavior:
+ *  - release: full clean deploy to HOSTINGER_REMOTE_PATH
+ *  - development: incremental deploy (only dist files) preserving existing .htaccess
+ *
+ * Environment variables (define in .env or shell):
+ *  HOSTINGER_HOST=ftp.yourdomain.com (or your FTP host)
+ *  HOSTINGER_PORT=21 (FTP) or 22 (SFTP) optional
+ *  HOSTINGER_USER=your_ftp_username
+ *  HOSTINGER_PASS=your_ftp_password
+ *  HOSTINGER_REMOTE_PATH=/public_html/diginews
+ *  HOSTINGER_USE_SFTP=true (optional, use SFTP instead of FTP)
+ *  DEPLOY_STRATEGY=incremental|full (override branch default)
+ *
+ * Optional:
+ *  DEPLOY_DRY_RUN=true  -> list files only
  */
-const { execSync, exec } = require('child_process');
+const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 require('dotenv').config({ path: path.resolve(process.cwd(), '.env') });
@@ -39,7 +54,7 @@ if (!HOST || !USER || !PASS) {
   fail('Missing required env HOSTINGER_HOST / HOSTINGER_USER / HOSTINGER_PASS\nCreate a .env file with these variables.');
 }
 
-// Get current branch
+// Determine branch
 let branch = 'unknown';
 try {
   branch = execSync('git rev-parse --abbrev-ref HEAD').toString().trim();
@@ -48,42 +63,7 @@ try {
 }
 log(`Current branch: ${branch}`, colors.blue);
 
-// Save .env and other ignored files before any operations
-const SAVED_FILES_DIR = path.join(process.cwd(), '.deploy-backup');
-function backupIgnoredFiles() {
-  log('Backing up .env and config files...', colors.blue);
-  if (fs.existsSync(SAVED_FILES_DIR)) {
-    fs.rmSync(SAVED_FILES_DIR, { recursive: true });
-  }
-  fs.mkdirSync(SAVED_FILES_DIR, { recursive: true });
-  
-  const filesToBackup = ['.env', 'webhook.config.local.js', 'deploy.config.local.js'];
-  filesToBackup.forEach(file => {
-    const source = path.join(process.cwd(), file);
-    if (fs.existsSync(source)) {
-      fs.copyFileSync(source, path.join(SAVED_FILES_DIR, file));
-      log(`✓ Backed up ${file}`, colors.green);
-    }
-  });
-}
-
-function restoreIgnoredFiles() {
-  log('Restoring .env and config files...', colors.blue);
-  if (!fs.existsSync(SAVED_FILES_DIR)) return;
-  
-  const files = fs.readdirSync(SAVED_FILES_DIR);
-  files.forEach(file => {
-    const source = path.join(SAVED_FILES_DIR, file);
-    const dest = path.join(process.cwd(), file);
-    fs.copyFileSync(source, dest);
-    log(`✓ Restored ${file}`, colors.green);
-  });
-  
-  // Cleanup
-  fs.rmSync(SAVED_FILES_DIR, { recursive: true });
-}
-
-// Build
+// Build (always production for deployment)
 log('Running production build...', colors.blue);
 try {
   execSync('npm run build -- --configuration=production', { stdio: 'inherit' });
@@ -92,7 +72,7 @@ try {
   fail('Build failed');
 }
 
-// Find dist directory
+// Dist path inference
 const distDir = path.resolve(process.cwd(), 'dist/digital-newspaper');
 if (!fs.existsSync(distDir)) {
   fail(`Dist directory not found: ${distDir}`);
@@ -101,7 +81,7 @@ if (!fs.existsSync(distDir)) {
 // Create .htaccess
 const htaccessPath = path.join(distDir, '.htaccess');
 if (!fs.existsSync(htaccessPath)) {
-  log('Creating .htaccess...', colors.blue);
+  log('Creating .htaccess for Angular routing...', colors.blue);
   const htaccessContent = `<IfModule mod_rewrite.c>
   RewriteEngine On
   RewriteBase /
@@ -114,13 +94,14 @@ if (!fs.existsSync(htaccessPath)) {
   log('✓ .htaccess created', colors.green);
 }
 
-// Deployment strategy
+// Decide strategy
 const isRelease = branch === 'release';
 let strategy = process.env.DEPLOY_STRATEGY || (isRelease ? 'full' : 'incremental');
 log(`Deployment strategy: ${strategy}`, colors.yellow);
 const dryRun = process.env.DEPLOY_DRY_RUN === 'true';
+if (dryRun) log('DRY RUN MODE - No files will be uploaded', colors.yellow);
 
-// Collect files
+// Collect local files
 function walk(dir, base = dir) {
   return fs.readdirSync(dir).flatMap(entry => {
     const full = path.join(dir, entry);
@@ -137,14 +118,15 @@ async function deployWithSFTP() {
   const Client = require('ssh2-sftp-client');
   const sftp = new Client();
   
-  log(`Connecting via SFTP to ${HOST}...`, colors.blue);
+  log(`Connecting to ${HOST} via SFTP...`, colors.blue);
   await sftp.connect({ host: HOST, port: PORT, username: USER, password: PASS });
-  log(`✓ Connected`, colors.green);
+  log(`✓ Connected to ${HOST}`, colors.green);
 
+  // Ensure remote path exists
   try { await sftp.mkdir(REMOTE, true); } catch(_) {}
 
   if (strategy === 'full') {
-    log('Performing full clean...', colors.yellow);
+    log('Performing full clean (except .htaccess) ...', colors.yellow);
     const list = await sftp.list(REMOTE);
     for (const item of list) {
       if (item.name === '.htaccess') continue;
@@ -156,7 +138,7 @@ async function deployWithSFTP() {
           await sftp.delete(remoteItemPath);
         }
       } catch (e) {
-        log(`Skip ${remoteItemPath}: ${e.message}`, colors.yellow);
+        log(`Skip delete error ${remoteItemPath}: ${e.message}`, colors.yellow);
       }
     }
   }
@@ -177,18 +159,20 @@ async function deployWithSFTP() {
     if (uploaded % 50 === 0) log(`Uploaded ${uploaded}/${files.length}`, colors.blue);
   }
 
+  // Create a deployment marker
   if (!dryRun) {
     const markerContent = JSON.stringify({
       branch,
       date: new Date().toISOString(),
       strategy,
-      files: files.length
+      files: files.length,
+      host: HOST
     }, null, 2);
     await sftp.put(Buffer.from(markerContent), `${REMOTE}/deploy-info.json`);
   }
 
   await sftp.end();
-  log(`✓ Upload complete: ${uploaded} files`, colors.green);
+  log(`✓ Deployment complete. Uploaded ${uploaded} files.`, colors.green);
 }
 
 async function deployWithFTP() {
@@ -203,25 +187,30 @@ async function deployWithFTP() {
     localRoot: distDir,
     remoteRoot: REMOTE,
     include: ['*', '**/*'],
-    exclude: ['**/*.map'],
+    exclude: ['**/*.map', 'node_modules/**', '.git/**'],
     deleteRemote: strategy === 'full',
     forcePasv: true
   };
 
-  log(`Connecting via FTP to ${HOST}...`, colors.blue);
+  log(`Connecting to ${HOST} via FTP...`, colors.blue);
 
   ftpDeploy.on('uploading', (data) => {
-    const pct = Math.round((data.transferredFileCount / data.totalFilesCount) * 100);
-    process.stdout.write(`\r${colors.blue}Uploading: ${data.transferredFileCount}/${data.totalFilesCount} (${pct}%)${colors.reset}`);
+    const percentage = Math.round((data.transferredFileCount / data.totalFilesCount) * 100);
+    process.stdout.write(`\r${colors.blue}Uploading: ${data.transferredFileCount}/${data.totalFilesCount} files (${percentage}%)${colors.reset}`);
+  });
+
+  ftpDeploy.on('uploaded', (data) => {
+    console.log(); // New line
+    log(`✓ Uploaded: ${data.filename}`, colors.green);
   });
 
   if (dryRun) {
-    log('DRY RUN - Would deploy with FTP', colors.yellow);
+    log('DRY RUN - Would deploy with FTP config:', colors.yellow);
+    console.log(JSON.stringify({ ...config, password: '***' }, null, 2));
     return;
   }
 
   await ftpDeploy.deploy(config);
-  console.log(); // newline
   log('✓ FTP deployment complete', colors.green);
 }
 
@@ -229,108 +218,71 @@ async function updateReleaseBranch() {
   log('\nUpdating release branch...', colors.blue);
   
   const currentBranch = branch;
-  backupIgnoredFiles();
   
   try {
-    // Stash current changes
-    try {
-      execSync('git stash push -m "deploy-temp-stash"', { stdio: 'pipe' });
-      log('Stashed local changes', colors.yellow);
-    } catch (e) {
-      // Nothing to stash
-    }
-    
-    // Check if release exists
-    let releaseExists = false;
-    try {
-      execSync('git rev-parse --verify release', { stdio: 'pipe' });
-      releaseExists = true;
-    } catch (e) {
-      releaseExists = false;
-    }
+    // Check if release branch exists
+    const branches = execSync('git branch -a', { encoding: 'utf-8' });
+    const releaseExists = branches.includes('release');
     
     if (releaseExists) {
-      execSync('git checkout release', { stdio: 'pipe' });
-      log('Switched to release branch', colors.blue);
+      execSync('git checkout release', { stdio: 'inherit' });
     } else {
-      // Create orphan release branch (no shared history)
-      execSync('git checkout --orphan release', { stdio: 'pipe' });
-      log('Created orphan release branch', colors.blue);
+      execSync('git checkout -b release', { stdio: 'inherit' });
     }
 
-    // Clean everything
+    // Clean release branch
+    log('Cleaning release branch...', colors.blue);
     execSync('git rm -rf . 2>/dev/null || true', { stdio: 'pipe' });
-    execSync('rm -rf * .[^.]*  2>/dev/null || true', { stdio: 'pipe' });
     
-    // Copy dist files with large buffer
+    // Copy dist files using shell with maxBuffer
+    const { exec } = require('child_process');
     await new Promise((resolve, reject) => {
-      exec(`cp -R "${distDir}"/* . && cp -R "${distDir}"/.[^.]* . 2>/dev/null || true`, 
-        { maxBuffer: 50 * 1024 * 1024 },
+      exec(`cp -R ${distDir}/* . && cp -R ${distDir}/.[^.]* . 2>/dev/null || true`, 
+        { maxBuffer: 50 * 1024 * 1024 }, // 50MB buffer
         (error) => {
           if (error && !error.message.includes('No such file')) reject(error);
           else resolve();
         }
       );
     });
-    log('✓ Build files copied', colors.green);
+    log('✓ Files copied', colors.green);
     
     // Create deployment info
     const deployInfo = {
       deployedAt: new Date().toISOString(),
       sourceBranch: currentBranch,
       strategy,
+      buildDir: distDir,
       node: process.version
     };
     fs.writeFileSync('deployment-info.json', JSON.stringify(deployInfo, null, 2));
     
-    // Commit
-    execSync('git add -A', { stdio: 'pipe' });
+    // Commit and push
+    execSync('git add -A', { stdio: 'inherit' });
     
     try {
       const commitMsg = `Deploy: ${new Date().toISOString()} from ${currentBranch}`;
-      execSync(`git commit -m "${commitMsg}"`, { stdio: 'pipe' });
-      execSync('git push origin release --force', { stdio: 'pipe' });
-      log('✓ Release branch updated and pushed', colors.green);
+      execSync(`git commit -m "${commitMsg}"`, { stdio: 'inherit' });
+      execSync('git push origin release', { stdio: 'inherit' });
+      log('✓ Release branch updated', colors.green);
     } catch (e) {
-      log('No changes to commit', colors.yellow);
+      log('No changes to commit or push failed', colors.yellow);
     }
     
     // Return to original branch
     execSync(`git checkout ${currentBranch}`, { stdio: 'pipe' });
     log(`✓ Returned to ${currentBranch}`, colors.green);
     
-    // Restore stash if any
-    try {
-      const stashList = execSync('git stash list', { encoding: 'utf-8' });
-      if (stashList.includes('deploy-temp-stash')) {
-        execSync('git stash pop', { stdio: 'pipe' });
-        log('Restored stashed changes', colors.yellow);
-      }
-    } catch (e) {
-      // No stash to restore
-    }
-    
   } catch (error) {
-    // CRITICAL: Always return to original branch
-    log(`Error during release update: ${error.message}`, colors.red);
+    // CRITICAL: Always try to return to original branch even on error
     try {
       execSync(`git checkout ${currentBranch}`, { stdio: 'pipe' });
-      log(`Emergency: Returned to ${currentBranch}`, colors.yellow);
-      
-      // Try to restore stash
-      try {
-        execSync('git stash pop', { stdio: 'pipe' });
-      } catch (e) {}
+      log(`Returned to ${currentBranch} after error`, colors.yellow);
     } catch (e) {
-      log(`CRITICAL: Could not return to ${currentBranch}!`, colors.red);
-      log(`Run manually: git checkout ${currentBranch}`, colors.red);
+      log(`WARNING: Could not switch back to ${currentBranch}. Run: git checkout ${currentBranch}`, colors.red);
     }
-    
-    restoreIgnoredFiles();
-    fail(error.message);
+    fail(`Failed to update release branch: ${error.message}`);
   }
-  
-  restoreIgnoredFiles();
 }
 
 async function deploy() {
@@ -341,14 +293,14 @@ async function deploy() {
   console.log(`${colors.bright}╚════════════════════════════════════════════╝${colors.reset}\n`);
 
   try {
-    // Upload files
+    // Step 1: Upload files
     if (USE_SFTP) {
       await deployWithSFTP();
     } else {
       await deployWithFTP();
     }
 
-    // Update release branch
+    // Step 2: Update release branch
     if (!dryRun) {
       await updateReleaseBranch();
     }
@@ -371,4 +323,5 @@ async function deploy() {
   }
 }
 
+// Run deployment
 deploy();
