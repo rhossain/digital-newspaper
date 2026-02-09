@@ -89,14 +89,21 @@ try {
   execSync('npm run build -- --configuration=production', { stdio: 'inherit' });
   log('✓ Build completed', colors.green);
 } catch (error) {
-  fail('Build failed');
+  fail('Build failed. Fix build errors before deploying.');
 }
 
 // Find dist directory
 const distDir = path.resolve(process.cwd(), 'dist/digital-newspaper');
 if (!fs.existsSync(distDir)) {
-  fail(`Dist directory not found: ${distDir}`);
+  fail(`Dist directory not found: ${distDir}\nBuild may have failed - check the output above.`);
 }
+
+// Verify dist has content
+const distContents = fs.readdirSync(distDir);
+if (distContents.length === 0) {
+  fail(`Dist directory is empty: ${distDir}\nBuild produced no output.`);
+}
+log(`✓ Build directory validated: ${distContents.length} items`, colors.green);
 
 // Create .htaccess
 const htaccessPath = path.join(distDir, '.htaccess');
