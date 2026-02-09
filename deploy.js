@@ -259,25 +259,31 @@ async function updateReleaseBranch() {
     if (releaseExists) {
       execSync('git checkout release', { stdio: 'ignore' });
       log('Switched to release branch', colors.blue);
+      
+      // Only clean if we successfully switched to release
+      try {
+        execSync('git rm -rf . 2>&1', { stdio: 'ignore' });
+      } catch(e) { /* ignore errors */ }
+      
+      try {
+        const entries = fs.readdirSync('.');
+        for (const entry of entries) {
+          if (entry === '.git' || entry === 'node_modules' || entry === '.deploy-backup') continue;
+          const fullPath = path.join(process.cwd(), entry);
+          fs.rmSync(fullPath, { recursive: true, force: true });
+        }
+      } catch(e) { /* ignore errors */ }
+      
     } else {
       // Create orphan release branch (no shared history)
       execSync('git checkout --orphan release', { stdio: 'ignore' });
       log('Created orphan release branch', colors.blue);
+      
+      // For orphan branch, remove all tracked files
+      try {
+        execSync('git rm -rf . 2>&1', { stdio: 'ignore' });
+      } catch(e) { /* ignore errors */ }
     }
-
-    // Clean everything (ignore output to avoid buffer issues)
-    try {
-      execSync('git rm -rf . 2>&1', { stdio: 'ignore' });
-    } catch(e) { /* ignore errors */ }
-    
-    try {
-      const entries = fs.readdirSync('.');
-      for (const entry of entries) {
-        if (entry === '.git') continue;
-        const fullPath = path.join(process.cwd(), entry);
-        fs.rmSync(fullPath, { recursive: true, force: true });
-      }
-    } catch(e) { /* ignore errors */ }
     
     // Copy dist files using fs (no shell buffer limits)
     log('Copying build files...', colors.blue);
