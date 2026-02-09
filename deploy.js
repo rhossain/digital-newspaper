@@ -105,15 +105,12 @@ if (distContents.length === 0) {
 }
 log(`✓ Build directory validated: ${distContents.length} items`, colors.green);
 
-// CRITICAL: Copy dist to safe temp location BEFORE any branch operations
-// because dist/ is in .gitignore and gets wiped on branch switch
-const TEMP_DIST_DIR = path.join(process.cwd(), '.deploy-dist-temp');
-if (fs.existsSync(TEMP_DIST_DIR)) {
-  fs.rmSync(TEMP_DIST_DIR, { recursive: true });
-}
-log('Copying build to safe location...', colors.blue);
+// CRITICAL: Copy dist to system temp (OUTSIDE git repo) BEFORE any branch operations
+const os = require('os');
+const TEMP_DIST_DIR = path.join(os.tmpdir(), `digital-newspaper-deploy-${Date.now()}`);
+log(`Copying build to system temp: ${TEMP_DIST_DIR}`, colors.blue);
 fs.cpSync(originalDistDir, TEMP_DIST_DIR, { recursive: true });
-log(`✓ Build copied to ${TEMP_DIST_DIR}`, colors.green);
+log(`✓ Build safely copied outside repository`, colors.green);
 
 // Use the temp dist for all operations
 const distDir = TEMP_DIST_DIR;
@@ -373,12 +370,20 @@ async function updateReleaseBranch() {
 
 async function deploy() {
   const startTime = Date.now();
+  let tempDistDir = null;
   
   console.log(`\n${colors.bright}╔════════════════════════════════════════════╗${colors.reset}`);
   console.log(`${colors.bright}║   Digital Newspaper Deployment Script     ║${colors.reset}`);
   console.log(`${colors.bright}╚════════════════════════════════════════════╝${colors.reset}\n`);
 
   try {
+    // Get temp dir for cleanup later
+    const os = require('os');
+    const distDirMatch = distDir.match(/digital-newspaper-deploy-\d+/);
+    if (distDirMatch) {
+      tempDistDir = distDir;
+    }
+    
     // Upload files
     if (USE_SFTP) {
       await deployWithSFTP();
@@ -405,20 +410,17 @@ async function deploy() {
     console.log(`\n${colors.red}╔════════════════════════════════════════════╗${colors.reset}`);
     console.log(`${colors.red}║          ✗ DEPLOYMENT FAILED ✗             ║${colors.reset}`);
     console.log(`${colors.red}╚════════════════════════════════════════════╝${colors.reset}\n`);
-    
-    // Cleanup temp dist
-    const TEMP_DIST_DIR = path.join(process.cwd(), '.deploy-dist-temp');
-    if (fs.existsSync(TEMP_DIST_DIR)) {
-      fs.rmSync(TEMP_DIST_DIR, { recursive: true });
-    }
-    
     fail(error.message);
-  }
-  
-  // Cleanup temp dist on success
-  const TEMP_DIST_DIR = path.join(process.cwd(), '.deploy-dist-temp');
-  if (fs.existsSync(TEMP_DIST_DIR)) {
-    fs.rmSync(TEMP_DIST_DIR, { recursive: true });
+  } finally {
+    // Always cleanup temp dist
+    if (tempDistDir && fs.existsSync(tempDistDir)) {
+      try {
+        fs.rmSync(tempDistDir, { recursive: true });
+        log('✓ Cleaned up temporary files', colors.blue);
+      } catch (e) {
+        // Ignore cleanup errors
+      }
+    }
   }
 }
 
