@@ -43,7 +43,8 @@ export class NewspaperDataService {
   currentDate$ = this.currentDateSubject.asObservable();
   public data$ = this.dataSubject.asObservable();
   
-  private apiUrl = 'http://localhost:3000/api/newspaper-data';
+  // Use relative path for production, works with any domain
+  private apiUrl = '/assets/newspaper-data.json';
 
   constructor(private http: HttpClient) {}
 
