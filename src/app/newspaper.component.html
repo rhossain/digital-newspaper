@@ -211,14 +211,14 @@
           <div class="linked-section-list">
             <div 
               *ngFor="let linkedSection of linkedSections"
-              class="linked-section-card"
-              (click)="selectLinkedSection(linkedSection)"
+              class="linked-section-item"
             >
-              <div class="linked-section-thumbnail">
+              <div class="linked-section-wrapper" (click)="selectLinkedSection(linkedSection)" title="Click to view this section">
                 <img 
                   *ngIf="getCroppedImageForSection(linkedSection)"
                   [src]="getCroppedImageForSection(linkedSection)!" 
                   [alt]="linkedSection.title"
+                  class="linked-section-image"
                 />
                 <div *ngIf="!getCroppedImageForSection(linkedSection)" class="linked-section-placeholder">
                   <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -227,16 +227,21 @@
                     <polyline points="21 15 16 10 5 21"></polyline>
                   </svg>
                 </div>
-              </div>
-              <div class="linked-section-info">
-                <h5>{{ linkedSection.title }}</h5>
-                <p class="linked-page-number">Page {{ linkedSection.pageId }}</p>
-                <div class="linked-section-arrow">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <line x1="5" y1="12" x2="19" y2="12"></line>
-                    <polyline points="12 5 19 12 12 19"></polyline>
+                
+                <!-- Zoom indicator -->
+                <div class="linked-zoom-indicator">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                    <line x1="11" y1="8" x2="11" y2="14"></line>
+                    <line x1="8" y1="11" x2="14" y2="11"></line>
                   </svg>
                 </div>
+              </div>
+              
+              <div class="linked-section-caption">
+                <h5>{{ linkedSection.title }}</h5>
+                <p class="linked-page-number">Page {{ linkedSection.pageId }}</p>
               </div>
             </div>
           </div>
