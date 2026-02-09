@@ -234,7 +234,7 @@ async function updateReleaseBranch() {
   try {
     // Stash current changes
     try {
-      execSync('git stash push -m "deploy-temp-stash"', { stdio: 'pipe' });
+      execSync('git stash push -m "deploy-temp-stash"', { stdio: 'ignore' });
       log('Stashed local changes', colors.yellow);
     } catch (e) {
       // Nothing to stash
@@ -243,35 +243,47 @@ async function updateReleaseBranch() {
     // Check if release exists
     let releaseExists = false;
     try {
-      execSync('git rev-parse --verify release', { stdio: 'pipe' });
+      execSync('git rev-parse --verify release', { stdio: 'ignore' });
       releaseExists = true;
     } catch (e) {
       releaseExists = false;
     }
     
     if (releaseExists) {
-      execSync('git checkout release', { stdio: 'pipe' });
+      execSync('git checkout release', { stdio: 'ignore' });
       log('Switched to release branch', colors.blue);
     } else {
       // Create orphan release branch (no shared history)
-      execSync('git checkout --orphan release', { stdio: 'pipe' });
+      execSync('git checkout --orphan release', { stdio: 'ignore' });
       log('Created orphan release branch', colors.blue);
     }
 
-    // Clean everything
-    execSync('git rm -rf . 2>/dev/null || true', { stdio: 'pipe' });
-    execSync('rm -rf * .[^.]*  2>/dev/null || true', { stdio: 'pipe' });
+    // Clean everything (ignore output to avoid buffer issues)
+    try {
+      execSync('git rm -rf . 2>&1', { stdio: 'ignore' });
+    } catch(e) { /* ignore errors */ }
     
-    // Copy dist files with large buffer
-    await new Promise((resolve, reject) => {
-      exec(`cp -R "${distDir}"/* . && cp -R "${distDir}"/.[^.]* . 2>/dev/null || true`, 
-        { maxBuffer: 50 * 1024 * 1024 },
-        (error) => {
-          if (error && !error.message.includes('No such file')) reject(error);
-          else resolve();
-        }
-      );
-    });
+    try {
+      const entries = fs.readdirSync('.');
+      for (const entry of entries) {
+        if (entry === '.git') continue;
+        const fullPath = path.join(process.cwd(), entry);
+        fs.rmSync(fullPath, { recursive: true, force: true });
+      }
+    } catch(e) { /* ignore errors */ }
+    
+    // Copy dist files using fs (no shell buffer limits)
+    log('Copying build files...', colors.blue);
+    const distEntries = fs.readdirSync(distDir);
+    for (const entry of distEntries) {
+      const src = path.join(distDir, entry);
+      const dest = path.join(process.cwd(), entry);
+      if (fs.statSync(src).isDirectory()) {
+        fs.cpSync(src, dest, { recursive: true });
+      } else {
+        fs.copyFileSync(src, dest);
+      }
+    }
     log('✓ Build files copied', colors.green);
     
     // Create deployment info
@@ -284,26 +296,26 @@ async function updateReleaseBranch() {
     fs.writeFileSync('deployment-info.json', JSON.stringify(deployInfo, null, 2));
     
     // Commit
-    execSync('git add -A', { stdio: 'pipe' });
+    execSync('git add -A', { stdio: 'ignore' });
     
     try {
       const commitMsg = `Deploy: ${new Date().toISOString()} from ${currentBranch}`;
-      execSync(`git commit -m "${commitMsg}"`, { stdio: 'pipe' });
-      execSync('git push origin release --force', { stdio: 'pipe' });
+      execSync(`git commit -m "${commitMsg}"`, { stdio: 'ignore' });
+      execSync('git push origin release --force', { stdio: 'ignore' });
       log('✓ Release branch updated and pushed', colors.green);
     } catch (e) {
       log('No changes to commit', colors.yellow);
     }
     
     // Return to original branch
-    execSync(`git checkout ${currentBranch}`, { stdio: 'pipe' });
+    execSync(`git checkout ${currentBranch}`, { stdio: 'ignore' });
     log(`✓ Returned to ${currentBranch}`, colors.green);
     
     // Restore stash if any
     try {
-      const stashList = execSync('git stash list', { encoding: 'utf-8' });
+      const stashList = execSync('git stash list', { encoding: 'utf-8', stdio: 'pipe' });
       if (stashList.includes('deploy-temp-stash')) {
-        execSync('git stash pop', { stdio: 'pipe' });
+        execSync('git stash pop', { stdio: 'ignore' });
         log('Restored stashed changes', colors.yellow);
       }
     } catch (e) {
@@ -314,12 +326,12 @@ async function updateReleaseBranch() {
     // CRITICAL: Always return to original branch
     log(`Error during release update: ${error.message}`, colors.red);
     try {
-      execSync(`git checkout ${currentBranch}`, { stdio: 'pipe' });
+      execSync(`git checkout ${currentBranch}`, { stdio: 'ignore' });
       log(`Emergency: Returned to ${currentBranch}`, colors.yellow);
       
       // Try to restore stash
       try {
-        execSync('git stash pop', { stdio: 'pipe' });
+        execSync('git stash pop', { stdio: 'ignore' });
       } catch (e) {}
     } catch (e) {
       log(`CRITICAL: Could not return to ${currentBranch}!`, colors.red);
