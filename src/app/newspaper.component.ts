@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy, ChangeDetectorRef } from '@angular/core';
+import { Component, OnInit, OnDestroy, ChangeDetectorRef, ElementRef, ViewChild } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router, ActivatedRoute } from '@angular/router';
@@ -15,6 +15,7 @@ import { Subscription } from 'rxjs';
   styleUrls: ['./newspaper.component.css']
 })
 export class NewspaperComponent implements OnInit, OnDestroy {
+  @ViewChild('mainImage') mainImageRef?: ElementRef<HTMLImageElement>;
   pages: NewspaperPage[] = [];
   currentPage: NewspaperPage | null = null;
   selectedSection: NewsSection | null = null;
@@ -34,6 +35,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   // Image loading states
   thumbnailsLoading: { [key: number]: boolean } = {};
   sectionImageLoading = false;
+  sectionImageError = false;
   
   // Date navigation
   selectedDate: string = '';
@@ -55,7 +57,6 @@ export class NewspaperComponent implements OnInit, OnDestroy {
 
   ngOnInit() {
     this.todayDate = this.dataService.getTodayDate();
-    this.selectedDate = this.todayDate;
     
     // Subscribe to route parameters
     const routeSubscription = this.route.paramMap.subscribe(params => {
@@ -105,6 +106,14 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     this.dataService.loadData().subscribe({
       next: () => {
         this.availableDates = this.dataService.getAvailableDates();
+        
+        // If no date was set from URL, use the default date from settings
+        if (!this.route.snapshot.paramMap.has('date')) {
+          const defaultDate = this.dataService.getDefaultDate();
+          this.selectedDate = defaultDate;
+          this.dataService.setCurrentDate(defaultDate);
+        }
+        
         // loadCurrentEdition will be called by the data$ subscription
         this.isLoading = false;
         this.cdr.detectChanges();
@@ -120,6 +129,14 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   }
 
   loadCurrentEdition() {
+    // Reset main view so the image element gets recreated when date changes
+    this.currentPage = null;
+    this.selectedSection = null;
+    this.linkedSections = [];
+    this.croppedSectionImage = null;
+    this.imageLoaded = false;
+    this.sectionImageLoading = false;
+
     const edition = this.dataService.getCurrentEdition();
     if (edition) {
       this.pages = edition.pages;
@@ -131,8 +148,11 @@ export class NewspaperComponent implements OnInit, OnDestroy {
       if (this.pages.length > 0) {
         // Navigate to section if pendingSectionSlug exists, otherwise select first page
         if (this.pendingSectionSlug) {
-          this.navigateToSection(this.pendingSectionSlug);
+          const found = this.navigateToSection(this.pendingSectionSlug);
           this.pendingSectionSlug = null; // Clear after use
+          if (!found) {
+            this.selectPage(this.pages[0]);
+          }
         } else {
           this.selectPage(this.pages[0]);
         }
@@ -152,7 +172,8 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     this.cdr.detectChanges();
   }
 
-  navigateToSection(sectionSlug: string) {
+  navigateToSection(sectionSlug: string): boolean {
+    let found = false;
     // Find the section across all pages by ID or title-based slug
     for (const page of this.pages) {
       // First try to find by ID (for backward compatibility)
@@ -169,9 +190,12 @@ export class NewspaperComponent implements OnInit, OnDestroy {
       if (section) {
         // Select the page with the target section ID
         this.selectPage(page, section.id);
+        found = true;
         break;
       }
     }
+
+    return found;
   }
 
   updateDisplayDate() {
@@ -218,6 +242,14 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   selectPage(page: NewspaperPage, targetSectionId?: string) {
     this.currentPage = page;
     this.imageLoaded = false;
+
+    // If the image is already cached, the load event may not fire
+    setTimeout(() => {
+      const img = this.mainImageRef?.nativeElement;
+      if (img && img.complete && img.naturalWidth > 0) {
+        this.onImageLoad();
+      }
+    }, 0);
     
     // If a target section is specified, select it; otherwise select the first section
     if (page.sections && page.sections.length > 0) {
@@ -266,23 +298,27 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     }
   }
 
+  onImageError() {
+    this.imageLoaded = true;
+  }
+
   selectSection(section: NewsSection) {
     this.selectedSection = section;
     this.sectionImageLoading = true;
+    this.sectionImageError = false;
     
     // Load linked sections
     this.loadLinkedSections(section);
     
     // Use imageUrl if available, otherwise crop from main image
     if (section.imageUrl) {
-      // Check if it's an external URL (starts with http:// or https://)
-      // If external, use as-is; if relative path, ensure it starts with /
+      // Use proxy for external URLs to avoid CORS issues
       const isExternalUrl = section.imageUrl.startsWith('http://') || section.imageUrl.startsWith('https://');
-      const imagePath = isExternalUrl 
-        ? section.imageUrl 
+      const imagePath = isExternalUrl
+        ? section.imageUrl
         : (section.imageUrl.startsWith('/') ? section.imageUrl : `/${section.imageUrl}`);
-      this.croppedSectionImage = imagePath;
-      console.log('Loading section image from:', imagePath);
+      this.croppedSectionImage = this.resolveImageUrl(imagePath);
+      console.log('Loading section image from:', this.croppedSectionImage);
     } else {
       this.croppedSectionImage = null;
       this.cropSectionImage();
@@ -300,6 +336,16 @@ export class NewspaperComponent implements OnInit, OnDestroy {
 
   onSectionImageLoad() {
     this.sectionImageLoading = false;
+  }
+
+  resolveImageUrl(url: string): string {
+    if (!url) return '';
+    if (url.startsWith('data:')) return url;
+    if (url.includes('/api/proxy-image?url=')) return url;
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      return `http://localhost:3000/api/proxy-image?url=${encodeURIComponent(url)}`;
+    }
+    return url;
   }
 
   closeSection() {
@@ -482,8 +528,15 @@ export class NewspaperComponent implements OnInit, OnDestroy {
       0, 0, cropWidth, cropHeight            // Destination rectangle
     );
 
-    // Convert canvas to data URL
-    this.croppedSectionImage = canvas.toDataURL('image/jpeg', 0.9);
+    // Convert canvas to data URL (may fail for cross-origin images)
+    try {
+      this.croppedSectionImage = canvas.toDataURL('image/jpeg', 0.9);
+    } catch (error) {
+      this.croppedSectionImage = null;
+      this.sectionImageError = true;
+      this.sectionImageLoading = false;
+      console.error('Failed to crop section image due to canvas security restrictions:', error);
+    }
   }
 
   private updateUrl() {

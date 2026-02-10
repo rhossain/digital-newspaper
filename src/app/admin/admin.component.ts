@@ -2,7 +2,7 @@ import { Component, OnInit, ViewChild, ElementRef, ChangeDetectorRef } from '@an
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
-import { NewspaperDataService, NewspaperPage, NewsSection } from '../services/newspaper-data.service';
+import { NewspaperDataService, NewspaperPage, NewsSection, GlobalSettings } from '../services/newspaper-data.service';
 import { ToasterService } from '../services/toaster.service';
 
 @Component({
@@ -26,6 +26,7 @@ export class AdminComponent implements OnInit {
   
   // UI State
   activeTab: 'pages' | 'sections' = 'pages';
+  activeMainTab: 'content' | 'settings' = 'content';
   isEditingPage = false;
   isEditingSection = false;
   showImageCropper = false;
@@ -43,6 +44,23 @@ export class AdminComponent implements OnInit {
   thumbnailInputMode: 'url' | 'file' = 'url';
   fullImageFile: File | null = null;
   thumbnailFile: File | null = null;
+
+  // Global Settings
+  settingsForm: GlobalSettings = {
+    logo: { url: '', alt: 'Digital Newspaper' },
+    socialLinks: {
+      facebook: '',
+      twitter: '',
+      linkedin: '',
+      whatsapp: '',
+      instagram: '',
+      youtube: ''
+    },
+    defaultDateMode: 'current',
+    specificDate: ''
+  };
+  logoInputMode: 'url' | 'file' = 'url';
+  logoFile: File | null = null;
   
   sectionForm: Partial<NewsSection> = {
     id: '',
@@ -92,6 +110,7 @@ export class AdminComponent implements OnInit {
           this.availableDates.unshift(this.selectedDate);
         }
         this.loadCurrentEdition();
+        this.loadSettings();
         this.cdr.detectChanges(); // Explicitly trigger change detection
       },
       error: (error) => console.error('Error loading data:', error)
@@ -768,6 +787,59 @@ export class AdminComponent implements OnInit {
         this.pageForm.thumbnail = e.target?.result as string;
       };
       reader.readAsDataURL(this.thumbnailFile);
+    }
+  }
+
+  // Global Settings Management
+  loadSettings(): void {
+    const settings = this.dataService.getSettings();
+    this.settingsForm = {
+      logo: settings.logo || { url: '', alt: 'Digital Newspaper' },
+      socialLinks: settings.socialLinks || {},
+      defaultDateMode: settings.defaultDateMode || 'current',
+      specificDate: settings.specificDate || ''
+    };
+  }
+
+  saveSettings(): void {
+    // Ensure settings structure is complete
+    const completeSettings: GlobalSettings = {
+      logo: this.settingsForm.logo || { url: '', alt: 'Digital Newspaper' },
+      socialLinks: this.settingsForm.socialLinks || {},
+      defaultDateMode: this.settingsForm.defaultDateMode || 'current',
+      specificDate: this.settingsForm.specificDate || ''
+    };
+    
+    this.dataService.updateSettings(completeSettings);
+    
+    // Save to backend
+    const currentData = this.dataService.getData();
+    console.log('Saving settings:', completeSettings);
+    console.log('Complete data structure:', currentData);
+    
+    this.dataService.saveData(currentData).subscribe({
+      next: () => {
+        console.log('Settings saved successfully');
+        this.toaster.success('Settings saved successfully!');
+      },
+      error: (error) => {
+        console.error('Error saving settings:', error);
+        this.toaster.error('Failed to save settings');
+      }
+    });
+  }
+
+  onLogoFileSelected(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    if (input.files && input.files[0]) {
+      this.logoFile = input.files[0];
+      const reader = new FileReader();
+      reader.onload = (e: ProgressEvent<FileReader>) => {
+        if (this.settingsForm.logo) {
+          this.settingsForm.logo.url = e.target?.result as string;
+        }
+      };
+      reader.readAsDataURL(this.logoFile);
     }
   }
 }

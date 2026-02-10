@@ -32,7 +32,22 @@
 
   <!-- Date Selector Bar -->
   <div class="date-selector-bar">
-    <div class="date-info">
+    <div class="main-tabs">
+      <button 
+        class="main-tab" 
+        [class.active]="activeMainTab === 'content'"
+        (click)="activeMainTab = 'content'">
+        📄 Content Management
+      </button>
+      <button 
+        class="main-tab" 
+        [class.active]="activeMainTab === 'settings'"
+        (click)="activeMainTab = 'settings'">
+        ⚙️ Global Settings
+      </button>
+    </div>
+
+    <div class="date-info" *ngIf="activeMainTab === 'content'">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
         <line x1="16" y1="2" x2="16" y2="6"></line>
@@ -43,7 +58,7 @@
       <strong class="current-date">{{ formatDisplayDate(selectedDate) }}</strong>
     </div>
     
-    <div class="date-controls">
+    <div class="date-controls" *ngIf="activeMainTab === 'content'">
       <label class="date-control-label">Select Date:</label>
       <select [(ngModel)]="selectedDate" (change)="onDateChange()" class="date-select">
         <option *ngFor="let date of availableDates" [value]="date">
@@ -61,7 +76,7 @@
     </div>
   </div>
 
-  <div class="admin-body">
+  <div class="admin-body" *ngIf="activeMainTab === 'content'">
     <!-- Sidebar -->
     <aside class="sidebar">
       <div class="sidebar-header">
@@ -365,6 +380,123 @@
         </div>
       </div>
     </main>
+  </div>
+
+  <!-- Global Settings Panel -->
+  <div class="admin-body settings-panel" *ngIf="activeMainTab === 'settings'">
+    <div class="settings-container">
+      <div class="settings-header">
+        <h2>⚙️ Global Settings</h2>
+        <button class="btn btn-success" (click)="saveSettings()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+            <polyline points="17 21 17 13 7 13 7 21"></polyline>
+            <polyline points="7 3 7 8 15 8"></polyline>
+          </svg>
+          Save Settings
+        </button>
+      </div>
+
+      <div class="settings-content">
+        <!-- Logo Settings -->
+        <div class="settings-section">
+          <h3>Site Logo</h3>
+          <div class="form-group">
+            <label>Logo</label>
+            <div class="input-mode-options">
+              <label class="radio-option">
+                <input type="radio" name="logoMode" value="url" [(ngModel)]="logoInputMode" />
+                <span>External URL</span>
+              </label>
+              <label class="radio-option">
+                <input type="radio" name="logoMode" value="file" [(ngModel)]="logoInputMode" />
+                <span>Upload File</span>
+              </label>
+            </div>
+            <input 
+              *ngIf="logoInputMode === 'url'" 
+              type="text" 
+              [(ngModel)]="settingsForm.logo!.url" 
+              class="form-control" 
+              placeholder="https://example.com/logo.png" 
+            />
+            <input 
+              *ngIf="logoInputMode === 'file'" 
+              type="file" 
+              (change)="onLogoFileSelected($event)" 
+              accept="image/*" 
+              class="form-control" 
+            />
+          </div>
+          <div class="form-group">
+            <label>Logo Alt Text</label>
+            <input type="text" [(ngModel)]="settingsForm.logo!.alt" class="form-control" placeholder="Digital Newspaper" />
+          </div>
+          <div class="logo-preview" *ngIf="settingsForm.logo?.url">
+            <img [src]="settingsForm.logo!.url" [alt]="settingsForm.logo!.alt || 'Logo'" />
+          </div>
+        </div>
+
+        <!-- Social Media Links -->
+        <div class="settings-section">
+          <h3>Social Media Links</h3>
+          <div class="form-group">
+            <label>Facebook URL</label>
+            <input type="url" [(ngModel)]="settingsForm.socialLinks!.facebook" class="form-control" placeholder="https://facebook.com/yourpage" />
+          </div>
+          <div class="form-group">
+            <label>Twitter URL</label>
+            <input type="url" [(ngModel)]="settingsForm.socialLinks!.twitter" class="form-control" placeholder="https://twitter.com/yourhandle" />
+          </div>
+          <div class="form-group">
+            <label>LinkedIn URL</label>
+            <input type="url" [(ngModel)]="settingsForm.socialLinks!.linkedin" class="form-control" placeholder="https://linkedin.com/company/yourcompany" />
+          </div>
+          <div class="form-group">
+            <label>WhatsApp Number</label>
+            <input type="tel" [(ngModel)]="settingsForm.socialLinks!.whatsapp" class="form-control" placeholder="+1234567890" />
+          </div>
+          <div class="form-group">
+            <label>Instagram URL</label>
+            <input type="url" [(ngModel)]="settingsForm.socialLinks!.instagram" class="form-control" placeholder="https://instagram.com/yourprofile" />
+          </div>
+          <div class="form-group">
+            <label>YouTube URL</label>
+            <input type="url" [(ngModel)]="settingsForm.socialLinks!.youtube" class="form-control" placeholder="https://youtube.com/c/yourchannel" />
+          </div>
+        </div>
+
+        <!-- Default Date Settings -->
+        <div class="settings-section">
+          <h3>Default Date Loading</h3>
+          <div class="form-group">
+            <label>When users visit the site, load:</label>
+            <div class="input-mode-options">
+              <label class="radio-option">
+                <input type="radio" name="defaultDateMode" value="current" [(ngModel)]="settingsForm.defaultDateMode" />
+                <span>Current Date (Today's Edition)</span>
+              </label>
+              <label class="radio-option">
+                <input type="radio" name="defaultDateMode" value="specific" [(ngModel)]="settingsForm.defaultDateMode" />
+                <span>Specific Date</span>
+              </label>
+            </div>
+          </div>
+          <div class="form-group" *ngIf="settingsForm.defaultDateMode === 'specific'">
+            <label>Specific Date</label>
+            <input type="date" [(ngModel)]="settingsForm.specificDate" class="form-control" />
+          </div>
+          <div class="hint-text">
+            <p *ngIf="settingsForm.defaultDateMode === 'current'">
+              📅 The newspaper will always load today's edition by default.
+            </p>
+            <p *ngIf="settingsForm.defaultDateMode === 'specific' && settingsForm.specificDate">
+              📅 The newspaper will always load the edition from {{ settingsForm.specificDate }}.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 

@@ -96,7 +96,7 @@
           <div class="thumbnail-image-wrapper">
             <div class="skeleton-loader" *ngIf="thumbnailsLoading[page.id]"></div>
             <img 
-              [src]="page.thumbnail" 
+              [src]="resolveImageUrl(page.thumbnail)" 
               [alt]="'Page ' + page.id"
               (load)="onThumbnailLoad(page.id)"
               [style.opacity]="thumbnailsLoading[page.id] ? '0' : '1'"
@@ -132,10 +132,13 @@
       <div class="image-wrapper">
         <div class="skeleton-loader main-image-skeleton" *ngIf="!imageLoaded"></div>
         <img
-          [src]="currentPage.fullImage"
+          #mainImage
+          [src]="resolveImageUrl(currentPage.fullImage)"
           [alt]="'Page ' + currentPage.id"
           class="main-page-image"
+          crossorigin="anonymous"
           (load)="onImageLoad()"
+          (error)="onImageError()"
           [style.opacity]="imageLoaded ? '1' : '0'"
         />
 
@@ -184,7 +187,10 @@
               (load)="onSectionImageLoad()"
               [style.opacity]="sectionImageLoading ? '0' : '1'"
             />
-            <div *ngIf="!croppedSectionImage" class="section-image-loading">
+            <div *ngIf="sectionImageError" class="section-image-loading">
+              Preview unavailable due to image permissions.
+            </div>
+            <div *ngIf="!croppedSectionImage && !sectionImageError" class="section-image-loading">
               Loading section image...
             </div>
             

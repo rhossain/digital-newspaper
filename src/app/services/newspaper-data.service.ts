@@ -29,7 +29,25 @@ export interface NewspaperEdition {
   pages: NewspaperPage[];
 }
 
+export interface GlobalSettings {
+  logo?: {
+    url: string;
+    alt?: string;
+  };
+  socialLinks?: {
+    facebook?: string;
+    twitter?: string;
+    linkedin?: string;
+    whatsapp?: string;
+    instagram?: string;
+    youtube?: string;
+  };
+  defaultDateMode: 'current' | 'specific';
+  specificDate?: string; // Format: YYYY-MM-DD
+}
+
 export interface NewspaperData {
+  settings?: GlobalSettings;
   editions: NewspaperEdition[];
 }
 
@@ -37,7 +55,13 @@ export interface NewspaperData {
   providedIn: 'root'
 })
 export class NewspaperDataService {
-  private dataSubject = new BehaviorSubject<NewspaperData>({ editions: [] });
+  private dataSubject = new BehaviorSubject<NewspaperData>({
+    settings: {
+      defaultDateMode: 'current',
+      socialLinks: {}
+    },
+    editions: []
+  });
   private currentDateSubject = new BehaviorSubject<string>(this.getTodayDate());
   
   currentDate$ = this.currentDateSubject.asObservable();
@@ -45,6 +69,7 @@ export class NewspaperDataService {
   
   // Use relative path for production, works with any domain
   private apiUrl = '/assets/newspaper-data.json';
+  private backendApiUrl = 'http://localhost:3000/api/newspaper-data';
 
   constructor(private http: HttpClient) {}
 
@@ -80,13 +105,25 @@ export class NewspaperDataService {
         if ('pages' in data && !('editions' in data)) {
           const todayDate = this.getTodayDate();
           return {
+            settings: {
+              defaultDateMode: 'current',
+              socialLinks: {}
+            },
             editions: [{
               date: todayDate,
               pages: data.pages
             }]
           };
         }
-        return data as NewspaperData;
+        // Ensure settings exist
+        const result = data as NewspaperData;
+        if (!result.settings) {
+          result.settings = {
+            defaultDateMode: 'current',
+            socialLinks: {}
+          };
+        }
+        return result;
       }),
       tap((data: NewspaperData) => this.dataSubject.next(data))
     );
@@ -110,7 +147,12 @@ export class NewspaperDataService {
   // Get all available dates
   getAvailableDates(): string[] {
     const data = this.getData();
-    return data.editions.map(e => e.date).sort().reverse();
+    // Only return dates that have pages created
+    return data.editions
+      .filter(e => e.pages && e.pages.length > 0)
+      .map(e => e.date)
+      .sort()
+      .reverse();
   }
 
   // Create or get edition for a date
@@ -136,8 +178,8 @@ export class NewspaperDataService {
     // Update the local data
     this.dataSubject.next(data);
     
-    // Save to backend
-    return this.http.post(this.apiUrl, data);
+    // Save to backend API
+    return this.http.post(this.backendApiUrl, data);
   }
 
   // Add page to current date's edition
@@ -265,6 +307,31 @@ export class NewspaperDataService {
     const edition = this.getEditionByDate(targetDate);
     if (!edition || edition.pages.length === 0) return 1;
     return Math.max(...edition.pages.map(p => p.id)) + 1;
+  }
+
+  // Global Settings Management
+  getSettings(): GlobalSettings {
+    const data = this.getData();
+    return data.settings || {
+      defaultDateMode: 'current',
+      socialLinks: {}
+    };
+  }
+
+  updateSettings(settings: GlobalSettings): void {
+    const currentData = this.getData();
+    this.dataSubject.next({
+      ...currentData,
+      settings
+    });
+  }
+
+  getDefaultDate(): string {
+    const settings = this.getSettings();
+    if (settings.defaultDateMode === 'specific' && settings.specificDate) {
+      return settings.specificDate;
+    }
+    return this.getTodayDate();
   }
 
   downloadJSON(): void {

@@ -68,6 +68,35 @@
   background: white;
   border-bottom: 2px solid #e5e7eb;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.main-tabs {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.main-tab {
+  padding: 0.75rem 1.5rem;
+  border: none;
+  background: #f3f4f6;
+  color: #6b7280;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.main-tab:hover {
+  background: #e5e7eb;
+  color: #374151;
+}
+
+.main-tab.active {
+  background: #3b82f6;
+  color: white;
 }
 
 .date-info {
@@ -136,6 +165,8 @@
   margin: 0 auto;
   gap: 2rem;
   padding: 2rem;
+  height: auto;
+  max-height: calc(100vh - 200px);
 }
 
 /* Sidebar */
@@ -394,8 +425,7 @@
 }
 
 .form-group label {
-  display: inline-flex;
-  align-items: center;
+  display: block;
   margin-bottom: 0.5rem;
   font-weight: 600;
   color: #374151;
@@ -932,4 +962,84 @@ small {
     margin: 1rem;
     max-height: calc(100vh - 2rem);
   }
+}
+
+/* Global Settings Panel */
+.settings-panel {
+  display: block !important;
+  padding: 2rem;
+  overflow-y: auto;
+  max-height: calc(100vh - 148px);
+  flex: 1;
+}
+
+.settings-container {
+  max-width: 900px;
+  margin: 0 auto;
+  background: transparent;
+  padding-bottom: 2rem;
+}
+
+.settings-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 2rem;
+  padding-bottom: 1rem;
+  border-bottom: 2px solid #e5e7eb;
+}
+
+.settings-header h2 {
+  margin: 0;
+  font-size: 1.875rem;
+  color: #1f2937;
+}
+
+.settings-content {
+  display: flex;
+  flex-direction: column;
+  gap: 2.5rem;
+}
+
+.settings-section {
+  background: white;
+  padding: 2rem;
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.settings-section h3 {
+  margin: 0 0 1.5rem 0;
+  font-size: 1.25rem;
+  color: #1f2937;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.logo-preview {
+  margin-top: 1rem;
+  padding: 1rem;
+  background: #f9fafb;
+  border-radius: 8px;
+  text-align: center;
+}
+
+.logo-preview img {
+  max-width: 200px;
+  max-height: 80px;
+  object-fit: contain;
+}
+
+.hint-text {
+  margin-top: 1rem;
+  padding: 1rem;
+  background: #eff6ff;
+  border-left: 4px solid #3b82f6;
+  border-radius: 6px;
+}
+
+.hint-text p {
+  margin: 0;
+  color: #1e40af;
+  font-size: 0.875rem;
 }
