@@ -532,7 +532,7 @@ export class AdminComponent implements OnInit {
   }
 
   uploadCroppedImage(imageData: string, fileName: string) {
-    const url = 'http://localhost:3000/api/upload-cropped-image';
+    const url = `${this.dataService.getApiBaseUrl()}/api/upload-cropped-image`;
     
     fetch(url, {
       method: 'POST',
@@ -604,7 +604,7 @@ export class AdminComponent implements OnInit {
 
   uploadImageFile(imageData: string, fileName: string) {
     console.log('Uploading image, filename:', fileName);
-    const url = 'http://localhost:3000/api/upload-image';
+    const url = `${this.dataService.getApiBaseUrl()}/api/upload-image`;
     
     fetch(url, {
       method: 'POST',

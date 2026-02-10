@@ -7,7 +7,11 @@
 const { execSync, exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-require('dotenv').config({ path: path.resolve(process.cwd(), '.env') });
+
+const envPath = path.resolve(process.cwd(), '.env');
+if (fs.existsSync(envPath)) {
+  require('dotenv').config({ path: envPath });
+}
 
 const colors = {
   reset: '\x1b[0m',
@@ -27,16 +31,29 @@ function fail(msg) {
   process.exit(1);
 }
 
-// Validate env
-const HOST = process.env.HOSTINGER_HOST;
-const PORT = process.env.HOSTINGER_PORT ? parseInt(process.env.HOSTINGER_PORT, 10) : 21;
-const USER = process.env.HOSTINGER_USER;
-const PASS = process.env.HOSTINGER_PASS;
-const REMOTE = process.env.HOSTINGER_REMOTE_PATH || '/public_html/diginews';
-const USE_SFTP = process.env.HOSTINGER_USE_SFTP === 'true';
+// Load deploy config (local overrides base)
+const localConfigPath = path.resolve(process.cwd(), 'deploy.config.local.js');
+const baseConfigPath = path.resolve(process.cwd(), 'deploy.config.js');
+let fileConfig = {};
+
+if (fs.existsSync(localConfigPath)) {
+  fileConfig = require(localConfigPath);
+  log('Using deploy.config.local.js', colors.blue);
+} else if (fs.existsSync(baseConfigPath)) {
+  fileConfig = require(baseConfigPath);
+  log('Using deploy.config.js', colors.blue);
+}
+
+// Validate env/config
+const HOST = process.env.HOSTINGER_HOST || fileConfig.host;
+const PORT = process.env.HOSTINGER_PORT ? parseInt(process.env.HOSTINGER_PORT, 10) : (fileConfig.port || 21);
+const USER = process.env.HOSTINGER_USER || fileConfig.user;
+const PASS = process.env.HOSTINGER_PASS || fileConfig.password;
+const REMOTE = process.env.HOSTINGER_REMOTE_PATH || fileConfig.remoteRoot || '/public_html/diginews';
+const USE_SFTP = process.env.HOSTINGER_USE_SFTP === 'true' || fileConfig.useSftp === true;
 
 if (!HOST || !USER || !PASS) {
-  fail('Missing required env HOSTINGER_HOST / HOSTINGER_USER / HOSTINGER_PASS\nCreate a .env file with these variables.');
+  fail('Missing required deploy credentials. Provide HOSTINGER_HOST / HOSTINGER_USER / HOSTINGER_PASS via .env or deploy.config.local.js');
 }
 
 // Validate webhook secret format (should be hash, not URL)

@@ -3,12 +3,13 @@
 // deploy.config.local.js is in .gitignore for security
 
 module.exports = {
-  host: process.env.FTP_HOST || '217.21.91.251',
-  user: process.env.FTP_USER || 'u594404148',
-  password: process.env.FTP_PASSWORD || 'saRobin@007',
-  port: process.env.FTP_PORT || 21,
+  host: process.env.HOSTINGER_HOST || '',
+  user: process.env.HOSTINGER_USER || '',
+  password: process.env.HOSTINGER_PASS || '',
+  port: process.env.HOSTINGER_PORT || 21,
   localRoot: './dist/digital-newspaper',
-  remoteRoot: '/public_html/diginews/',
+  remoteRoot: process.env.HOSTINGER_REMOTE_PATH || '/public_html/diginews',
+  useSftp: process.env.HOSTINGER_USE_SFTP === 'true',
   include: ['*', '**/*'],
   exclude: ['**/*.map', 'node_modules/**', '.git/**'],
   deleteRemote: false,

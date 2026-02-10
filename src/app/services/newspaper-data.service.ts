@@ -69,7 +69,9 @@ export class NewspaperDataService {
   
   // Use relative path for production, works with any domain
   private apiUrl = '/assets/newspaper-data.json';
-  private backendApiUrl = 'http://localhost:3000/api/newspaper-data';
+  private apiBaseUrl: string = (window as any).__API_BASE_URL
+    || (window.location.hostname === 'localhost' ? 'http://localhost:3000' : window.location.origin);
+  private backendApiUrl = `${this.apiBaseUrl}/api/newspaper-data`;
 
   constructor(private http: HttpClient) {}
 
@@ -180,6 +182,10 @@ export class NewspaperDataService {
     
     // Save to backend API
     return this.http.post(this.backendApiUrl, data);
+  }
+
+  getApiBaseUrl(): string {
+    return this.apiBaseUrl;
   }
 
   // Add page to current date's edition
