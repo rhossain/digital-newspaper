@@ -18,6 +18,13 @@ const supabase = USE_SUPABASE
   ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } })
   : null;
 
+console.log(`🔧 Storage mode: ${USE_SUPABASE ? 'Supabase' : 'Local FS (ephemeral)'}`);
+if (USE_SUPABASE) {
+  console.log(`🗄️  Supabase bucket: ${SUPABASE_BUCKET}`);
+} else {
+  console.log('⚠️  Supabase not configured. Data will not persist on Render restarts.');
+}
+
 // Middleware
 app.use(cors());
 app.use(express.json({ limit: '50mb' })); // Increase limit for base64 images
