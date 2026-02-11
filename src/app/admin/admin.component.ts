@@ -23,6 +23,7 @@ export class AdminComponent implements OnInit {
   selectedDate: string = '';
   availableDates: string[] = [];
   todayDate: string = '';
+  isLoadingEdition: boolean = false;
   
   // UI State
   activeTab: 'pages' | 'sections' = 'pages';
@@ -98,6 +99,7 @@ export class AdminComponent implements OnInit {
   ngOnInit() {
     this.todayDate = this.dataService.getTodayDate();
     this.selectedDate = this.todayDate;
+    this.availableDates = this.selectedDate ? [this.selectedDate] : [];
     
     this.loadData();
   }
@@ -118,15 +120,22 @@ export class AdminComponent implements OnInit {
   }
 
   loadCurrentEdition() {
+    this.isLoadingEdition = true;
     this.dataService.setCurrentDate(this.selectedDate);
-    const edition = this.dataService.getCurrentEdition();
-    if (edition) {
-      this.pages = edition.pages;
-    } else {
-      // Create new edition if it doesn't exist
-      this.dataService.getOrCreateEdition(this.selectedDate);
-      this.pages = [];
-    }
+    
+    // Defer edition loading to next tick to update UI immediately
+    setTimeout(() => {
+      const edition = this.dataService.getCurrentEdition();
+      if (edition) {
+        this.pages = edition.pages;
+      } else {
+        // Create new edition if it doesn't exist
+        this.dataService.getOrCreateEdition(this.selectedDate);
+        this.pages = [];
+      }
+      this.isLoadingEdition = false;
+      this.cdr.detectChanges();
+    }, 0);
   }
 
   onDateChange() {

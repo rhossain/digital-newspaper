@@ -1,9 +1,10 @@
 /* Admin Container */
 .admin-container {
-  min-height: 100vh;
+  height: 100vh;
   background: linear-gradient(135deg, #1976d2 0%, #1565c0 100%);
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 /* Header */
@@ -165,8 +166,8 @@
   margin: 0 auto;
   gap: 2rem;
   padding: 2rem;
-  height: auto;
-  max-height: calc(100vh - 200px);
+  overflow: hidden;
+  min-height: 0;
 }
 
 /* Sidebar */
@@ -178,7 +179,8 @@
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  max-height: calc(100vh - 140px);
+  height: 100%;
+  min-height: 0;
 }
 
 .sidebar-header {
@@ -274,7 +276,8 @@
   flex: 1;
   min-width: 0;
   overflow-y: auto;
-  max-height: calc(100vh - 140px);
+  height: 100%;
+  min-height: 0;
 }
 
 .content-panel {
@@ -282,7 +285,7 @@
   border-radius: 12px;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
   padding: 2rem;
-  min-height: 500px;
+  height: 100%;
 }
 
 .panel-header {
@@ -425,7 +428,8 @@
 }
 
 .form-group label {
-  display: block;
+  display: inline-flex;
+  align-items: center;
   margin-bottom: 0.5rem;
   font-weight: 600;
   color: #374151;
@@ -920,11 +924,13 @@ small {
 @media (max-width: 1200px) {
   .admin-body {
     flex-direction: column;
+    overflow-y: auto;
   }
 
   .sidebar {
     width: 100%;
     max-height: 300px;
+    flex-shrink: 0;
   }
 
   .page-list {
@@ -967,9 +973,8 @@ small {
 /* Global Settings Panel */
 .settings-panel {
   display: block !important;
-  padding: 2rem;
+  padding: 2rem 2rem 0rem;
   overflow-y: auto;
-  max-height: calc(100vh - 148px);
   flex: 1;
 }
 

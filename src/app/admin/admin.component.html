@@ -85,6 +85,9 @@
       </div>
       
       <div class="page-list">
+        <div class="loading-state" *ngIf="isLoadingEdition" style="padding: 20px; text-align: center; color: #666;">
+          Loading edition...
+        </div>
         <div 
           *ngFor="let page of pages"
           class="page-item"
@@ -92,7 +95,7 @@
           (click)="selectPage(page)"
         >
           <div class="page-thumbnail">
-            <img [src]="page.thumbnail || page.fullImage" [alt]="'Page ' + page.id" />
+            <img [src]="page.thumbnail || page.fullImage" [alt]="'Page ' + page.id" loading="lazy" decoding="async" />
           </div>
           <div class="page-info">
             <h3>Page {{ page.id }}</h3>
@@ -437,35 +440,6 @@
           </div>
         </div>
 
-        <!-- Social Media Links -->
-        <div class="settings-section">
-          <h3>Social Media Links</h3>
-          <div class="form-group">
-            <label>Facebook URL</label>
-            <input type="url" [(ngModel)]="settingsForm.socialLinks!.facebook" class="form-control" placeholder="https://facebook.com/yourpage" />
-          </div>
-          <div class="form-group">
-            <label>Twitter URL</label>
-            <input type="url" [(ngModel)]="settingsForm.socialLinks!.twitter" class="form-control" placeholder="https://twitter.com/yourhandle" />
-          </div>
-          <div class="form-group">
-            <label>LinkedIn URL</label>
-            <input type="url" [(ngModel)]="settingsForm.socialLinks!.linkedin" class="form-control" placeholder="https://linkedin.com/company/yourcompany" />
-          </div>
-          <div class="form-group">
-            <label>WhatsApp Number</label>
-            <input type="tel" [(ngModel)]="settingsForm.socialLinks!.whatsapp" class="form-control" placeholder="+1234567890" />
-          </div>
-          <div class="form-group">
-            <label>Instagram URL</label>
-            <input type="url" [(ngModel)]="settingsForm.socialLinks!.instagram" class="form-control" placeholder="https://instagram.com/yourprofile" />
-          </div>
-          <div class="form-group">
-            <label>YouTube URL</label>
-            <input type="url" [(ngModel)]="settingsForm.socialLinks!.youtube" class="form-control" placeholder="https://youtube.com/c/yourchannel" />
-          </div>
-        </div>
-
         <!-- Default Date Settings -->
         <div class="settings-section">
           <h3>Default Date Loading</h3>
@@ -493,6 +467,35 @@
             <p *ngIf="settingsForm.defaultDateMode === 'specific' && settingsForm.specificDate">
               📅 The newspaper will always load the edition from {{ settingsForm.specificDate }}.
             </p>
+          </div>
+        </div>
+
+        <!-- Social Media Links -->
+        <div class="settings-section">
+          <h3>Social Media Links</h3>
+          <div class="form-group">
+            <label>Facebook URL</label>
+            <input type="url" [(ngModel)]="settingsForm.socialLinks!.facebook" class="form-control" placeholder="https://facebook.com/yourpage" />
+          </div>
+          <div class="form-group">
+            <label>Twitter URL</label>
+            <input type="url" [(ngModel)]="settingsForm.socialLinks!.twitter" class="form-control" placeholder="https://twitter.com/yourhandle" />
+          </div>
+          <div class="form-group">
+            <label>LinkedIn URL</label>
+            <input type="url" [(ngModel)]="settingsForm.socialLinks!.linkedin" class="form-control" placeholder="https://linkedin.com/company/yourcompany" />
+          </div>
+          <div class="form-group">
+            <label>WhatsApp Number</label>
+            <input type="tel" [(ngModel)]="settingsForm.socialLinks!.whatsapp" class="form-control" placeholder="+1234567890" />
+          </div>
+          <div class="form-group">
+            <label>Instagram URL</label>
+            <input type="url" [(ngModel)]="settingsForm.socialLinks!.instagram" class="form-control" placeholder="https://instagram.com/yourprofile" />
+          </div>
+          <div class="form-group">
+            <label>YouTube URL</label>
+            <input type="url" [(ngModel)]="settingsForm.socialLinks!.youtube" class="form-control" placeholder="https://youtube.com/c/yourchannel" />
           </div>
         </div>
       </div>
