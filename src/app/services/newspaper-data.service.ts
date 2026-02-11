@@ -1,7 +1,7 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable, BehaviorSubject } from 'rxjs';
-import { tap, map } from 'rxjs/operators';
+import { tap, map, catchError } from 'rxjs/operators';
 
 export interface NewsSection {
   id: string;
@@ -68,9 +68,10 @@ export class NewspaperDataService {
   public data$ = this.dataSubject.asObservable();
   
   // Use relative path for production, works with any domain
-  private apiUrl = '/assets/newspaper-data.json';
+  private assetsUrl = '/assets/newspaper-data.json';
   private apiBaseUrl: string = (window as any).__API_BASE_URL
     || (window.location.hostname === 'localhost' ? 'http://localhost:3000' : window.location.origin);
+  private apiUrl = `${this.apiBaseUrl}/api/newspaper-data`;
   private backendApiUrl = `${this.apiBaseUrl}/api/newspaper-data`;
 
   constructor(private http: HttpClient) {}
@@ -102,6 +103,7 @@ export class NewspaperDataService {
   // Data loading with backwards compatibility
   loadData(): Observable<NewspaperData> {
     return this.http.get<NewspaperData | { pages: NewspaperPage[] }>(this.apiUrl).pipe(
+      catchError(() => this.http.get<NewspaperData | { pages: NewspaperPage[] }>(this.assetsUrl)),
       map((data): NewspaperData => {
         // Backwards compatibility: convert old format to new format
         if ('pages' in data && !('editions' in data)) {
