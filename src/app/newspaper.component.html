@@ -185,7 +185,9 @@
               [alt]="selectedSection.title"
               class="section-full-image"
               (load)="onSectionImageLoad()"
+              (error)="onSectionImageError()"
               [style.opacity]="sectionImageLoading ? '0' : '1'"
+              [style.display]="sectionImageLoading ? 'none' : 'block'"
             />
             <div *ngIf="sectionImageError" class="section-image-loading">
               Preview unavailable due to image permissions.

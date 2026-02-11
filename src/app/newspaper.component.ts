@@ -336,6 +336,13 @@ export class NewspaperComponent implements OnInit, OnDestroy {
 
   onSectionImageLoad() {
     this.sectionImageLoading = false;
+    this.cdr.detectChanges();
+  }
+
+  onSectionImageError() {
+    this.sectionImageLoading = false;
+    this.sectionImageError = true;
+    this.cdr.detectChanges();
   }
 
   resolveImageUrl(url: string): string {
@@ -531,10 +538,14 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     // Convert canvas to data URL (may fail for cross-origin images)
     try {
       this.croppedSectionImage = canvas.toDataURL('image/jpeg', 0.9);
+      // Data URL is available immediately, no need to wait for load
+      this.sectionImageLoading = false;
+      this.cdr.detectChanges();
     } catch (error) {
       this.croppedSectionImage = null;
       this.sectionImageError = true;
       this.sectionImageLoading = false;
+      this.cdr.detectChanges();
       console.error('Failed to crop section image due to canvas security restrictions:', error);
     }
   }
