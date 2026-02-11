@@ -2,7 +2,7 @@ import { Component, OnInit, OnDestroy, ChangeDetectorRef, ElementRef, ViewChild 
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router, ActivatedRoute } from '@angular/router';
-import { NewspaperDataService, NewsSection, NewspaperPage, NewspaperEdition } from './services/newspaper-data.service';
+import { NewspaperDataService, NewsSection, NewspaperPage, NewspaperEdition, GlobalSettings } from './services/newspaper-data.service';
 import { ToasterService } from './services/toaster.service';
 import { ShareButtonsComponent } from './shared/share-buttons/share-buttons.component';
 import { Subscription } from 'rxjs';
@@ -44,6 +44,10 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   availableDates: string[] = [];
   isToday: boolean = true;
   isLoading: boolean = false;
+  
+  // Global settings
+  settings: GlobalSettings | null = null;
+  socialLinks: any = {};
   
   private subscriptions: Subscription[] = [];
 
@@ -106,6 +110,10 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     this.dataService.loadData().subscribe({
       next: () => {
         this.availableDates = this.dataService.getAvailableDates();
+        
+        // Load global settings
+        this.settings = this.dataService.getSettings();
+        this.socialLinks = this.settings?.socialLinks || {};
         
         // If no date was set from URL, use the default date from settings
         if (!this.route.snapshot.paramMap.has('date')) {
