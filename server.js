@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const compression = require('compression');
 const fs = require('fs').promises;
 const path = require('path');
 const { createClient } = require('@supabase/supabase-js');
@@ -27,8 +28,14 @@ if (USE_SUPABASE) {
 
 // Middleware
 app.use(cors());
+app.use(compression()); // Enable gzip compression
 app.use(express.json({ limit: '50mb' })); // Increase limit for base64 images
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+// In-memory cache for newspaper data
+let dataCache = null;
+let cacheTimestamp = 0;
+const CACHE_DURATION = 60000; // 1 minute
 
 // Ensure cropped images directory exists (local fallback only)
 if (!USE_SUPABASE) {
@@ -78,7 +85,24 @@ function getPublicUrl(pathInBucket) {
 // API Routes
 app.get('/api/newspaper-data', async (req, res) => {
   try {
+    const now = Date.now();
+    
+    // Return cached data if available and fresh
+    if (dataCache && (now - cacheTimestamp) < CACHE_DURATION) {
+      res.setHeader('X-Cache', 'HIT');
+      res.setHeader('Cache-Control', 'public, max-age=60');
+      return res.json(dataCache);
+    }
+    
+    // Read fresh data
     const data = await readData();
+    
+    // Update cache
+    dataCache = data;
+    cacheTimestamp = now;
+    
+    res.setHeader('X-Cache', 'MISS');
+    res.setHeader('Cache-Control', 'public, max-age=60');
     res.json(data);
   } catch (error) {
     console.error('Error reading data:', error);
@@ -89,6 +113,11 @@ app.get('/api/newspaper-data', async (req, res) => {
 app.post('/api/newspaper-data', async (req, res) => {
   try {
     await writeData(req.body);
+    
+    // Invalidate cache
+    dataCache = req.body;
+    cacheTimestamp = Date.now();
+    
     res.json({ success: true, message: 'Data saved successfully' });
   } catch (error) {
     console.error('Error saving data:', error);

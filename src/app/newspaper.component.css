@@ -865,6 +865,15 @@
   max-height: 85vh;
 }
 
+.modal-content {
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-content .modal-body {
+  padding: 20px 40px;
+}
+
 .close-button {
   position: absolute;
   top: 15px;
