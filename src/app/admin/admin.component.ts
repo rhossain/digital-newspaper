@@ -298,8 +298,8 @@ export class AdminComponent implements OnInit {
       console.log('Saving section:', section);
       
       // Check if section exists by looking in the service data (not the stale selectedPage)
-      const edition = this.dataService.getEditionByDate(this.selectedDate);
-      const currentPage = edition?.pages.find(p => p.id === this.selectedPage?.id);
+      const currentEdition = this.dataService.getEditionByDate(this.selectedDate);
+      const currentPage = currentEdition?.pages.find(p => p.id === this.selectedPage?.id);
       const existingSection = currentPage?.sections.find(s => s.id === section.id);
       
       if (existingSection) {
