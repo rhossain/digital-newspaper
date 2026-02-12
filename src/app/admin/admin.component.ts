@@ -123,19 +123,17 @@ export class AdminComponent implements OnInit {
     this.isLoadingEdition = true;
     this.dataService.setCurrentDate(this.selectedDate);
     
-    // Defer edition loading to next tick to update UI immediately
-    setTimeout(() => {
-      const edition = this.dataService.getCurrentEdition();
-      if (edition) {
-        this.pages = edition.pages;
-      } else {
-        // Create new edition if it doesn't exist
-        this.dataService.getOrCreateEdition(this.selectedDate);
-        this.pages = [];
-      }
-      this.isLoadingEdition = false;
-      this.cdr.detectChanges();
-    }, 0);
+    // Load edition immediately from service (no network delay)
+    const edition = this.dataService.getCurrentEdition();
+    if (edition) {
+      this.pages = edition.pages;
+    } else {
+      // Create new edition if it doesn't exist
+      this.dataService.getOrCreateEdition(this.selectedDate);
+      this.pages = [];
+    }
+    this.isLoadingEdition = false;
+    this.cdr.detectChanges();
   }
 
   onDateChange() {
@@ -206,8 +204,11 @@ export class AdminComponent implements OnInit {
         this.dataService.addPage(page, this.selectedDate);
       }
       
-      // Reload pages from the current edition
-      this.loadCurrentEdition();
+      // Update local pages immediately from service (no network call)
+      const edition = this.dataService.getCurrentEdition();
+      if (edition) {
+        this.pages = edition.pages;
+      }
       
       this.cancelPageEdit();
       this.toaster.success('Page saved successfully!');
@@ -221,8 +222,11 @@ export class AdminComponent implements OnInit {
         this.selectedPage = null;
       }
       
-      // Reload pages from the current edition
-      this.loadCurrentEdition();
+      // Update local pages immediately from service (no network call)
+      const edition = this.dataService.getCurrentEdition();
+      if (edition) {
+        this.pages = edition.pages;
+      }
       this.toaster.success('Page deleted successfully!');
     }
   }
@@ -306,8 +310,11 @@ export class AdminComponent implements OnInit {
         this.dataService.addSection(this.selectedPage.id, section, this.selectedDate);
       }
       
-      // Reload pages from the current edition
-      this.loadCurrentEdition();
+      // Update local pages immediately from service (no network call)
+      const edition = this.dataService.getCurrentEdition();
+      if (edition) {
+        this.pages = edition.pages;
+      }
       // Update selected page reference
       this.selectedPage = this.pages.find(p => p.id === this.selectedPage?.id) || null;
       
@@ -329,8 +336,11 @@ export class AdminComponent implements OnInit {
     if (this.selectedPage && confirm(`Delete section "${section.title}"?`)) {
       this.dataService.deleteSection(this.selectedPage.id, section.id, this.selectedDate);
       
-      // Reload pages from the current edition
-      this.loadCurrentEdition();
+      // Update local pages immediately from service (no network call)
+      const edition = this.dataService.getCurrentEdition();
+      if (edition) {
+        this.pages = edition.pages;
+      }
       // Update selected page reference
       this.selectedPage = this.pages.find(p => p.id === this.selectedPage?.id) || null;
       
@@ -709,12 +719,16 @@ export class AdminComponent implements OnInit {
       return;
     }
     
+    // Show immediate feedback
+    this.toaster.success('Saving data...');
+    
+    // Save asynchronously without blocking UI
     this.dataService.saveData(currentData).subscribe({
       next: (response) => {
         console.log('Save successful:', response);
         this.toaster.success('All data saved successfully!');
-        // Ensure local pages are in sync with current edition
-        this.loadCurrentEdition();
+        // NO RELOAD - data is already updated locally
+        // Just ensure selected page reference is current
         if (this.selectedPage) {
           this.selectedPage = this.pages.find(p => p.id === this.selectedPage?.id) || null;
         }
