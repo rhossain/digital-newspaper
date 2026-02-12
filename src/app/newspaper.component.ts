@@ -5,12 +5,15 @@ import { Router, ActivatedRoute } from '@angular/router';
 import { NewspaperDataService, NewsSection, NewspaperPage, NewspaperEdition, GlobalSettings } from './services/newspaper-data.service';
 import { ToasterService } from './services/toaster.service';
 import { ShareButtonsComponent } from './shared/share-buttons/share-buttons.component';
+import { ImageCacheService } from './services/image-cache.service';
+import { CacheManagerService } from './services/cache-manager.service';
+import { NewspaperPageThumbnailComponent } from './components/newspaper-page-thumbnail.component';
 import { Subscription } from 'rxjs';
 
 @Component({
   selector: 'app-newspaper',
   standalone: true,
-  imports: [CommonModule, FormsModule, ShareButtonsComponent],
+  imports: [CommonModule, FormsModule, ShareButtonsComponent, NewspaperPageThumbnailComponent],
   templateUrl: './newspaper.component.html',
   styleUrls: ['./newspaper.component.css']
 })
@@ -56,7 +59,9 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     private toaster: ToasterService,
     private cdr: ChangeDetectorRef,
     private router: Router,
-    private route: ActivatedRoute
+    private route: ActivatedRoute,
+    private imageCacheService: ImageCacheService,
+    private cacheManager: CacheManagerService
   ) {}
 
   ngOnInit() {
@@ -120,6 +125,12 @@ export class NewspaperComponent implements OnInit, OnDestroy {
           const defaultDate = this.dataService.getDefaultDate();
           this.selectedDate = defaultDate;
           this.dataService.setCurrentDate(defaultDate);
+        }
+        
+        // Preload images for current edition
+        const edition = this.dataService.getCurrentEdition();
+        if (edition) {
+          this.imageCacheService.preloadEditionImages(this.selectedDate, edition.pages);
         }
         
         // loadCurrentEdition will be called by the data$ subscription

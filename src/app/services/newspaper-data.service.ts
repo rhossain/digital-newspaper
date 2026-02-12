@@ -1,7 +1,9 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { Observable, BehaviorSubject } from 'rxjs';
-import { tap, map, catchError } from 'rxjs/operators';
+import { Observable, BehaviorSubject, from, of } from 'rxjs';
+import { tap, map, catchError, switchMap } from 'rxjs/operators';
+import { CacheService } from './cache.service';
+import { CacheManagerService } from './cache-manager.service';
 
 export interface NewsSection {
   id: string;
@@ -74,7 +76,24 @@ export class NewspaperDataService {
   private apiUrl = `${this.apiBaseUrl}/api/newspaper-data`;
   private backendApiUrl = `${this.apiBaseUrl}/api/newspaper-data`;
 
-  constructor(private http: HttpClient) {}
+  constructor(
+    private http: HttpClient,
+    private cacheService: CacheService,
+    private cacheManager: CacheManagerService
+  ) {
+    // Initialize cache maintenance
+    this.initializeCacheMaintenance();
+  }
+
+  /**
+   * Initialize cache maintenance routines
+   */
+  private initializeCacheMaintenance(): void {
+    // Clean expired cache entries every hour
+    setInterval(() => {
+      this.cacheManager.performMaintenance();
+    }, 3600000);
+  }
 
   // Date helper methods
   getTodayDate(): string {
@@ -100,36 +119,61 @@ export class NewspaperDataService {
     return this.currentDateSubject.value;
   }
 
-  // Data loading with backwards compatibility
+  // Data loading with backwards compatibility and caching
   loadData(): Observable<NewspaperData> {
-    return this.http.get<NewspaperData | { pages: NewspaperPage[] }>(this.apiUrl).pipe(
-      catchError(() => this.http.get<NewspaperData | { pages: NewspaperPage[] }>(this.assetsUrl)),
-      map((data): NewspaperData => {
-        // Backwards compatibility: convert old format to new format
-        if ('pages' in data && !('editions' in data)) {
-          const todayDate = this.getTodayDate();
-          return {
-            settings: {
-              defaultDateMode: 'current',
-              socialLinks: {}
-            },
-            editions: [{
-              date: todayDate,
-              pages: data.pages
-            }]
-          };
+    const cacheKey = 'data:newspaper-all';
+    
+    // Try cache first
+    return from(this.cacheService.get<NewspaperData>(cacheKey, 'data')).pipe(
+      switchMap(cachedData => {
+        if (cachedData) {
+          console.log('Loading newspaper data from cache');
+          this.dataSubject.next(cachedData);
+          return of(cachedData);
         }
-        // Ensure settings exist
-        const result = data as NewspaperData;
-        if (!result.settings) {
-          result.settings = {
-            defaultDateMode: 'current',
-            socialLinks: {}
-          };
-        }
-        return result;
-      }),
-      tap((data: NewspaperData) => this.dataSubject.next(data))
+
+        // Fetch from network
+        console.log('Loading newspaper data from network');
+        return this.http.get<NewspaperData | { pages: NewspaperPage[] }>(this.apiUrl).pipe(
+          catchError(() => this.http.get<NewspaperData | { pages: NewspaperPage[] }>(this.assetsUrl)),
+          map((data): NewspaperData => {
+            // Backwards compatibility: convert old format to new format
+            if ('pages' in data && !('editions' in data)) {
+              const todayDate = this.getTodayDate();
+              return {
+                settings: {
+                  defaultDateMode: 'current',
+                  socialLinks: {}
+                },
+                editions: [{
+                  date: todayDate,
+                  pages: data.pages
+                }]
+              };
+            }
+            // Ensure settings exist
+            const result = data as NewspaperData;
+            if (!result.settings) {
+              result.settings = {
+                defaultDateMode: 'current',
+                socialLinks: {}
+              };
+            }
+            return result;
+          }),
+          tap((data: NewspaperData) => {
+            this.dataSubject.next(data);
+            // Cache the data (24 hour TTL)
+            this.cacheService.set(cacheKey, data, { ttl: 86400000 }, 'data');
+            // Preload current edition
+            const currentDate = this.getCurrentDate();
+            const currentEdition = data.editions.find(e => e.date === currentDate);
+            if (currentEdition) {
+              this.cacheManager.preloadEdition(currentDate, currentEdition.pages);
+            }
+          })
+        );
+      })
     );
   }
 
@@ -182,6 +226,9 @@ export class NewspaperDataService {
     // Update the local data
     this.dataSubject.next(data);
     
+    // Invalidate main cache
+    this.cacheService.delete('data:newspaper-all', 'data');
+    
     // Save to backend API
     return this.http.post(this.backendApiUrl, data);
   }
@@ -213,7 +260,10 @@ export class NewspaperDataService {
       newEditions.sort((a, b) => b.date.localeCompare(a.date));
     }
     
-    this.dataSubject.next({ editions: newEditions });
+    this.dataSubject.next({ ...currentData, editions: newEditions });
+    
+    // Invalidate cache for this date
+    this.cacheManager.onPageAdded(page.id, targetDate);
   }
 
   updatePage(pageId: number, updatedPage: NewspaperPage, date?: string): void {
@@ -230,7 +280,10 @@ export class NewspaperDataService {
       return edition;
     });
     
-    this.dataSubject.next({ editions: newEditions });
+    this.dataSubject.next({ ...currentData, editions: newEditions });
+    
+    // Invalidate cache for this page
+    this.cacheManager.onPageUpdated(pageId, targetDate);
   }
 
   deletePage(pageId: number, date?: string): void {
@@ -244,7 +297,10 @@ export class NewspaperDataService {
       return edition;
     });
     
-    this.dataSubject.next({ editions: newEditions });
+    this.dataSubject.next({ ...currentData, editions: newEditions });
+    
+    // Invalidate cache for this page
+    this.cacheManager.onPageDeleted(pageId, targetDate);
   }
 
   addSection(pageId: number, section: NewsSection, date?: string): void {
@@ -264,7 +320,10 @@ export class NewspaperDataService {
       return edition;
     });
     
-    this.dataSubject.next({ editions: newEditions });
+    this.dataSubject.next({ ...currentData, editions: newEditions });
+    
+    // Invalidate cache for this section
+    this.cacheManager.onSectionAdded(section.id, pageId, targetDate);
   }
 
   updateSection(pageId: number, sectionId: string, updatedSection: NewsSection, date?: string): void {
@@ -287,7 +346,10 @@ export class NewspaperDataService {
       return edition;
     });
     
-    this.dataSubject.next({ editions: newEditions });
+    this.dataSubject.next({ ...currentData, editions: newEditions });
+    
+    // Invalidate cache for this section
+    this.cacheManager.onSectionUpdated(sectionId, pageId, targetDate);
   }
 
   deleteSection(pageId: number, sectionId: string, date?: string): void {
@@ -307,7 +369,10 @@ export class NewspaperDataService {
       return edition;
     });
     
-    this.dataSubject.next({ editions: newEditions });
+    this.dataSubject.next({ ...currentData, editions: newEditions });
+    
+    // Invalidate cache for this section
+    this.cacheManager.onSectionDeleted(sectionId, pageId, targetDate);
   }
 
   getNextPageId(date?: string): number {
@@ -332,6 +397,9 @@ export class NewspaperDataService {
       ...currentData,
       settings
     });
+    
+    // Invalidate settings cache
+    this.cacheManager.onSettingsUpdated();
   }
 
   getDefaultDate(): string {

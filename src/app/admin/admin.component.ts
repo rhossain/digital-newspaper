@@ -819,17 +819,20 @@ export class AdminComponent implements OnInit {
       specificDate: this.settingsForm.specificDate || ''
     };
     
+    // Update settings in the data service
     this.dataService.updateSettings(completeSettings);
     
-    // Save to backend
+    // Get the updated data after settings change
     const currentData = this.dataService.getData();
     console.log('Saving settings:', completeSettings);
     console.log('Complete data structure:', currentData);
     
+    // Save to backend
     this.dataService.saveData(currentData).subscribe({
       next: () => {
         console.log('Settings saved successfully');
         this.toaster.success('Settings saved successfully!');
+        this.cdr.detectChanges();
       },
       error: (error) => {
         console.error('Error saving settings:', error);
