@@ -1,3 +1,4 @@
+/*
 import { Injectable } from '@angular/core';
 import { CacheService, CacheConfig } from './cache.service';
 import { Observable, from, of } from 'rxjs';
@@ -10,6 +11,7 @@ export interface ImageCacheEntry {
   timestamp: number;
   size: number;
 }
+*/
 
 export interface ImagePreloadConfig {
   priority?: 'high' | 'medium' | 'low';

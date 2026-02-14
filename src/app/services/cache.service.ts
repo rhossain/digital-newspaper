@@ -1,3 +1,4 @@
+/*
 import { Injectable } from '@angular/core';
 import { Observable, of, from } from 'rxjs';
 import { tap, catchError, map } from 'rxjs/operators';
@@ -8,6 +9,7 @@ export interface CacheEntry<T> {
   expiresAt: number;
   version: string;
 }
+*/
 
 export interface CacheConfig {
   ttl?: number; // Time to live in milliseconds (default: 1 hour)

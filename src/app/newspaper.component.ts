@@ -5,15 +5,12 @@ import { Router, ActivatedRoute } from '@angular/router';
 import { NewspaperDataService, NewsSection, NewspaperPage, NewspaperEdition, GlobalSettings } from './services/newspaper-data.service';
 import { ToasterService } from './services/toaster.service';
 import { ShareButtonsComponent } from './shared/share-buttons/share-buttons.component';
-import { ImageCacheService } from './services/image-cache.service';
-import { CacheManagerService } from './services/cache-manager.service';
-import { NewspaperPageThumbnailComponent } from './components/newspaper-page-thumbnail.component';
 import { Subscription } from 'rxjs';
 
 @Component({
   selector: 'app-newspaper',
   standalone: true,
-  imports: [CommonModule, FormsModule, ShareButtonsComponent, NewspaperPageThumbnailComponent],
+  imports: [CommonModule, FormsModule, ShareButtonsComponent],
   templateUrl: './newspaper.component.html',
   styleUrls: ['./newspaper.component.css']
 })
@@ -59,9 +56,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     private toaster: ToasterService,
     private cdr: ChangeDetectorRef,
     private router: Router,
-    private route: ActivatedRoute,
-    private imageCacheService: ImageCacheService,
-    private cacheManager: CacheManagerService
+    private route: ActivatedRoute
   ) {}
 
   ngOnInit() {
@@ -103,21 +98,6 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     });
     this.subscriptions.push(dataSubscription);
     
-    // Subscribe to cache invalidation events for auto-refresh
-    const cacheSubscription = this.cacheManager.cacheInvalidated$.subscribe(event => {
-      console.log('Cache invalidation event received:', event);
-      // When cache is invalidated (especially 'all' type), force reload data
-      if (event.type === 'all') {
-        console.log('Complete cache invalidation detected - force reloading data');
-        this.loadNewspaperData(true);
-      } else if (event.date && event.date === this.selectedDate) {
-        // Reload if the current date's cache was invalidated
-        console.log('Current date cache invalidated - reloading');
-        this.loadNewspaperData(true);
-      }
-    });
-    this.subscriptions.push(cacheSubscription);
-    
     this.loadNewspaperData();
   }
 
@@ -125,10 +105,9 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     this.subscriptions.forEach(sub => sub.unsubscribe());
   }
 
-  loadNewspaperData(forceReload: boolean = false) {
+  loadNewspaperData() {
     this.isLoading = true;
-    const expectedDate = this.selectedDate || undefined;
-    this.dataService.loadData(forceReload, expectedDate).subscribe({
+    this.dataService.loadData().subscribe({
       next: () => {
         this.availableDates = this.dataService.getAvailableDates();
         
@@ -141,12 +120,6 @@ export class NewspaperComponent implements OnInit, OnDestroy {
           const defaultDate = this.dataService.getDefaultDate();
           this.selectedDate = defaultDate;
           this.dataService.setCurrentDate(defaultDate);
-        }
-        
-        // Preload images for current edition
-        const edition = this.dataService.getCurrentEdition();
-        if (edition) {
-          this.imageCacheService.preloadEditionImages(this.selectedDate, edition.pages);
         }
         
         // loadCurrentEdition will be called by the data$ subscription

@@ -1,3 +1,4 @@
+/*
 import { Injectable } from '@angular/core';
 import { CacheService } from './cache.service';
 import { ImageCacheService } from './image-cache.service';
@@ -10,6 +11,7 @@ export interface CacheInvalidationEvent {
   sectionId?: string;
   timestamp: number;
 }
+*/
 
 /**
  * Cache manager service for granular cache invalidation

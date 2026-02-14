@@ -1,3 +1,4 @@
+/*
 import { Injectable } from '@angular/core';
 import { HttpEvent, HttpInterceptor, HttpHandler, HttpRequest, HttpResponse } from '@angular/common/http';
 import { Observable, of } from 'rxjs';
@@ -129,3 +130,4 @@ export class HttpCacheInterceptor implements HttpInterceptor {
     return 1800000; // 30 minutes default
   }
 }
+*/
