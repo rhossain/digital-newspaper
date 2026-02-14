@@ -163,6 +163,23 @@ export class AdminComponent implements OnInit {
     return this.dataService.formatDisplayDate(dateStr);
   }
 
+  // Force reload data - clears caches and reloads from backend
+  forceReloadData() {
+    this.isLoadingEdition = true;
+    this.dataService.loadData(true).subscribe({
+      next: () => {
+        this.loadCurrentEdition();
+        this.toaster.success('Data reloaded successfully!');
+        this.isLoadingEdition = false;
+      },
+      error: (error) => {
+        console.error('Error reloading data:', error);
+        this.toaster.error('Failed to reload data');
+        this.isLoadingEdition = false;
+      }
+    });
+  }
+
   // Page Management
   selectPage(page: NewspaperPage) {
     this.selectedPage = page;

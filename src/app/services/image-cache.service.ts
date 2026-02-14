@@ -238,21 +238,6 @@ export class ImageCacheService {
   }
 
   /**
-   * Clear all image cache
-   */
-  async clearAll(): Promise<void> {
-    await this.cacheService.clear('images');
-    
-    // Revoke all object URLs
-    for (const objectUrl of this.objectUrlCache.values()) {
-      URL.revokeObjectURL(objectUrl);
-    }
-    
-    this.objectUrlCache.clear();
-    this.currentCacheSize = 0;
-  }
-
-  /**
    * Evict oldest entries to make space
    */
   private async evictOldestEntries(requiredSpace: number): Promise<void> {
@@ -297,6 +282,27 @@ export class ImageCacheService {
   private async getAllImageKeys(): Promise<string[]> {
     const stats = await this.cacheService.getStats();
     return stats.dbKeys.filter(key => key.startsWith('image:'));
+  }
+
+  /**
+   * Clear all cached images - use after admin saves
+   */
+  async clearAll(): Promise<void> {
+    console.log('Clearing all image caches');
+    
+    // Revoke all object URLs
+    for (const [key, url] of this.objectUrlCache.entries()) {
+      URL.revokeObjectURL(url);
+    }
+    this.objectUrlCache.clear();
+    
+    // Clear all image entries from IndexedDB
+    await this.cacheService.deletePattern(new RegExp('^image:'), 'images');
+    
+    // Reset cache size
+    this.currentCacheSize = 0;
+    
+    console.log('All image caches cleared');
   }
 
   /**

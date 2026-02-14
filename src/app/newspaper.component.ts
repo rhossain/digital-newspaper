@@ -103,6 +103,21 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     });
     this.subscriptions.push(dataSubscription);
     
+    // Subscribe to cache invalidation events for auto-refresh
+    const cacheSubscription = this.cacheManager.cacheInvalidated$.subscribe(event => {
+      console.log('Cache invalidation event received:', event);
+      // When cache is invalidated (especially 'all' type), force reload data
+      if (event.type === 'all') {
+        console.log('Complete cache invalidation detected - force reloading data');
+        this.loadNewspaperData(true);
+      } else if (event.date && event.date === this.selectedDate) {
+        // Reload if the current date's cache was invalidated
+        console.log('Current date cache invalidated - reloading');
+        this.loadNewspaperData(true);
+      }
+    });
+    this.subscriptions.push(cacheSubscription);
+    
     this.loadNewspaperData();
   }
 
@@ -110,9 +125,10 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     this.subscriptions.forEach(sub => sub.unsubscribe());
   }
 
-  loadNewspaperData() {
+  loadNewspaperData(forceReload: boolean = false) {
     this.isLoading = true;
-    this.dataService.loadData().subscribe({
+    const expectedDate = this.selectedDate || undefined;
+    this.dataService.loadData(forceReload, expectedDate).subscribe({
       next: () => {
         this.availableDates = this.dataService.getAvailableDates();
         

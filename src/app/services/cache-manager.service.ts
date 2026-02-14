@@ -21,11 +21,64 @@ export interface CacheInvalidationEvent {
 export class CacheManagerService {
   // Event stream for cache invalidations
   public cacheInvalidated$ = new Subject<CacheInvalidationEvent>();
+  private broadcastChannel?: BroadcastChannel;
+  private readonly storageKey = 'newspaper-cache-invalidation';
 
   constructor(
     private cacheService: CacheService,
     private imageCacheService: ImageCacheService
-  ) {}
+  ) {
+    this.initCrossTabSync();
+  }
+
+  private initCrossTabSync(): void {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    if ('BroadcastChannel' in window) {
+      this.broadcastChannel = new BroadcastChannel('newspaper-cache');
+      this.broadcastChannel.onmessage = (event: MessageEvent<CacheInvalidationEvent>) => {
+        if (event?.data?.timestamp) {
+          this.cacheInvalidated$.next(event.data);
+        }
+      };
+    }
+
+    window.addEventListener('storage', (event: StorageEvent) => {
+      if (event.key === this.storageKey && event.newValue) {
+        try {
+          const payload = JSON.parse(event.newValue) as CacheInvalidationEvent;
+          if (payload?.timestamp) {
+            this.cacheInvalidated$.next(payload);
+          }
+        } catch {
+          // ignore parse errors
+        }
+      }
+    });
+  }
+
+  private emitInvalidation(event: CacheInvalidationEvent): void {
+    this.cacheInvalidated$.next(event);
+    this.broadcastInvalidation(event);
+  }
+
+  private broadcastInvalidation(event: CacheInvalidationEvent): void {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    if (this.broadcastChannel) {
+      this.broadcastChannel.postMessage(event);
+    }
+
+    try {
+      localStorage.setItem(this.storageKey, JSON.stringify(event));
+    } catch {
+      // ignore storage errors
+    }
+  }
 
   /**
    * Invalidate cache for a specific date
@@ -44,7 +97,7 @@ export class CacheManagerService {
     await this.imageCacheService.clearDateCache(date);
 
     // Emit invalidation event
-    this.cacheInvalidated$.next({
+    this.emitInvalidation({
       type: 'date',
       date,
       timestamp: Date.now()
@@ -69,7 +122,7 @@ export class CacheManagerService {
     await this.imageCacheService.clearPageCache(pageId);
 
     // Emit invalidation event
-    this.cacheInvalidated$.next({
+    this.emitInvalidation({
       type: 'page',
       pageId,
       date,
@@ -94,7 +147,7 @@ export class CacheManagerService {
     // Note: We don't clear page images, only section-specific cache
 
     // Emit invalidation event
-    this.cacheInvalidated$.next({
+    this.emitInvalidation({
       type: 'section',
       sectionId,
       pageId,
@@ -120,28 +173,31 @@ export class CacheManagerService {
     await this.cacheService.delete('metadata:global-settings', 'metadata');
 
     // Emit invalidation event
-    this.cacheInvalidated$.next({
+    this.emitInvalidation({
       type: 'settings',
       timestamp: Date.now()
     });
   }
 
   /**
-   * Invalidate entire cache
-   * Use sparingly - prefer granular invalidation
+   * Invalidate ALL caches - complete cache clear
+   * Use this after admin saves to ensure frontend gets fresh data
    */
   async invalidateAll(): Promise<void> {
-    console.log('Invalidating all cache');
-
-    // Clear all cache layers
-    await this.cacheService.clear();
+    console.log('Invalidating ALL caches (complete clear)');
+    
+    // Clear all data stores
+    await this.cacheService.deletePattern(new RegExp('.*'), 'data');
+    await this.cacheService.deletePattern(new RegExp('.*'), 'metadata');
     await this.imageCacheService.clearAll();
-
+    
     // Emit invalidation event
-    this.cacheInvalidated$.next({
+    this.emitInvalidation({
       type: 'all',
       timestamp: Date.now()
     });
+    
+    console.log('All caches cleared successfully');
   }
 
   /**
