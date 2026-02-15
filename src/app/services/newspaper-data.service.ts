@@ -2,6 +2,7 @@ import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable, BehaviorSubject } from 'rxjs';
 import { tap, map, catchError } from 'rxjs/operators';
+import { AuthService } from './auth.service';
 
 export interface NewsSection {
   id: string;
@@ -67,13 +68,13 @@ export class NewspaperDataService {
   currentDate$ = this.currentDateSubject.asObservable();
   public data$ = this.dataSubject.asObservable();
   
-  // Use relative path for production, works with any domain
+  // WordPress REST API base
   private assetsUrl = '/assets/newspaper-data.json';
-  private apiBaseUrl: string = 'http://localhost:3000';
-  private apiUrl = `${this.apiBaseUrl}/api/newspaper-data`;
-  private backendApiUrl = `${this.apiBaseUrl}/api/newspaper-data`;
+  private wpBaseUrl: string = (window as any).__WP_BASE_URL || 'http://localhost:8080';
+  private apiUrl = `${this.wpBaseUrl}/wp-json/digital-newspaper/v1/data`;
+  private backendApiUrl = `${this.wpBaseUrl}/wp-json/digital-newspaper/v1/data`;
 
-  constructor(private http: HttpClient) {}
+  constructor(private http: HttpClient, private auth: AuthService) {}
 
   // Date helper methods
   getTodayDate(): string {
@@ -184,11 +185,12 @@ export class NewspaperDataService {
     this.dataSubject.next(data);
     
     // Save to backend API
-    return this.http.post(this.backendApiUrl, data);
+    const headers = this.auth.getAuthHeaders();
+    return this.http.post(this.backendApiUrl, data, { headers });
   }
 
   getApiBaseUrl(): string {
-    return this.apiBaseUrl;
+    return this.wpBaseUrl;
   }
 
   // Add page to current date's edition

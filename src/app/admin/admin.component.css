@@ -40,6 +40,38 @@
   gap: 0.75rem;
 }
 
+.auth-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+}
+
+.auth-card {
+  background: white;
+  border-radius: 12px;
+  padding: 2rem;
+  width: 100%;
+  max-width: 420px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+}
+
+.auth-card h2 {
+  margin-top: 0;
+  margin-bottom: 1rem;
+}
+
+.auth-error {
+  color: #ef4444;
+  margin: 0.5rem 0 1rem;
+}
+
 .save-message {
   padding: 0.5rem 2rem;
   background: #10b981;

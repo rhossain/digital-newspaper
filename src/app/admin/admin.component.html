@@ -26,12 +26,34 @@
           </svg>
           Download JSON
         </button>
+        <button class="btn btn-danger" *ngIf="isAuthenticated" (click)="logout()">
+          Logout
+        </button>
       </div>
     </div>
   </header>
 
+  <!-- Auth Overlay -->
+  <div class="auth-overlay" *ngIf="!isAuthenticated">
+    <div class="auth-card">
+      <h2>Admin Login</h2>
+      <div class="form-group">
+        <label>Username</label>
+        <input type="text" [(ngModel)]="authForm.username" class="form-control" />
+      </div>
+      <div class="form-group">
+        <label>Password</label>
+        <input type="password" [(ngModel)]="authForm.password" class="form-control" />
+      </div>
+      <div class="auth-error" *ngIf="authError">{{ authError }}</div>
+      <button class="btn btn-primary" (click)="login()" [disabled]="isAuthenticating">
+        {{ isAuthenticating ? 'Signing in...' : 'Sign In' }}
+      </button>
+    </div>
+  </div>
+
   <!-- Date Selector Bar -->
-  <div class="date-selector-bar">
+  <div class="date-selector-bar" *ngIf="isAuthenticated">
     <div class="main-tabs">
       <button 
         class="main-tab" 
@@ -76,7 +98,7 @@
     </div>
   </div>
 
-  <div class="admin-body" *ngIf="activeMainTab === 'content'">
+  <div class="admin-body" *ngIf="isAuthenticated && activeMainTab === 'content'">
     <!-- Sidebar -->
     <aside class="sidebar">
       <div class="sidebar-header">
@@ -386,7 +408,7 @@
   </div>
 
   <!-- Global Settings Panel -->
-  <div class="admin-body settings-panel" *ngIf="activeMainTab === 'settings'">
+  <div class="admin-body settings-panel" *ngIf="isAuthenticated && activeMainTab === 'settings'">
     <div class="settings-container">
       <div class="settings-header">
         <h2>⚙️ Global Settings</h2>
@@ -401,6 +423,17 @@
       </div>
 
       <div class="settings-content">
+        <!-- WordPress Connection -->
+        <div class="settings-section">
+          <h3>WordPress Connection</h3>
+          <div class="form-group">
+            <label>WordPress Base URL</label>
+            <input type="url" [(ngModel)]="wpBaseUrl" class="form-control" placeholder="https://your-wordpress-site.com" />
+            <small class="hint-text">Used for API + Media uploads when app is on a different domain.</small>
+          </div>
+          <button class="btn btn-primary" (click)="saveWpBaseUrl()">Save WP URL</button>
+        </div>
+
         <!-- Logo Settings -->
         <div class="settings-section">
           <h3>Site Logo</h3>

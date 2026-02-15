@@ -356,10 +356,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   resolveImageUrl(url: string): string {
     if (!url) return '';
     if (url.startsWith('data:')) return url;
-    if (url.includes('/api/proxy-image?url=')) return url;
-    if (url.startsWith('http://') || url.startsWith('https://')) {
-      return `${this.dataService.getApiBaseUrl()}/api/proxy-image?url=${encodeURIComponent(url)}`;
-    }
+    if (url.startsWith('http://') || url.startsWith('https://')) return url;
     return url;
   }
 
