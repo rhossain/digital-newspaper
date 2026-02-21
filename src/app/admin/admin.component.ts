@@ -726,9 +726,25 @@ export class AdminComponent implements OnInit {
 
   private async uploadMediaFile(file: File, filename: string): Promise<string> {
     const url = `${this.dataService.getApiBaseUrl()}/wp-json/wp/v2/media`;
-    const formData = new FormData();
-    formData.append('file', file, filename);
     const headers = this.authService.getAuthHeaders();
+    const desiredName = this.normalizeFilename(filename);
+    let finalName = desiredName;
+
+    const existing = await this.findExistingMedia(desiredName, headers);
+    if (existing) {
+      const overwrite = confirm(
+        `An image named "${desiredName}" already exists.\n\nClick OK to overwrite it, or Cancel to upload with a new name.`
+      );
+      if (overwrite) {
+        await this.deleteMedia(existing.id, headers);
+        finalName = desiredName;
+      } else {
+        finalName = this.appendTimestamp(desiredName);
+      }
+    }
+
+    const formData = new FormData();
+    formData.append('file', file, finalName);
 
     const response = await fetch(url, {
       method: 'POST',
@@ -743,6 +759,46 @@ export class AdminComponent implements OnInit {
 
     const data = await response.json();
     return data.source_url || data.guid?.rendered || '';
+  }
+
+  private normalizeFilename(filename: string): string {
+    const clean = filename.replace(/\s+/g, '_');
+    return clean.length ? clean : `image_${Date.now()}.jpg`;
+  }
+
+  private appendTimestamp(filename: string): string {
+    const parts = filename.split('.');
+    if (parts.length === 1) {
+      return `${filename}_${Date.now()}`;
+    }
+    const ext = parts.pop();
+    const base = parts.join('.');
+    return `${base}_${Date.now()}.${ext}`;
+  }
+
+  private async findExistingMedia(filename: string, headers: Record<string, string>): Promise<{ id: number } | null> {
+    const base = filename.replace(/\.[^/.]+$/, '').toLowerCase();
+    const searchUrl = `${this.dataService.getApiBaseUrl()}/wp-json/wp/v2/media?search=${encodeURIComponent(base)}&per_page=100`;
+    const response = await fetch(searchUrl, { headers });
+    if (!response.ok) return null;
+    const items = await response.json();
+    const match = Array.isArray(items)
+      ? items.find((item: any) => {
+          const title = (item.title?.rendered || '').toLowerCase();
+          const slug = (item.slug || '').toLowerCase();
+          return title === base || slug === base || `${slug}` === base;
+        })
+      : null;
+    return match ? { id: match.id } : null;
+  }
+
+  private async deleteMedia(id: number, headers: Record<string, string>): Promise<void> {
+    const deleteUrl = `${this.dataService.getApiBaseUrl()}/wp-json/wp/v2/media/${id}?force=true`;
+    const response = await fetch(deleteUrl, { method: 'DELETE', headers });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(errorText || 'Failed to delete existing media');
+    }
   }
 
   getCropStyle() {
@@ -880,8 +936,8 @@ export class AdminComponent implements OnInit {
     const input = event.target as HTMLInputElement;
     if (input.files && input.files[0]) {
       this.fullImageFile = input.files[0];
-      const fileName = `page_full_${Date.now()}`;
-      this.uploadMediaFile(this.fullImageFile, `${fileName}.jpg`)
+      const fileName = this.fullImageFile.name || `page_full_${Date.now()}.jpg`;
+      this.uploadMediaFile(this.fullImageFile, fileName)
         .then((url) => {
           this.pageForm.fullImage = url;
           this.previewLoading = true;
@@ -911,8 +967,8 @@ export class AdminComponent implements OnInit {
     const input = event.target as HTMLInputElement;
     if (input.files && input.files[0]) {
       this.thumbnailFile = input.files[0];
-      const fileName = `page_thumb_${Date.now()}`;
-      this.uploadMediaFile(this.thumbnailFile, `${fileName}.jpg`)
+      const fileName = this.thumbnailFile.name || `page_thumb_${Date.now()}.jpg`;
+      this.uploadMediaFile(this.thumbnailFile, fileName)
         .then((url) => {
           this.pageForm.thumbnail = url;
           this.cdr.detectChanges();
