@@ -46,6 +46,7 @@ export class AdminComponent implements OnInit {
   thumbnailInputMode: 'url' | 'file' = 'url';
   fullImageFile: File | null = null;
   thumbnailFile: File | null = null;
+  previewLoading: boolean = false;
 
   // Global Settings
   settingsForm: GlobalSettings = {
@@ -883,6 +884,7 @@ export class AdminComponent implements OnInit {
       this.uploadMediaFile(this.fullImageFile, `${fileName}.jpg`)
         .then((url) => {
           this.pageForm.fullImage = url;
+          this.previewLoading = true;
           this.cdr.detectChanges();
           this.toaster.success('Full image uploaded');
         })
@@ -891,6 +893,18 @@ export class AdminComponent implements OnInit {
           this.toaster.error('Failed to upload full image');
         });
     }
+  }
+
+  onFullImageUrlChange(value: string) {
+    this.previewLoading = !!value;
+  }
+
+  onFullImagePreviewLoad() {
+    this.previewLoading = false;
+  }
+
+  onFullImagePreviewError() {
+    this.previewLoading = false;
   }
 
   onThumbnailFileSelected(event: Event): void {

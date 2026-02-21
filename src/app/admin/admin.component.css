@@ -672,6 +672,31 @@ small {
   border-radius: 8px;
   overflow: hidden;
   max-height: 400px;
+  position: relative;
+}
+
+.image-preview.loading img {
+  opacity: 0;
+}
+
+.image-preview-skeleton {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(90deg, #f3f4f6 25%, #e5e7eb 50%, #f3f4f6 75%);
+  background-size: 200% 100%;
+  animation: previewShimmer 1.2s infinite;
+}
+
+@keyframes previewShimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
 }
 
 .image-preview img {
