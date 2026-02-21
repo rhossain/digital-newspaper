@@ -92,6 +92,7 @@ export class AdminComponent implements OnInit {
   isDrawing = false;
   imageNaturalWidth = 0;
   imageNaturalHeight = 0;
+  cropperZoom = 1;
 
   constructor(
     private dataService: NewspaperDataService,
@@ -130,6 +131,7 @@ export class AdminComponent implements OnInit {
       error: () => {
         this.authService.logout();
         this.authError = 'Session expired. Please login again.';
+        this.toaster.error(this.authError);
       }
     });
   }
@@ -145,6 +147,7 @@ export class AdminComponent implements OnInit {
       error: () => {
         this.isAuthenticating = false;
         this.authError = 'Invalid credentials. Please try again.';
+        this.toaster.error(this.authError);
       }
     });
   }
@@ -167,6 +170,14 @@ export class AdminComponent implements OnInit {
     (window as any).__WP_BASE_URL = value;
     this.toaster.success('WP URL saved. Reloading...');
     window.location.reload();
+  }
+
+  zoomOut() {
+    this.cropperZoom = Math.max(1, parseFloat((this.cropperZoom - 0.1).toFixed(1)));
+  }
+
+  zoomIn() {
+    this.cropperZoom = Math.min(3, parseFloat((this.cropperZoom + 0.1).toFixed(1)));
   }
 
   loadData() {
@@ -437,6 +448,7 @@ export class AdminComponent implements OnInit {
     }
     this.showImageCropper = true;
     this.cropperImageLoaded = false;
+    this.cropperZoom = 1;
   }
 
   onCropperImageLoad(event: Event) {
@@ -459,11 +471,9 @@ export class AdminComponent implements OnInit {
       return;
     }
     
-    const imgRect = this.cropperImageRef.nativeElement.getBoundingClientRect();
-    console.log('Image rect:', imgRect);
-    
-    this.cropperStartX = event.clientX - imgRect.left;
-    this.cropperStartY = event.clientY - imgRect.top;
+    const zoom = this.cropperZoom || 1;
+    this.cropperStartX = (event.offsetX ?? 0) / zoom;
+    this.cropperStartY = (event.offsetY ?? 0) / zoom;
     this.cropperEndX = this.cropperStartX;
     this.cropperEndY = this.cropperStartY;
     this.isDrawing = true;
@@ -475,9 +485,9 @@ export class AdminComponent implements OnInit {
   onCropperMouseMove(event: MouseEvent) {
     if (!this.isDrawing || !this.cropperImageRef) return;
     
-    const imgRect = this.cropperImageRef.nativeElement.getBoundingClientRect();
-    this.cropperEndX = event.clientX - imgRect.left;
-    this.cropperEndY = event.clientY - imgRect.top;
+    const zoom = this.cropperZoom || 1;
+    this.cropperEndX = (event.offsetX ?? 0) / zoom;
+    this.cropperEndY = (event.offsetY ?? 0) / zoom;
     
     console.log('Move coordinates:', { x: this.cropperEndX, y: this.cropperEndY });
     
@@ -528,6 +538,7 @@ export class AdminComponent implements OnInit {
   async generateAndUploadCroppedImageFromFullSize(fullImageUrl: string) {
     try {
       console.log('Fetching full-size image from:', fullImageUrl);
+      const proxyUrl = `${this.dataService.getApiBaseUrl()}/wp-json/digital-newspaper/v1/proxy?url=${encodeURIComponent(fullImageUrl)}`;
       console.log('Using crop coordinates (%):', { 
         x: this.sectionForm.x, 
         y: this.sectionForm.y, 
@@ -536,7 +547,15 @@ export class AdminComponent implements OnInit {
       });
       
       // Fetch the full-size image
-      const response = await fetch(fullImageUrl);
+      const response = await fetch(proxyUrl);
+      if (!response.ok) {
+        throw new Error(`Proxy fetch failed (${response.status})`);
+      }
+      const contentType = response.headers.get('content-type') || '';
+      if (!contentType.startsWith('image/')) {
+        const text = await response.text();
+        throw new Error(`Proxy returned ${contentType || 'unknown'}: ${text.slice(0, 200)}`);
+      }
       const blob = await response.blob();
       
       // Create a new image from the blob
@@ -735,11 +754,12 @@ export class AdminComponent implements OnInit {
     const width = Math.abs(this.cropperEndX - this.cropperStartX);
     const height = Math.abs(this.cropperEndY - this.cropperStartY);
     
+    const zoom = this.cropperZoom || 1;
     const style = {
-      left: `${x1}px`,
-      top: `${y1}px`,
-      width: `${width}px`,
-      height: `${height}px`
+      left: `${x1 * zoom}px`,
+      top: `${y1 * zoom}px`,
+      width: `${width * zoom}px`,
+      height: `${height * zoom}px`
     };
     
     console.log('getCropStyle returning:', style, 'isDrawing:', this.isDrawing, 'cropperEndX:', this.cropperEndX);

@@ -36,6 +36,16 @@
   <!-- Auth Overlay -->
   <div class="auth-overlay" *ngIf="!isAuthenticated">
     <div class="auth-card">
+      <h2>WordPress Connection</h2>
+      <p class="auth-subtitle">Set your WordPress base URL to enable login.</p>
+      <div class="form-group">
+        <label>WordPress Base URL</label>
+        <input type="url" [(ngModel)]="wpBaseUrl" class="form-control" placeholder="https://your-wordpress-site.com" />
+      </div>
+      <button class="btn btn-primary" (click)="saveWpBaseUrl()">Save WP URL</button>
+
+      <div class="auth-divider"></div>
+
       <h2>Admin Login</h2>
       <div class="form-group">
         <label>Username</label>
@@ -547,32 +557,43 @@
       <div class="cropper-instructions">
         <p>📍 Click and drag on the image to select the section area</p>
         <p>The coordinates will be automatically calculated in percentages</p>
+        <div class="cropper-zoom">
+          <label>Zoom: {{ (cropperZoom * 100) | number:'1.0-0' }}%</label>
+          <input type="range" min="1" max="3" step="0.1" [(ngModel)]="cropperZoom" />
+          <div class="zoom-buttons">
+            <button class="btn btn-sm btn-secondary" (click)="zoomOut()">-</button>
+            <button class="btn btn-sm btn-secondary" (click)="zoomIn()">+</button>
+          </div>
+        </div>
       </div>
       
       <div class="cropper-container">
-        <img 
-          #cropperImage
-          [src]="selectedPage?.fullImage" 
-          alt="Full page"
-          (load)="onCropperImageLoad($event)"
-        />
-        <div 
-          class="crop-overlay"
-          (mousedown)="onCropperMouseDown($event)"
-          (mousemove)="onCropperMouseMove($event)"
-          (mouseup)="onCropperMouseUp()"
-          (mouseleave)="onCropperMouseUp()"
-        ></div>
-        <div 
-          class="crop-selection"
-          [style.left]="getCropStyle().left"
-          [style.top]="getCropStyle().top"
-          [style.width]="getCropStyle().width"
-          [style.height]="getCropStyle().height"
-          [style.display]="(isDrawing || (cropperEndX > 0 && cropperEndY > 0)) ? 'block' : 'none'"
-        ></div>
+        <div class="cropper-stage" [style.transform]="'scale(' + cropperZoom + ')'">
+          <img 
+            #cropperImage
+            [src]="selectedPage?.fullImage" 
+            alt="Full page"
+            (load)="onCropperImageLoad($event)"
+          />
+          <div 
+            class="crop-overlay"
+            (mousedown)="onCropperMouseDown($event)"
+            (mousemove)="onCropperMouseMove($event)"
+            (mouseup)="onCropperMouseUp()"
+            (mouseleave)="onCropperMouseUp()"
+          ></div>
+          <div 
+            class="crop-selection"
+            [style.left]="getCropStyle().left"
+            [style.top]="getCropStyle().top"
+            [style.width]="getCropStyle().width"
+            [style.height]="getCropStyle().height"
+            [style.display]="(isDrawing || (cropperEndX > 0 && cropperEndY > 0)) ? 'block' : 'none'"
+          ></div>
+        </div>
       </div>
-
+    </div>
+    <div class="modal-footer modal-image-selection">
       <div class="crop-info" *ngIf="sectionForm && (sectionForm.width ?? 0) > 0">
         <div class="info-item">
           <strong>X:</strong> {{ sectionForm.x }}%
@@ -587,10 +608,10 @@
           <strong>Height:</strong> {{ sectionForm.height }}%
         </div>
       </div>
-    </div>
-    <div class="modal-footer">
-      <button class="btn btn-secondary" (click)="closeCropper()">Cancel</button>
-      <button class="btn btn-primary" (click)="applyCrop()" [disabled]="(sectionForm.width ?? 0) === 0">Apply Selection</button>
+      <div class="actions">
+        <button class="btn btn-secondary" (click)="closeCropper()">Cancel</button>
+        <button class="btn btn-primary" (click)="applyCrop()" [disabled]="(sectionForm.width ?? 0) === 0">Apply Selection</button>
+      </div>
     </div>
   </div>
 </div>

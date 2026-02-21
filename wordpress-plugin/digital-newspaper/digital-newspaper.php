@@ -145,6 +145,14 @@ class Digital_Newspaper_API {
         'permission_callback' => [$this, 'auth_required']
       ]
     ]);
+
+    register_rest_route('digital-newspaper/v1', '/proxy', [
+      [
+        'methods' => 'GET',
+        'callback' => [$this, 'proxy_image'],
+        'permission_callback' => '__return_true'
+      ]
+    ]);
   }
 
   public function get_data_endpoint(
@@ -207,6 +215,44 @@ class Digital_Newspaper_API {
       'username' => $user->user_login,
       'email' => $user->user_email,
       'displayName' => $user->display_name
+    ]);
+  }
+
+  public function proxy_image(WP_REST_Request $request) {
+    $url = $request->get_param('url');
+    if (!$url) {
+      return new WP_REST_Response(['error' => 'Missing url'], 400);
+    }
+
+    $response = wp_remote_get($url, [
+      'timeout' => 20,
+      'redirection' => 5,
+      'reject_unsafe_urls' => true,
+      'headers' => [
+        'User-Agent' => 'DigitalNewspaperProxy/1.0',
+        'Referer' => home_url()
+      ]
+    ]);
+
+    if (is_wp_error($response)) {
+      return new WP_REST_Response(['error' => 'Failed to fetch image'], 502);
+    }
+
+    $code = wp_remote_retrieve_response_code($response);
+    if ($code < 200 || $code >= 300) {
+      return new WP_REST_Response(['error' => 'Image fetch failed'], $code);
+    }
+
+    $body = wp_remote_retrieve_body($response);
+    $content_type = wp_remote_retrieve_header($response, 'content-type');
+
+    if (!$content_type) {
+      $content_type = 'image/jpeg';
+    }
+
+    return new WP_REST_Response($body, 200, [
+      'Content-Type' => $content_type,
+      'Cache-Control' => 'public, max-age=86400'
     ]);
   }
 
@@ -282,6 +328,21 @@ class Digital_Newspaper_API {
 
     if ('OPTIONS' === $request->get_method()) {
       return true;
+    }
+
+    if ($request->get_route() === '/digital-newspaper/v1/proxy' && $result instanceof WP_REST_Response) {
+      $data = $result->get_data();
+      $headers = $result->get_headers();
+      $status = $result->get_status();
+
+      if (is_string($data) && !empty($headers['Content-Type']) && strpos($headers['Content-Type'], 'image/') === 0) {
+        status_header($status);
+        foreach ($headers as $key => $value) {
+          header($key . ': ' . $value);
+        }
+        echo $data;
+        return true;
+      }
     }
 
     return $served;
