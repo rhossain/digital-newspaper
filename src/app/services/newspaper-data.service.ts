@@ -176,7 +176,7 @@ export class NewspaperDataService {
       b.date.localeCompare(a.date)
     );
     
-    this.dataSubject.next({ editions: newEditions });
+    this.dataSubject.next({ ...currentData, editions: newEditions });
     return newEdition;
   }
 

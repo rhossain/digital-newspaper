@@ -487,72 +487,78 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   }
 
   private cropSectionImage() {
-    if (!this.selectedSection || !this.imageElement || !this.currentPage) {
+    if (!this.selectedSection || !this.currentPage) {
       return;
     }
 
     // If section has its own imageUrl, use it instead of cropping
     if (this.selectedSection.imageUrl) {
-      // Check if it's an external URL (starts with http:// or https://)
-      // If external, use as-is; if relative path, ensure it starts with /
       const isExternalUrl = this.selectedSection.imageUrl.startsWith('http://') || this.selectedSection.imageUrl.startsWith('https://');
-      const imagePath = isExternalUrl 
-        ? this.selectedSection.imageUrl 
+      const imagePath = isExternalUrl
+        ? this.selectedSection.imageUrl
         : (this.selectedSection.imageUrl.startsWith('/') ? this.selectedSection.imageUrl : `/${this.selectedSection.imageUrl}`);
       this.croppedSectionImage = imagePath;
       console.log('Using section imageUrl:', imagePath);
       return;
     }
 
-    // Wait for image to be fully loaded
-    if (!this.imageElement.complete) {
-      this.imageElement.onload = () => this.cropSectionImage();
-      return;
-    }
-
     const section = this.selectedSection;
-    const img = this.imageElement;
+    const fullImageUrl = this.currentPage.fullImage;
+    if (!fullImageUrl) return;
 
-    // Get the natural (actual) dimensions of the image
-    const naturalWidth = img.naturalWidth;
-    const naturalHeight = img.naturalHeight;
+    // For cross-origin images (WP media), fetch via proxy so canvas.toDataURL() doesn't
+    // throw a tainted-canvas error. The display <img> tag has no crossorigin attribute
+    // so it loads fine; we only need CORS for the canvas crop operation.
+    const isExternalUrl = fullImageUrl.startsWith('http://') || fullImageUrl.startsWith('https://');
+    const wpBaseUrl = this.dataService.getApiBaseUrl();
+    const srcUrl = isExternalUrl
+      ? `${wpBaseUrl}/wp-json/digital-newspaper/v1/proxy?url=${encodeURIComponent(fullImageUrl)}`
+      : fullImageUrl;
 
-    // Calculate the crop area based on percentages
-    const cropX = (section.x / 100) * naturalWidth;
-    const cropY = (section.y / 100) * naturalHeight;
-    const cropWidth = (section.width / 100) * naturalWidth;
-    const cropHeight = (section.height / 100) * naturalHeight;
-
-    // Create a canvas to crop the image
-    const canvas = document.createElement('canvas');
-    canvas.width = cropWidth;
-    canvas.height = cropHeight;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) {
-      return;
+    const img = new Image();
+    if (isExternalUrl) {
+      img.crossOrigin = 'anonymous';
     }
 
-    // Draw the cropped portion of the image
-    ctx.drawImage(
-      img,
-      cropX, cropY, cropWidth, cropHeight,  // Source rectangle
-      0, 0, cropWidth, cropHeight            // Destination rectangle
-    );
+    img.onload = () => {
+      const naturalWidth = img.naturalWidth;
+      const naturalHeight = img.naturalHeight;
 
-    // Convert canvas to data URL (may fail for cross-origin images)
-    try {
-      this.croppedSectionImage = canvas.toDataURL('image/jpeg', 0.9);
-      // Data URL is available immediately, no need to wait for load
-      this.sectionImageLoading = false;
-      this.cdr.detectChanges();
-    } catch (error) {
-      this.croppedSectionImage = null;
+      const cropX = (section.x / 100) * naturalWidth;
+      const cropY = (section.y / 100) * naturalHeight;
+      const cropWidth = (section.width / 100) * naturalWidth;
+      const cropHeight = (section.height / 100) * naturalHeight;
+
+      const canvas = document.createElement('canvas');
+      canvas.width = cropWidth;
+      canvas.height = cropHeight;
+
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+
+      ctx.drawImage(img, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+
+      try {
+        this.croppedSectionImage = canvas.toDataURL('image/jpeg', 0.9);
+        this.sectionImageLoading = false;
+        this.cdr.detectChanges();
+      } catch (error) {
+        this.croppedSectionImage = null;
+        this.sectionImageError = true;
+        this.sectionImageLoading = false;
+        this.cdr.detectChanges();
+        console.error('Failed to crop section image due to canvas security restrictions:', error);
+      }
+    };
+
+    img.onerror = () => {
       this.sectionImageError = true;
       this.sectionImageLoading = false;
       this.cdr.detectChanges();
-      console.error('Failed to crop section image due to canvas security restrictions:', error);
-    }
+      console.error('Failed to load image for cropping:', srcUrl);
+    };
+
+    img.src = srcUrl;
   }
 
   private updateUrl() {

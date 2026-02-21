@@ -147,7 +147,6 @@
           [src]="resolveImageUrl(currentPage.fullImage)"
           [alt]="'Page ' + currentPage.id"
           class="main-page-image"
-          crossorigin="anonymous"
           (load)="onImageLoad()"
           (error)="onImageError()"
           [style.opacity]="imageLoaded ? '1' : '0'"
