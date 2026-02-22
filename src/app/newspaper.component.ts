@@ -5,15 +5,12 @@ import { Router, ActivatedRoute } from '@angular/router';
 import { NewspaperDataService, NewsSection, NewspaperPage, NewspaperEdition, GlobalSettings } from './services/newspaper-data.service';
 import { ToasterService } from './services/toaster.service';
 import { ShareButtonsComponent } from './shared/share-buttons/share-buttons.component';
-import { ImageCacheService } from './services/image-cache.service';
-import { CacheManagerService } from './services/cache-manager.service';
-import { NewspaperPageThumbnailComponent } from './components/newspaper-page-thumbnail.component';
 import { Subscription } from 'rxjs';
 
 @Component({
   selector: 'app-newspaper',
   standalone: true,
-  imports: [CommonModule, FormsModule, ShareButtonsComponent, NewspaperPageThumbnailComponent],
+  imports: [CommonModule, FormsModule, ShareButtonsComponent],
   templateUrl: './newspaper.component.html',
   styleUrls: ['./newspaper.component.css']
 })
@@ -59,9 +56,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     private toaster: ToasterService,
     private cdr: ChangeDetectorRef,
     private router: Router,
-    private route: ActivatedRoute,
-    private imageCacheService: ImageCacheService,
-    private cacheManager: CacheManagerService
+    private route: ActivatedRoute
   ) {}
 
   ngOnInit() {
@@ -125,12 +120,6 @@ export class NewspaperComponent implements OnInit, OnDestroy {
           const defaultDate = this.dataService.getDefaultDate();
           this.selectedDate = defaultDate;
           this.dataService.setCurrentDate(defaultDate);
-        }
-        
-        // Preload images for current edition
-        const edition = this.dataService.getCurrentEdition();
-        if (edition) {
-          this.imageCacheService.preloadEditionImages(this.selectedDate, edition.pages);
         }
         
         // loadCurrentEdition will be called by the data$ subscription
@@ -323,7 +312,6 @@ export class NewspaperComponent implements OnInit, OnDestroy {
 
   selectSection(section: NewsSection) {
     this.selectedSection = section;
-    this.sectionImageLoading = true;
     this.sectionImageError = false;
     
     // Load linked sections
@@ -331,15 +319,21 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     
     // Use imageUrl if available, otherwise crop from main image
     if (section.imageUrl) {
-      // Use proxy for external URLs to avoid CORS issues
       const isExternalUrl = section.imageUrl.startsWith('http://') || section.imageUrl.startsWith('https://');
       const imagePath = isExternalUrl
         ? section.imageUrl
         : (section.imageUrl.startsWith('/') ? section.imageUrl : `/${section.imageUrl}`);
-      this.croppedSectionImage = this.resolveImageUrl(imagePath);
-      console.log('Loading section image from:', this.croppedSectionImage);
+      const resolvedUrl = this.resolveImageUrl(imagePath);
+      
+      // Only show loader when the URL is actually changing — if the same
+      // src is already in the <img>, the browser won't fire (load) again
+      // and sectionImageLoading would stay true forever.
+      this.sectionImageLoading = resolvedUrl !== this.croppedSectionImage;
+      this.croppedSectionImage = resolvedUrl;
+      console.log('Loading section image from:', resolvedUrl);
     } else {
       this.croppedSectionImage = null;
+      this.sectionImageLoading = true;
       this.cropSectionImage();
     }
     
@@ -367,10 +361,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   resolveImageUrl(url: string): string {
     if (!url) return '';
     if (url.startsWith('data:')) return url;
-    if (url.includes('/api/proxy-image?url=')) return url;
-    if (url.startsWith('http://') || url.startsWith('https://')) {
-      return `${this.dataService.getApiBaseUrl()}/api/proxy-image?url=${encodeURIComponent(url)}`;
-    }
+    if (url.startsWith('http://') || url.startsWith('https://')) return url;
     return url;
   }
 
@@ -501,72 +492,84 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   }
 
   private cropSectionImage() {
-    if (!this.selectedSection || !this.imageElement || !this.currentPage) {
+    if (!this.selectedSection || !this.currentPage) {
       return;
     }
 
     // If section has its own imageUrl, use it instead of cropping
     if (this.selectedSection.imageUrl) {
-      // Check if it's an external URL (starts with http:// or https://)
-      // If external, use as-is; if relative path, ensure it starts with /
       const isExternalUrl = this.selectedSection.imageUrl.startsWith('http://') || this.selectedSection.imageUrl.startsWith('https://');
-      const imagePath = isExternalUrl 
-        ? this.selectedSection.imageUrl 
+      const imagePath = isExternalUrl
+        ? this.selectedSection.imageUrl
         : (this.selectedSection.imageUrl.startsWith('/') ? this.selectedSection.imageUrl : `/${this.selectedSection.imageUrl}`);
       this.croppedSectionImage = imagePath;
       console.log('Using section imageUrl:', imagePath);
       return;
     }
 
-    // Wait for image to be fully loaded
-    if (!this.imageElement.complete) {
-      this.imageElement.onload = () => this.cropSectionImage();
-      return;
-    }
-
     const section = this.selectedSection;
-    const img = this.imageElement;
+    const fullImageUrl = this.currentPage.fullImage;
+    if (!fullImageUrl) return;
 
-    // Get the natural (actual) dimensions of the image
-    const naturalWidth = img.naturalWidth;
-    const naturalHeight = img.naturalHeight;
+    // For cross-origin images (WP media), fetch via proxy so canvas.toDataURL() doesn't
+    // throw a tainted-canvas error. The display <img> tag has no crossorigin attribute
+    // so it loads fine; we only need CORS for the canvas crop operation.
+    const isExternalUrl = fullImageUrl.startsWith('http://') || fullImageUrl.startsWith('https://');
+    const wpBaseUrl = this.dataService.getApiBaseUrl();
+    const srcUrl = isExternalUrl
+      ? `${wpBaseUrl}/wp-json/digital-newspaper/v1/proxy?url=${encodeURIComponent(fullImageUrl)}`
+      : fullImageUrl;
 
-    // Calculate the crop area based on percentages
-    const cropX = (section.x / 100) * naturalWidth;
-    const cropY = (section.y / 100) * naturalHeight;
-    const cropWidth = (section.width / 100) * naturalWidth;
-    const cropHeight = (section.height / 100) * naturalHeight;
+    const sectionAtStart = this.selectedSection;
 
-    // Create a canvas to crop the image
-    const canvas = document.createElement('canvas');
-    canvas.width = cropWidth;
-    canvas.height = cropHeight;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) {
-      return;
+    const img = new Image();
+    if (isExternalUrl) {
+      img.crossOrigin = 'anonymous';
     }
 
-    // Draw the cropped portion of the image
-    ctx.drawImage(
-      img,
-      cropX, cropY, cropWidth, cropHeight,  // Source rectangle
-      0, 0, cropWidth, cropHeight            // Destination rectangle
-    );
+    img.onload = () => {
+      // Discard result if the user switched to a different section while loading
+      if (this.selectedSection !== sectionAtStart) return;
 
-    // Convert canvas to data URL (may fail for cross-origin images)
-    try {
-      this.croppedSectionImage = canvas.toDataURL('image/jpeg', 0.9);
-      // Data URL is available immediately, no need to wait for load
-      this.sectionImageLoading = false;
-      this.cdr.detectChanges();
-    } catch (error) {
-      this.croppedSectionImage = null;
+      const naturalWidth = img.naturalWidth;
+      const naturalHeight = img.naturalHeight;
+
+      const cropX = (section.x / 100) * naturalWidth;
+      const cropY = (section.y / 100) * naturalHeight;
+      const cropWidth = (section.width / 100) * naturalWidth;
+      const cropHeight = (section.height / 100) * naturalHeight;
+
+      const canvas = document.createElement('canvas');
+      canvas.width = cropWidth;
+      canvas.height = cropHeight;
+
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+
+      ctx.drawImage(img, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+
+      try {
+        this.croppedSectionImage = canvas.toDataURL('image/jpeg', 0.9);
+        this.sectionImageLoading = false;
+        this.cdr.detectChanges();
+      } catch (error) {
+        this.croppedSectionImage = null;
+        this.sectionImageError = true;
+        this.sectionImageLoading = false;
+        this.cdr.detectChanges();
+        console.error('Failed to crop section image due to canvas security restrictions:', error);
+      }
+    };
+
+    img.onerror = () => {
+      if (this.selectedSection !== sectionAtStart) return;
       this.sectionImageError = true;
       this.sectionImageLoading = false;
       this.cdr.detectChanges();
-      console.error('Failed to crop section image due to canvas security restrictions:', error);
-    }
+      console.error('Failed to load image for cropping:', srcUrl);
+    };
+
+    img.src = srcUrl;
   }
 
   private updateUrl() {

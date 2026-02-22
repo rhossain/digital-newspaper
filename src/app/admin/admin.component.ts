@@ -3,6 +3,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { NewspaperDataService, NewspaperPage, NewsSection, GlobalSettings } from '../services/newspaper-data.service';
+import { AuthService } from '../services/auth.service';
 import { ToasterService } from '../services/toaster.service';
 
 @Component({
@@ -45,6 +46,7 @@ export class AdminComponent implements OnInit {
   thumbnailInputMode: 'url' | 'file' = 'url';
   fullImageFile: File | null = null;
   thumbnailFile: File | null = null;
+  previewLoading: boolean = false;
 
   // Global Settings
   settingsForm: GlobalSettings = {
@@ -62,6 +64,9 @@ export class AdminComponent implements OnInit {
   };
   logoInputMode: 'url' | 'file' = 'url';
   logoFile: File | null = null;
+
+  // WordPress base URL config
+  wpBaseUrl: string = '';
   
   sectionForm: Partial<NewsSection> = {
     id: '',
@@ -88,20 +93,92 @@ export class AdminComponent implements OnInit {
   isDrawing = false;
   imageNaturalWidth = 0;
   imageNaturalHeight = 0;
+  cropperZoom = 1;
 
   constructor(
     private dataService: NewspaperDataService,
     private router: Router,
     private cdr: ChangeDetectorRef,
-    private toaster: ToasterService
+    private toaster: ToasterService,
+    private authService: AuthService
   ) {}
 
   ngOnInit() {
     this.todayDate = this.dataService.getTodayDate();
     this.selectedDate = this.todayDate;
     this.availableDates = this.selectedDate ? [this.selectedDate] : [];
+    this.wpBaseUrl = (localStorage.getItem('DN_WP_BASE_URL') || (window as any).__WP_BASE_URL || '').trim();
     
-    this.loadData();
+    this.verifyAuth();
+  }
+
+  get isAuthenticated(): boolean {
+    return this.authService.isAuthenticated();
+  }
+
+  authForm = {
+    username: '',
+    password: ''
+  };
+  authError = '';
+  isAuthenticating = false;
+
+  verifyAuth() {
+    if (!this.authService.isAuthenticated()) {
+      return;
+    }
+    this.authService.verifyToken().subscribe({
+      next: () => this.loadData(),
+      error: () => {
+        this.authService.logout();
+        this.authError = 'Session expired. Please login again.';
+        this.toaster.error(this.authError);
+      }
+    });
+  }
+
+  login() {
+    this.authError = '';
+    this.isAuthenticating = true;
+    this.authService.login(this.authForm.username, this.authForm.password).subscribe({
+      next: () => {
+        this.isAuthenticating = false;
+        this.loadData();
+      },
+      error: () => {
+        this.isAuthenticating = false;
+        this.authError = 'Invalid credentials. Please try again.';
+        this.toaster.error(this.authError);
+      }
+    });
+  }
+
+  logout() {
+    this.authService.logout();
+    this.authForm.password = '';
+  }
+
+  saveWpBaseUrl() {
+    const value = (this.wpBaseUrl || '').trim();
+    if (!value) {
+      localStorage.removeItem('DN_WP_BASE_URL');
+      delete (window as any).__WP_BASE_URL;
+      this.toaster.info('WP URL cleared. Reloading...');
+      window.location.reload();
+      return;
+    }
+    localStorage.setItem('DN_WP_BASE_URL', value);
+    (window as any).__WP_BASE_URL = value;
+    this.toaster.success('WP URL saved. Reloading...');
+    window.location.reload();
+  }
+
+  zoomOut() {
+    this.cropperZoom = Math.max(1, parseFloat((this.cropperZoom - 0.1).toFixed(1)));
+  }
+
+  zoomIn() {
+    this.cropperZoom = Math.min(3, parseFloat((this.cropperZoom + 0.1).toFixed(1)));
   }
 
   loadData() {
@@ -372,6 +449,7 @@ export class AdminComponent implements OnInit {
     }
     this.showImageCropper = true;
     this.cropperImageLoaded = false;
+    this.cropperZoom = 1;
   }
 
   onCropperImageLoad(event: Event) {
@@ -394,11 +472,9 @@ export class AdminComponent implements OnInit {
       return;
     }
     
-    const imgRect = this.cropperImageRef.nativeElement.getBoundingClientRect();
-    console.log('Image rect:', imgRect);
-    
-    this.cropperStartX = event.clientX - imgRect.left;
-    this.cropperStartY = event.clientY - imgRect.top;
+    const zoom = this.cropperZoom || 1;
+    this.cropperStartX = event.offsetX ?? 0;
+    this.cropperStartY = event.offsetY ?? 0;
     this.cropperEndX = this.cropperStartX;
     this.cropperEndY = this.cropperStartY;
     this.isDrawing = true;
@@ -410,9 +486,9 @@ export class AdminComponent implements OnInit {
   onCropperMouseMove(event: MouseEvent) {
     if (!this.isDrawing || !this.cropperImageRef) return;
     
-    const imgRect = this.cropperImageRef.nativeElement.getBoundingClientRect();
-    this.cropperEndX = event.clientX - imgRect.left;
-    this.cropperEndY = event.clientY - imgRect.top;
+    const zoom = this.cropperZoom || 1;
+    this.cropperEndX = event.offsetX ?? 0;
+    this.cropperEndY = event.offsetY ?? 0;
     
     console.log('Move coordinates:', { x: this.cropperEndX, y: this.cropperEndY });
     
@@ -463,6 +539,7 @@ export class AdminComponent implements OnInit {
   async generateAndUploadCroppedImageFromFullSize(fullImageUrl: string) {
     try {
       console.log('Fetching full-size image from:', fullImageUrl);
+      const proxyUrl = `${this.dataService.getApiBaseUrl()}/wp-json/digital-newspaper/v1/proxy?url=${encodeURIComponent(fullImageUrl)}`;
       console.log('Using crop coordinates (%):', { 
         x: this.sectionForm.x, 
         y: this.sectionForm.y, 
@@ -471,7 +548,15 @@ export class AdminComponent implements OnInit {
       });
       
       // Fetch the full-size image
-      const response = await fetch(fullImageUrl);
+      const response = await fetch(proxyUrl);
+      if (!response.ok) {
+        throw new Error(`Proxy fetch failed (${response.status})`);
+      }
+      const contentType = response.headers.get('content-type') || '';
+      if (!contentType.startsWith('image/')) {
+        const text = await response.text();
+        throw new Error(`Proxy returned ${contentType || 'unknown'}: ${text.slice(0, 200)}`);
+      }
       const blob = await response.blob();
       
       // Create a new image from the blob
@@ -551,40 +636,28 @@ export class AdminComponent implements OnInit {
   }
 
   uploadCroppedImage(imageData: string, fileName: string) {
-    const url = `${this.dataService.getApiBaseUrl()}/api/upload-cropped-image`;
-    
-    fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ imageData, fileName })
-    })
-    .then(response => response.json())
-    .then(data => {
-      if (data.success && data.path) {
-        // Update sectionForm with the saved image path
+    const file = this.dataUrlToFile(imageData, `${fileName}.jpg`);
+    this.uploadMediaFile(file, `${fileName}.jpg`)
+      .then((url) => {
         this.sectionForm = {
           ...this.sectionForm,
-          imageUrl: data.path
+          imageUrl: url
         };
+        this.imageSourceOption = 'external-url';
         this.cdr.detectChanges();
         this.toaster.success('Cropped image saved successfully!');
-        console.log('Cropped image saved at:', data.path);
-      } else {
-        throw new Error(data.error || 'Upload failed');
-      }
-    })
-    .catch(error => {
-      console.error('Error uploading cropped image:', error);
-      this.toaster.error('Failed to save cropped image. Using auto-crop instead.');
-      // Keep coordinates but clear imageUrl for auto-crop
-      this.sectionForm = {
-        ...this.sectionForm,
-        imageUrl: ''
-      };
-      this.cdr.detectChanges();
-    });
+        console.log('Cropped image saved at:', url);
+      })
+      .catch((error) => {
+        console.error('Error uploading cropped image:', error);
+        this.toaster.error('Failed to save cropped image. Using auto-crop instead.');
+        this.sectionForm = {
+          ...this.sectionForm,
+          imageUrl: ''
+        };
+        this.imageSourceOption = 'auto-crop';
+        this.cdr.detectChanges();
+      });
   }
 
   onImageFileSelected(event: Event) {
@@ -623,40 +696,111 @@ export class AdminComponent implements OnInit {
 
   uploadImageFile(imageData: string, fileName: string) {
     console.log('Uploading image, filename:', fileName);
-    const url = `${this.dataService.getApiBaseUrl()}/api/upload-image`;
-    
-    fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ imageData, fileName })
-    })
-    .then(response => {
-      console.log('Upload response status:', response.status);
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-      return response.json();
-    })
-    .then(data => {
-      console.log('Upload response data:', data);
-      if (data.success && data.path) {
+    const file = this.dataUrlToFile(imageData, `${fileName}.jpg`);
+    this.uploadMediaFile(file, `${fileName}.jpg`)
+      .then((url) => {
         this.sectionForm = {
           ...this.sectionForm,
-          imageUrl: data.path
+          imageUrl: url
         };
         this.cdr.detectChanges();
         this.toaster.success('Image uploaded successfully!');
-        console.log('Image uploaded at:', data.path);
+        console.log('Image uploaded at:', url);
+      })
+      .catch((error) => {
+        console.error('Error uploading image:', error);
+        this.toaster.error('Failed to upload image: ' + error.message);
+      });
+  }
+
+  private dataUrlToFile(dataUrl: string, filename: string): File {
+    const arr = dataUrl.split(',');
+    const mimeMatch = arr[0].match(/:(.*?);/);
+    const mime = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+    const bstr = atob(arr[1]);
+    let n = bstr.length;
+    const u8arr = new Uint8Array(n);
+    while (n--) {
+      u8arr[n] = bstr.charCodeAt(n);
+    }
+    return new File([u8arr], filename, { type: mime });
+  }
+
+  private async uploadMediaFile(file: File, filename: string): Promise<string> {
+    const url = `${this.dataService.getApiBaseUrl()}/wp-json/wp/v2/media`;
+    const headers = this.authService.getAuthHeaders();
+    const desiredName = this.normalizeFilename(filename);
+    let finalName = desiredName;
+
+    const existing = await this.findExistingMedia(desiredName, headers);
+    if (existing) {
+      const overwrite = confirm(
+        `An image named "${desiredName}" already exists.\n\nClick OK to overwrite it, or Cancel to upload with a new name.`
+      );
+      if (overwrite) {
+        await this.deleteMedia(existing.id, headers);
+        finalName = desiredName;
       } else {
-        throw new Error(data.error || 'Upload failed');
+        finalName = this.appendTimestamp(desiredName);
       }
-    })
-    .catch(error => {
-      console.error('Error uploading image:', error);
-      this.toaster.error('Failed to upload image: ' + error.message);
+    }
+
+    const formData = new FormData();
+    formData.append('file', file, finalName);
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: formData
     });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(errorText || 'Upload failed');
+    }
+
+    const data = await response.json();
+    return data.source_url || data.guid?.rendered || '';
+  }
+
+  private normalizeFilename(filename: string): string {
+    const clean = filename.replace(/\s+/g, '_');
+    return clean.length ? clean : `image_${Date.now()}.jpg`;
+  }
+
+  private appendTimestamp(filename: string): string {
+    const parts = filename.split('.');
+    if (parts.length === 1) {
+      return `${filename}_${Date.now()}`;
+    }
+    const ext = parts.pop();
+    const base = parts.join('.');
+    return `${base}_${Date.now()}.${ext}`;
+  }
+
+  private async findExistingMedia(filename: string, headers: Record<string, string>): Promise<{ id: number } | null> {
+    const base = filename.replace(/\.[^/.]+$/, '').toLowerCase();
+    const searchUrl = `${this.dataService.getApiBaseUrl()}/wp-json/wp/v2/media?search=${encodeURIComponent(base)}&per_page=100`;
+    const response = await fetch(searchUrl, { headers });
+    if (!response.ok) return null;
+    const items = await response.json();
+    const match = Array.isArray(items)
+      ? items.find((item: any) => {
+          const title = (item.title?.rendered || '').toLowerCase();
+          const slug = (item.slug || '').toLowerCase();
+          return title === base || slug === base || `${slug}` === base;
+        })
+      : null;
+    return match ? { id: match.id } : null;
+  }
+
+  private async deleteMedia(id: number, headers: Record<string, string>): Promise<void> {
+    const deleteUrl = `${this.dataService.getApiBaseUrl()}/wp-json/wp/v2/media/${id}?force=true`;
+    const response = await fetch(deleteUrl, { method: 'DELETE', headers });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(errorText || 'Failed to delete existing media');
+    }
   }
 
   getCropStyle() {
@@ -745,6 +889,68 @@ export class AdminComponent implements OnInit {
     this.toaster.success('JSON file downloaded!');
   }
 
+  importBackup(event: Event) {
+    const input = event.target as HTMLInputElement;
+    if (!input.files || !input.files[0]) return;
+
+    const file = input.files[0];
+    // Reset so the same file can be re-selected if needed
+    input.value = '';
+
+    if (!file.name.endsWith('.json') && file.type !== 'application/json') {
+      this.toaster.error('Please select a valid .json backup file');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const raw = e.target?.result as string;
+        const parsed = JSON.parse(raw);
+
+        // Validate structure
+        if (typeof parsed !== 'object' || parsed === null) {
+          this.toaster.error('Invalid backup: not a JSON object');
+          return;
+        }
+        if (!Array.isArray(parsed.editions)) {
+          this.toaster.error('Invalid backup: missing "editions" array');
+          return;
+        }
+
+        if (!confirm(`This will OVERWRITE all current WordPress data with the backup from "${file.name}".\n\nAre you sure?`)) {
+          return;
+        }
+
+        // Normalize settings in case backup came from an older export
+        if (parsed.settings) {
+          if (!parsed.settings.logo) {
+            parsed.settings.logo = { url: '', alt: 'Digital Newspaper' };
+          }
+          if (!parsed.settings.socialLinks || Array.isArray(parsed.settings.socialLinks)) {
+            parsed.settings.socialLinks = {};
+          }
+        } else {
+          parsed.settings = { defaultDateMode: 'current', socialLinks: {}, logo: { url: '', alt: 'Digital Newspaper' } };
+        }
+
+        this.dataService.saveData(parsed).subscribe({
+          next: () => {
+            this.toaster.success('Backup imported successfully!');
+            this.loadData();
+          },
+          error: (err) => {
+            console.error('Import failed:', err);
+            this.toaster.error('Failed to import backup: ' + (err.message || 'Unknown error'));
+          }
+        });
+      } catch {
+        this.toaster.error('Failed to parse JSON file. Make sure it is a valid backup.');
+      }
+    };
+    reader.readAsText(file);
+  }
+
   // Navigation
   goToViewer() {
     this.router.navigate(['/']);
@@ -793,23 +999,48 @@ export class AdminComponent implements OnInit {
     const input = event.target as HTMLInputElement;
     if (input.files && input.files[0]) {
       this.fullImageFile = input.files[0];
-      const reader = new FileReader();
-      reader.onload = (e: ProgressEvent<FileReader>) => {
-        this.pageForm.fullImage = e.target?.result as string;
-      };
-      reader.readAsDataURL(this.fullImageFile);
+      const fileName = this.fullImageFile.name || `page_full_${Date.now()}.jpg`;
+      this.uploadMediaFile(this.fullImageFile, fileName)
+        .then((url) => {
+          this.pageForm.fullImage = url;
+          this.previewLoading = true;
+          this.cdr.detectChanges();
+          this.toaster.success('Full image uploaded');
+        })
+        .catch((error) => {
+          console.error('Error uploading full image:', error);
+          this.toaster.error('Failed to upload full image');
+        });
     }
+  }
+
+  onFullImageUrlChange(value: string) {
+    this.previewLoading = !!value;
+  }
+
+  onFullImagePreviewLoad() {
+    this.previewLoading = false;
+  }
+
+  onFullImagePreviewError() {
+    this.previewLoading = false;
   }
 
   onThumbnailFileSelected(event: Event): void {
     const input = event.target as HTMLInputElement;
     if (input.files && input.files[0]) {
       this.thumbnailFile = input.files[0];
-      const reader = new FileReader();
-      reader.onload = (e: ProgressEvent<FileReader>) => {
-        this.pageForm.thumbnail = e.target?.result as string;
-      };
-      reader.readAsDataURL(this.thumbnailFile);
+      const fileName = this.thumbnailFile.name || `page_thumb_${Date.now()}.jpg`;
+      this.uploadMediaFile(this.thumbnailFile, fileName)
+        .then((url) => {
+          this.pageForm.thumbnail = url;
+          this.cdr.detectChanges();
+          this.toaster.success('Thumbnail uploaded');
+        })
+        .catch((error) => {
+          console.error('Error uploading thumbnail:', error);
+          this.toaster.error('Failed to upload thumbnail');
+        });
     }
   }
 
@@ -859,13 +1090,20 @@ export class AdminComponent implements OnInit {
     const input = event.target as HTMLInputElement;
     if (input.files && input.files[0]) {
       this.logoFile = input.files[0];
-      const reader = new FileReader();
-      reader.onload = (e: ProgressEvent<FileReader>) => {
-        if (this.settingsForm.logo) {
-          this.settingsForm.logo.url = e.target?.result as string;
-        }
-      };
-      reader.readAsDataURL(this.logoFile);
+      const ext = this.logoFile.name.split('.').pop()?.toLowerCase() || 'jpg';
+      const fileName = `logo_${Date.now()}.${ext}`;
+      this.uploadMediaFile(this.logoFile, fileName)
+        .then((url) => {
+          if (this.settingsForm.logo) {
+            this.settingsForm.logo.url = url;
+          }
+          this.cdr.detectChanges();
+          this.toaster.success('Logo uploaded');
+        })
+        .catch((error) => {
+          console.error('Error uploading logo:', error);
+          this.toaster.error('Failed to upload logo');
+        });
     }
   }
 }

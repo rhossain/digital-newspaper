@@ -1,3 +1,4 @@
+/*
 import { Component, Input, Output, EventEmitter, ChangeDetectionStrategy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { NewspaperPage } from '../services/newspaper-data.service';
@@ -118,3 +119,4 @@ export class NewspaperPageThumbnailComponent {
     console.error('Failed to load thumbnail for page', this.page.id);
   }
 }
+*/

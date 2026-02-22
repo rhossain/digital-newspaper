@@ -1,9 +1,8 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { Observable, BehaviorSubject, from, of } from 'rxjs';
-import { tap, map, catchError, switchMap } from 'rxjs/operators';
-import { CacheService } from './cache.service';
-import { CacheManagerService } from './cache-manager.service';
+import { Observable, BehaviorSubject } from 'rxjs';
+import { tap, map, catchError } from 'rxjs/operators';
+import { AuthService } from './auth.service';
 
 export interface NewsSection {
   id: string;
@@ -69,31 +68,13 @@ export class NewspaperDataService {
   currentDate$ = this.currentDateSubject.asObservable();
   public data$ = this.dataSubject.asObservable();
   
-  // Use relative path for production, works with any domain
+  // WordPress REST API base
   private assetsUrl = '/assets/newspaper-data.json';
-  private apiBaseUrl: string = (window as any).__API_BASE_URL
-    || (window.location.hostname === 'localhost' ? 'http://localhost:3000' : window.location.origin);
-  private apiUrl = `${this.apiBaseUrl}/api/newspaper-data`;
-  private backendApiUrl = `${this.apiBaseUrl}/api/newspaper-data`;
+  private wpBaseUrl: string = (window as any).__WP_BASE_URL || 'http://localhost:8080';
+  private apiUrl = `${this.wpBaseUrl}/wp-json/digital-newspaper/v1/data`;
+  private backendApiUrl = `${this.wpBaseUrl}/wp-json/digital-newspaper/v1/data`;
 
-  constructor(
-    private http: HttpClient,
-    private cacheService: CacheService,
-    private cacheManager: CacheManagerService
-  ) {
-    // Initialize cache maintenance
-    this.initializeCacheMaintenance();
-  }
-
-  /**
-   * Initialize cache maintenance routines
-   */
-  private initializeCacheMaintenance(): void {
-    // Clean expired cache entries every hour
-    setInterval(() => {
-      this.cacheManager.performMaintenance();
-    }, 3600000);
-  }
+  constructor(private http: HttpClient, private auth: AuthService) {}
 
   // Date helper methods
   getTodayDate(): string {
@@ -119,60 +100,47 @@ export class NewspaperDataService {
     return this.currentDateSubject.value;
   }
 
-  // Data loading with backwards compatibility and caching
+  // Data loading with backwards compatibility (no caching)
   loadData(): Observable<NewspaperData> {
-    const cacheKey = 'data:newspaper-all';
-    
-    // Try cache first
-    return from(this.cacheService.get<NewspaperData>(cacheKey, 'data')).pipe(
-      switchMap(cachedData => {
-        if (cachedData) {
-          console.log('Loading newspaper data from cache');
-          this.dataSubject.next(cachedData);
-          return of(cachedData);
+    return this.http.get<NewspaperData | { pages: NewspaperPage[] }>(this.apiUrl).pipe(
+      catchError(() => this.http.get<NewspaperData | { pages: NewspaperPage[] }>(this.assetsUrl)),
+      map((data): NewspaperData => {
+        // Backwards compatibility: convert old format to new format
+        if ('pages' in data && !('editions' in data)) {
+          const todayDate = this.getTodayDate();
+          return {
+            settings: {
+              defaultDateMode: 'current',
+              socialLinks: {}
+            },
+            editions: [{
+              date: todayDate,
+              pages: data.pages
+            }]
+          };
         }
-
-        // Fetch from network
-        console.log('Loading newspaper data from network');
-        return this.http.get<NewspaperData | { pages: NewspaperPage[] }>(this.apiUrl).pipe(
-          catchError(() => this.http.get<NewspaperData | { pages: NewspaperPage[] }>(this.assetsUrl)),
-          map((data): NewspaperData => {
-            // Backwards compatibility: convert old format to new format
-            if ('pages' in data && !('editions' in data)) {
-              const todayDate = this.getTodayDate();
-              return {
-                settings: {
-                  defaultDateMode: 'current',
-                  socialLinks: {}
-                },
-                editions: [{
-                  date: todayDate,
-                  pages: data.pages
-                }]
-              };
-            }
-            // Ensure settings exist
-            const result = data as NewspaperData;
-            if (!result.settings) {
-              result.settings = {
-                defaultDateMode: 'current',
-                socialLinks: {}
-              };
-            }
-            return result;
-          }),
-          tap((data: NewspaperData) => {
-            this.dataSubject.next(data);
-            // Cache the data (24 hour TTL)
-            this.cacheService.set(cacheKey, data, { ttl: 86400000 }, 'data');
-            // Preload current edition
-            const currentDate = this.getCurrentDate();
-            const currentEdition = data.editions.find(e => e.date === currentDate);
-            if (currentEdition) {
-              this.cacheManager.preloadEdition(currentDate, currentEdition.pages);
-            }
-          })
-        );
+        // Ensure settings exist and are normalized
+        const result = data as NewspaperData;
+        if (!result.settings) {
+          result.settings = {
+            defaultDateMode: 'current',
+            socialLinks: {},
+            logo: { url: '', alt: 'Digital Newspaper' }
+          };
+        } else {
+          // PHP empty array [] serializes to JSON []; normalize to object {}
+          if (!result.settings.socialLinks || Array.isArray(result.settings.socialLinks)) {
+            result.settings.socialLinks = {};
+          }
+          // Ensure logo object always exists
+          if (!result.settings.logo) {
+            result.settings.logo = { url: '', alt: 'Digital Newspaper' };
+          }
+        }
+        return result;
+      }),
+      tap((data: NewspaperData) => {
+        this.dataSubject.next(data);
       })
     );
   }
@@ -218,7 +186,7 @@ export class NewspaperDataService {
       b.date.localeCompare(a.date)
     );
     
-    this.dataSubject.next({ editions: newEditions });
+    this.dataSubject.next({ ...currentData, editions: newEditions });
     return newEdition;
   }
 
@@ -226,15 +194,13 @@ export class NewspaperDataService {
     // Update the local data
     this.dataSubject.next(data);
     
-    // Invalidate main cache
-    this.cacheService.delete('data:newspaper-all', 'data');
-    
     // Save to backend API
-    return this.http.post(this.backendApiUrl, data);
+    const headers = this.auth.getAuthHeaders();
+    return this.http.post(this.backendApiUrl, data, { headers });
   }
 
   getApiBaseUrl(): string {
-    return this.apiBaseUrl;
+    return this.wpBaseUrl;
   }
 
   // Add page to current date's edition
@@ -262,8 +228,6 @@ export class NewspaperDataService {
     
     this.dataSubject.next({ ...currentData, editions: newEditions });
     
-    // Invalidate cache for this date
-    this.cacheManager.onPageAdded(page.id, targetDate);
   }
 
   updatePage(pageId: number, updatedPage: NewspaperPage, date?: string): void {
@@ -282,8 +246,6 @@ export class NewspaperDataService {
     
     this.dataSubject.next({ ...currentData, editions: newEditions });
     
-    // Invalidate cache for this page
-    this.cacheManager.onPageUpdated(pageId, targetDate);
   }
 
   deletePage(pageId: number, date?: string): void {
@@ -299,8 +261,6 @@ export class NewspaperDataService {
     
     this.dataSubject.next({ ...currentData, editions: newEditions });
     
-    // Invalidate cache for this page
-    this.cacheManager.onPageDeleted(pageId, targetDate);
   }
 
   addSection(pageId: number, section: NewsSection, date?: string): void {
@@ -322,8 +282,6 @@ export class NewspaperDataService {
     
     this.dataSubject.next({ ...currentData, editions: newEditions });
     
-    // Invalidate cache for this section
-    this.cacheManager.onSectionAdded(section.id, pageId, targetDate);
   }
 
   updateSection(pageId: number, sectionId: string, updatedSection: NewsSection, date?: string): void {
@@ -348,8 +306,6 @@ export class NewspaperDataService {
     
     this.dataSubject.next({ ...currentData, editions: newEditions });
     
-    // Invalidate cache for this section
-    this.cacheManager.onSectionUpdated(sectionId, pageId, targetDate);
   }
 
   deleteSection(pageId: number, sectionId: string, date?: string): void {
@@ -371,8 +327,6 @@ export class NewspaperDataService {
     
     this.dataSubject.next({ ...currentData, editions: newEditions });
     
-    // Invalidate cache for this section
-    this.cacheManager.onSectionDeleted(sectionId, pageId, targetDate);
   }
 
   getNextPageId(date?: string): number {
@@ -398,8 +352,6 @@ export class NewspaperDataService {
       settings
     });
     
-    // Invalidate settings cache
-    this.cacheManager.onSettingsUpdated();
   }
 
   getDefaultDate(): string {

@@ -16,8 +16,10 @@
 </head>
 <body>
   <script>
-    // Set this in production to your backend URL (e.g., Render)
-    window.__API_BASE_URL = 'https://digital-newspaper-90k9.onrender.com';
+    const storedWpBaseUrl = localStorage.getItem('DN_WP_BASE_URL');
+    if (storedWpBaseUrl) {
+      window.__WP_BASE_URL = storedWpBaseUrl;
+    }
   </script>
   <app-root></app-root>
 </body>
