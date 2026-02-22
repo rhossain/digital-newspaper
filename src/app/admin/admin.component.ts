@@ -889,6 +889,68 @@ export class AdminComponent implements OnInit {
     this.toaster.success('JSON file downloaded!');
   }
 
+  importBackup(event: Event) {
+    const input = event.target as HTMLInputElement;
+    if (!input.files || !input.files[0]) return;
+
+    const file = input.files[0];
+    // Reset so the same file can be re-selected if needed
+    input.value = '';
+
+    if (!file.name.endsWith('.json') && file.type !== 'application/json') {
+      this.toaster.error('Please select a valid .json backup file');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const raw = e.target?.result as string;
+        const parsed = JSON.parse(raw);
+
+        // Validate structure
+        if (typeof parsed !== 'object' || parsed === null) {
+          this.toaster.error('Invalid backup: not a JSON object');
+          return;
+        }
+        if (!Array.isArray(parsed.editions)) {
+          this.toaster.error('Invalid backup: missing "editions" array');
+          return;
+        }
+
+        if (!confirm(`This will OVERWRITE all current WordPress data with the backup from "${file.name}".\n\nAre you sure?`)) {
+          return;
+        }
+
+        // Normalize settings in case backup came from an older export
+        if (parsed.settings) {
+          if (!parsed.settings.logo) {
+            parsed.settings.logo = { url: '', alt: 'Digital Newspaper' };
+          }
+          if (!parsed.settings.socialLinks || Array.isArray(parsed.settings.socialLinks)) {
+            parsed.settings.socialLinks = {};
+          }
+        } else {
+          parsed.settings = { defaultDateMode: 'current', socialLinks: {}, logo: { url: '', alt: 'Digital Newspaper' } };
+        }
+
+        this.dataService.saveData(parsed).subscribe({
+          next: () => {
+            this.toaster.success('Backup imported successfully!');
+            this.loadData();
+          },
+          error: (err) => {
+            console.error('Import failed:', err);
+            this.toaster.error('Failed to import backup: ' + (err.message || 'Unknown error'));
+          }
+        });
+      } catch {
+        this.toaster.error('Failed to parse JSON file. Make sure it is a valid backup.');
+      }
+    };
+    reader.readAsText(file);
+  }
+
   // Navigation
   goToViewer() {
     this.router.navigate(['/']);

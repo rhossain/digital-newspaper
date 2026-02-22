@@ -759,6 +759,15 @@ small {
   color: white;
 }
 
+.btn-warning {
+  background: #f59e0b;
+  color: white;
+}
+
+.btn-warning:hover {
+  background: #d97706;
+}
+
 .btn-sm {
   padding: 0.5rem 0.875rem;
   font-size: 0.8125rem;

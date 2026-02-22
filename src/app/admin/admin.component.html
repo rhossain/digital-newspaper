@@ -18,13 +18,28 @@
           </svg>
           Save All
         </button>
-        <button class="btn btn-primary" (click)="downloadJSON()">
+        <button class="btn btn-primary" *ngIf="isAuthenticated" (click)="downloadJSON()" title="Export a local JSON backup of all WordPress data">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
             <polyline points="7 10 12 15 17 10"></polyline>
             <line x1="12" y1="15" x2="12" y2="3"></line>
           </svg>
-          Download JSON
+          Export Backup
+        </button>
+        <input
+          #importFileInput
+          type="file"
+          accept=".json,application/json"
+          style="display:none"
+          (change)="importBackup($event)"
+        />
+        <button class="btn btn-warning" *ngIf="isAuthenticated" (click)="importFileInput.click()" title="Import a JSON backup and overwrite WordPress data">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="17 8 12 3 7 8"></polyline>
+            <line x1="12" y1="3" x2="12" y2="15"></line>
+          </svg>
+          Import Backup
         </button>
         <button class="btn btn-danger" *ngIf="isAuthenticated" (click)="logout()">
           Logout
