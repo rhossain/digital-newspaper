@@ -312,7 +312,6 @@ export class NewspaperComponent implements OnInit, OnDestroy {
 
   selectSection(section: NewsSection) {
     this.selectedSection = section;
-    this.sectionImageLoading = true;
     this.sectionImageError = false;
     
     // Load linked sections
@@ -320,15 +319,21 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     
     // Use imageUrl if available, otherwise crop from main image
     if (section.imageUrl) {
-      // Use proxy for external URLs to avoid CORS issues
       const isExternalUrl = section.imageUrl.startsWith('http://') || section.imageUrl.startsWith('https://');
       const imagePath = isExternalUrl
         ? section.imageUrl
         : (section.imageUrl.startsWith('/') ? section.imageUrl : `/${section.imageUrl}`);
-      this.croppedSectionImage = this.resolveImageUrl(imagePath);
-      console.log('Loading section image from:', this.croppedSectionImage);
+      const resolvedUrl = this.resolveImageUrl(imagePath);
+      
+      // Only show loader when the URL is actually changing — if the same
+      // src is already in the <img>, the browser won't fire (load) again
+      // and sectionImageLoading would stay true forever.
+      this.sectionImageLoading = resolvedUrl !== this.croppedSectionImage;
+      this.croppedSectionImage = resolvedUrl;
+      console.log('Loading section image from:', resolvedUrl);
     } else {
       this.croppedSectionImage = null;
+      this.sectionImageLoading = true;
       this.cropSectionImage();
     }
     
@@ -515,12 +520,17 @@ export class NewspaperComponent implements OnInit, OnDestroy {
       ? `${wpBaseUrl}/wp-json/digital-newspaper/v1/proxy?url=${encodeURIComponent(fullImageUrl)}`
       : fullImageUrl;
 
+    const sectionAtStart = this.selectedSection;
+
     const img = new Image();
     if (isExternalUrl) {
       img.crossOrigin = 'anonymous';
     }
 
     img.onload = () => {
+      // Discard result if the user switched to a different section while loading
+      if (this.selectedSection !== sectionAtStart) return;
+
       const naturalWidth = img.naturalWidth;
       const naturalHeight = img.naturalHeight;
 
@@ -552,6 +562,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     };
 
     img.onerror = () => {
+      if (this.selectedSection !== sectionAtStart) return;
       this.sectionImageError = true;
       this.sectionImageLoading = false;
       this.cdr.detectChanges();

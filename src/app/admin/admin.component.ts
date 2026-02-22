@@ -643,6 +643,7 @@ export class AdminComponent implements OnInit {
           ...this.sectionForm,
           imageUrl: url
         };
+        this.imageSourceOption = 'external-url';
         this.cdr.detectChanges();
         this.toaster.success('Cropped image saved successfully!');
         console.log('Cropped image saved at:', url);
@@ -654,6 +655,7 @@ export class AdminComponent implements OnInit {
           ...this.sectionForm,
           imageUrl: ''
         };
+        this.imageSourceOption = 'auto-crop';
         this.cdr.detectChanges();
       });
   }
