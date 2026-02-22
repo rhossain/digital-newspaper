@@ -119,13 +119,23 @@ export class NewspaperDataService {
             }]
           };
         }
-        // Ensure settings exist
+        // Ensure settings exist and are normalized
         const result = data as NewspaperData;
         if (!result.settings) {
           result.settings = {
             defaultDateMode: 'current',
-            socialLinks: {}
+            socialLinks: {},
+            logo: { url: '', alt: 'Digital Newspaper' }
           };
+        } else {
+          // PHP empty array [] serializes to JSON []; normalize to object {}
+          if (!result.settings.socialLinks || Array.isArray(result.settings.socialLinks)) {
+            result.settings.socialLinks = {};
+          }
+          // Ensure logo object always exists
+          if (!result.settings.logo) {
+            result.settings.logo = { url: '', alt: 'Digital Newspaper' };
+          }
         }
         return result;
       }),

@@ -1027,8 +1027,9 @@ export class AdminComponent implements OnInit {
     const input = event.target as HTMLInputElement;
     if (input.files && input.files[0]) {
       this.logoFile = input.files[0];
-      const fileName = `logo_${Date.now()}`;
-      this.uploadMediaFile(this.logoFile, `${fileName}.jpg`)
+      const ext = this.logoFile.name.split('.').pop()?.toLowerCase() || 'jpg';
+      const fileName = `logo_${Date.now()}.${ext}`;
+      this.uploadMediaFile(this.logoFile, fileName)
         .then((url) => {
           if (this.settingsForm.logo) {
             this.settingsForm.logo.url = url;

@@ -28,7 +28,11 @@ class Digital_Newspaper_API {
     return [
       'settings' => [
         'defaultDateMode' => 'current',
-        'socialLinks' => []
+        'socialLinks' => new \stdClass(),
+        'logo' => [
+          'url' => '',
+          'alt' => 'Digital Newspaper'
+        ]
       ],
       'editions' => []
     ];

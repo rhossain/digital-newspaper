@@ -35,6 +35,13 @@
   gap: 15px;
 }
 
+.logo-image {
+  height: 40px;
+  width: auto;
+  max-width: 160px;
+  object-fit: contain;
+}
+
 .logo-icon {
   width: 40px;
   height: 40px;
@@ -168,6 +175,13 @@
   display: flex;
   align-items: center;
   gap: 15px;
+}
+
+.logo-image {
+  height: 40px;
+  width: auto;
+  max-width: 160px;
+  object-fit: contain;
 }
 
 .logo-icon {
