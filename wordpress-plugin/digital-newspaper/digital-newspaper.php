@@ -17,11 +17,33 @@ class Digital_Newspaper_API {
   const TOKEN_TTL = 86400; // 24 hours
 
   public function __construct() {
+    add_action('init', [$this, 'handle_cors_preflight'], 1);
     add_action('rest_api_init', [$this, 'register_routes']);
     add_filter('rest_authentication_errors', [$this, 'authenticate_rest_request']);
     add_action('admin_menu', [$this, 'register_settings_page']);
     add_action('admin_init', [$this, 'register_settings']);
     add_filter('rest_pre_serve_request', [$this, 'add_cors_headers'], 10, 4);
+  }
+
+  public function handle_cors_preflight(): void {
+    $origin = isset($_SERVER['HTTP_ORIGIN']) ? sanitize_text_field($_SERVER['HTTP_ORIGIN']) : '';
+    if (!$origin) return;
+
+    $allowed = $this->get_allowed_origins();
+    if (!$allowed || !in_array($origin, $allowed, true)) return;
+
+    header('Access-Control-Allow-Origin: ' . $origin);
+    header('Vary: Origin');
+    header('Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    header('Access-Control-Allow-Headers: Authorization, Content-Type');
+    if (get_option(self::OPTION_ALLOW_CREDENTIALS, true)) {
+      header('Access-Control-Allow-Credentials: true');
+    }
+
+    if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+      status_header(200);
+      exit;
+    }
   }
 
   public static function default_data(): array {

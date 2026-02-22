@@ -139,15 +139,28 @@ export class AdminComponent implements OnInit {
 
   login() {
     this.authError = '';
+    if (!((window as any).__WP_BASE_URL)) {
+      this.authError = 'WordPress Base URL is not set. Enter it above and click "Save WP URL" first.';
+      this.toaster.error(this.authError);
+      return;
+    }
     this.isAuthenticating = true;
     this.authService.login(this.authForm.username, this.authForm.password).subscribe({
       next: () => {
         this.isAuthenticating = false;
         this.loadData();
       },
-      error: () => {
+      error: (err) => {
         this.isAuthenticating = false;
-        this.authError = 'Invalid credentials. Please try again.';
+        if (err.status === 0 || err.name === 'HttpErrorResponse' && !err.status) {
+          this.authError = 'Cannot reach WordPress. Check the WP Base URL is correct and WordPress is online.';
+        } else if (err.status === 401 || err.status === 400) {
+          this.authError = 'Invalid credentials. Please try again.';
+        } else if (err.status === 403) {
+          this.authError = 'Access denied. Your account may not have editor permissions.';
+        } else {
+          this.authError = `Login failed (HTTP ${err.status || 'network error'}). Check the WP Base URL and CORS settings.`;
+        }
         this.toaster.error(this.authError);
       }
     });
@@ -159,18 +172,18 @@ export class AdminComponent implements OnInit {
   }
 
   saveWpBaseUrl() {
-    const value = (this.wpBaseUrl || '').trim();
+    const value = (this.wpBaseUrl || '').trim().replace(/\/+$/, '');
     if (!value) {
       localStorage.removeItem('DN_WP_BASE_URL');
       delete (window as any).__WP_BASE_URL;
-      this.toaster.info('WP URL cleared. Reloading...');
-      window.location.reload();
+      this.wpBaseUrl = '';
+      this.toaster.info('WP URL cleared.');
       return;
     }
     localStorage.setItem('DN_WP_BASE_URL', value);
     (window as any).__WP_BASE_URL = value;
-    this.toaster.success('WP URL saved. Reloading...');
-    window.location.reload();
+    this.wpBaseUrl = value;
+    this.toaster.success('WP URL saved! You can now log in.');
   }
 
   zoomOut() {

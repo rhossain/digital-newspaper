@@ -17,14 +17,16 @@ interface LoginResponse {
 })
 export class AuthService {
   private readonly tokenKey = 'dn_wp_token';
-  private readonly wpBaseUrl = (window as any).__WP_BASE_URL || 'http://localhost:8080';
-  private readonly loginUrl = `${this.wpBaseUrl}/wp-json/digital-newspaper/v1/auth/login`;
-  private readonly meUrl = `${this.wpBaseUrl}/wp-json/digital-newspaper/v1/auth/me`;
+
+  private get wpBaseUrl(): string {
+    return ((window as any).__WP_BASE_URL || 'http://localhost:8080').replace(/\/+$/, '');
+  }
 
   constructor(private http: HttpClient) {}
 
   login(username: string, password: string): Observable<LoginResponse> {
-    return this.http.post<LoginResponse>(this.loginUrl, { username, password }).pipe(
+    const loginUrl = `${this.wpBaseUrl}/wp-json/digital-newspaper/v1/auth/login`;
+    return this.http.post<LoginResponse>(loginUrl, { username, password }).pipe(
       tap((response) => {
         if (response?.token) {
           localStorage.setItem(this.tokenKey, response.token);
@@ -58,7 +60,8 @@ export class AuthService {
         observer.complete();
       });
     }
-    return this.http.get(this.meUrl, { headers }).pipe(
+    const meUrl = `${this.wpBaseUrl}/wp-json/digital-newspaper/v1/auth/me`;
+    return this.http.get(meUrl, { headers }).pipe(
       map(() => true)
     );
   }

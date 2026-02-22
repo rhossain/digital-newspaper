@@ -70,9 +70,14 @@ export class NewspaperDataService {
   
   // WordPress REST API base
   private assetsUrl = '/assets/newspaper-data.json';
-  private wpBaseUrl: string = (window as any).__WP_BASE_URL || 'http://localhost:8080';
-  private apiUrl = `${this.wpBaseUrl}/wp-json/digital-newspaper/v1/data`;
-  private backendApiUrl = `${this.wpBaseUrl}/wp-json/digital-newspaper/v1/data`;
+
+  private get wpBaseUrl(): string {
+    return ((window as any).__WP_BASE_URL || 'http://localhost:8080').replace(/\/+$/, '');
+  }
+
+  private get apiUrl(): string {
+    return `${this.wpBaseUrl}/wp-json/digital-newspaper/v1/data`;
+  }
 
   constructor(private http: HttpClient, private auth: AuthService) {}
 
@@ -196,7 +201,7 @@ export class NewspaperDataService {
     
     // Save to backend API
     const headers = this.auth.getAuthHeaders();
-    return this.http.post(this.backendApiUrl, data, { headers });
+    return this.http.post(this.apiUrl, data, { headers });
   }
 
   getApiBaseUrl(): string {
