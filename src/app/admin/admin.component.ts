@@ -473,8 +473,8 @@ export class AdminComponent implements OnInit {
     }
     
     const zoom = this.cropperZoom || 1;
-    this.cropperStartX = (event.offsetX ?? 0) / zoom;
-    this.cropperStartY = (event.offsetY ?? 0) / zoom;
+    this.cropperStartX = event.offsetX ?? 0;
+    this.cropperStartY = event.offsetY ?? 0;
     this.cropperEndX = this.cropperStartX;
     this.cropperEndY = this.cropperStartY;
     this.isDrawing = true;
@@ -487,8 +487,8 @@ export class AdminComponent implements OnInit {
     if (!this.isDrawing || !this.cropperImageRef) return;
     
     const zoom = this.cropperZoom || 1;
-    this.cropperEndX = (event.offsetX ?? 0) / zoom;
-    this.cropperEndY = (event.offsetY ?? 0) / zoom;
+    this.cropperEndX = event.offsetX ?? 0;
+    this.cropperEndY = event.offsetY ?? 0;
     
     console.log('Move coordinates:', { x: this.cropperEndX, y: this.cropperEndY });
     
@@ -811,12 +811,11 @@ export class AdminComponent implements OnInit {
     const width = Math.abs(this.cropperEndX - this.cropperStartX);
     const height = Math.abs(this.cropperEndY - this.cropperStartY);
     
-    const zoom = this.cropperZoom || 1;
     const style = {
-      left: `${x1 * zoom}px`,
-      top: `${y1 * zoom}px`,
-      width: `${width * zoom}px`,
-      height: `${height * zoom}px`
+      left: `${x1}px`,
+      top: `${y1}px`,
+      width: `${width}px`,
+      height: `${height}px`
     };
     
     console.log('getCropStyle returning:', style, 'isDrawing:', this.isDrawing, 'cropperEndX:', this.cropperEndX);
