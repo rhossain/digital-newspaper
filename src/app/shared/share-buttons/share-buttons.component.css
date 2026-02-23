@@ -17,15 +17,15 @@
 }
 
 .logo-icon {
-  color: #2563eb;
-  stroke: #2563eb;
+  color: var(--color-accent-dark);
+  stroke: var(--color-accent-dark);
   flex-shrink: 0;
 }
 
 .logo-text {
   font-size: 18px;
   font-weight: 600;
-  color: #1e293b;
+  color: var(--color-text-dark);
 }
 
 .modal-share-buttons {
@@ -52,46 +52,46 @@
 }
 
 .share-btn.facebook {
-  background: #1877f2;
-  color: white;
+  background: var(--color-facebook);
+  color: var(--color-white);
 }
 
 .share-btn.facebook:hover {
-  background: #145dbf;
+  background: var(--color-facebook-hover);
 }
 
 .share-btn.twitter {
-  background: #1da1f2;
-  color: white;
+  background: var(--color-twitter);
+  color: var(--color-white);
 }
 
 .share-btn.twitter:hover {
-  background: #1a8cd8;
+  background: var(--color-twitter-hover);
 }
 
 .share-btn.linkedin {
-  background: #0077b5;
-  color: white;
+  background: var(--color-linkedin);
+  color: var(--color-white);
 }
 
 .share-btn.linkedin:hover {
-  background: #005885;
+  background: var(--color-linkedin-hover);
 }
 
 .share-btn.whatsapp {
-  background: #25D366;
-  color: white;
+  background: var(--color-whatsapp);
+  color: var(--color-white);
 }
 
 .share-btn.whatsapp:hover {
-  background: #1da851;
+  background: var(--color-whatsapp-hover);
 }
 
 .share-btn.copy {
-  background: #34a853;
-  color: white;
+  background: var(--color-copy);
+  color: var(--color-white);
 }
 
 .share-btn.copy:hover {
-  background: #2d8f47;
+  background: var(--color-copy-hover);
 }

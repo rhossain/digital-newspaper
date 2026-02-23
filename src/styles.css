@@ -1,3 +1,86 @@
+/* ============================================================
+   CSS Custom Properties – change these to retheme the whole app
+   ============================================================ */
+:root {
+  /* --- Brand / Primary --- */
+  --color-primary:        #1976d2;   /* main blue */
+  --color-primary-dark:   #1565c0;   /* darker blue (gradients, hover) */
+  --color-primary-darker: #0d47a1;   /* deepest blue (active/selected) */
+  --color-primary-light:  #e3f2fd;   /* light-blue tint (active bg) */
+  --color-primary-faint:  #eff6ff;   /* very faint blue (hint boxes, radio hover) */
+
+  /* --- Accent blue used in share-buttons & admin tabs --- */
+  --color-accent:         #3b82f6;   /* bright blue (tabs active, radio checked) */
+  --color-accent-dark:    #2563eb;   /* logo icon / share logo */
+  --color-accent-light:   #eff6ff;   /* radio hover bg */
+
+  /* --- Status colors --- */
+  --color-success:        #10b981;
+  --color-success-bg:     #f0fdf4;
+  --color-warning:        #f59e0b;
+  --color-warning-dark:   #d97706;
+  --color-warning-bg:     #fffbeb;
+  --color-danger:         #ef4444;
+  --color-danger-dark:    #dc2626;   /* btn-delete icon hover */
+  --color-danger-bg:      #fef2f2;
+  --color-danger-subtle:  #fee2e2;   /* btn-close / btn-delete bg hover */
+  --color-info:           #3b82f6;
+  --color-info-bg:        #eff6ff;
+
+  /* --- Sidebar header gradient --- */
+  --color-sidebar-header-from: #0a539b;
+  --color-sidebar-header-to:   #063162;
+
+  /* --- Neutral grays --- */
+  --color-white:          #ffffff;
+  --color-bg-app:         #f5f5f5;   /* body background */
+  --color-bg-page:        #fafafa;
+  --color-bg-surface:     #f9fafb;
+  --color-bg-muted:       #f3f4f6;
+  --color-border:         #e0e0e0;
+  --color-border-ui:      #e5e7eb;   /* admin UI borders */
+  --color-border-dashed:  #d1d5db;
+  --color-scrollbar-thumb:       #888;
+  --color-scrollbar-thumb-hover: #555;
+  --color-scrollbar-thumb-admin: #d1d5db;
+  --color-scrollbar-thumb-admin-hover: #9ca3af;
+
+  /* --- Text colors --- */
+  --color-text-base:      #333333;
+  --color-text-dark:      #1f2937;
+  --color-text-medium:    #374151;
+  --color-text-muted:     #6b7280;
+  --color-text-light:     #9ca3af;
+  --color-text-lighter:   #9e9e9e;
+  --color-text-link:      #1976d2;   /* same as primary */
+
+  /* --- Crop selection --- */
+  --color-crop:           #ff0000;
+  --color-crop-bg:        rgba(255, 0, 0, 0.2);
+
+  /* --- Social share brand colors --- */
+  --color-facebook:       #1877f2;
+  --color-facebook-hover: #145dbf;
+  --color-twitter:        #1da1f2;
+  --color-twitter-hover:  #1a8cd8;
+  --color-linkedin:       #0077b5;
+  --color-linkedin-hover: #005885;
+  --color-whatsapp:       #25D366;
+  --color-whatsapp-hover: #1da851;
+  --color-copy:           #34a853;
+  --color-copy-hover:     #2d8f47;
+
+  /* --- Instructions / hint strip --- */
+  --color-instructions-bg:     #fff3cd;
+  --color-instructions-border: #ffc107;
+  --color-instructions-text:   #856404;
+
+  /* --- Hint box (admin settings) --- */
+  --color-hint-bg:        #eff6ff;
+  --color-hint-border:    #3b82f6;
+  --color-hint-text:      #1e40af;
+}
+
 /* Global Styles */
 * {
   box-sizing: border-box;
@@ -10,7 +93,7 @@ body {
   overflow: hidden;
   display: flex;
   justify-content: center;
-  background-color: #f5f5f5;
+  background-color: var(--color-bg-app);
 }
 
 html, body {
@@ -22,6 +105,6 @@ app-root {
   width: 100%;
   display: block;
   height: 100%;
-  background-color: white;
+  background-color: var(--color-white);
   box-shadow: 0 0 20px rgba(0, 0, 0, 0.1);
 }
