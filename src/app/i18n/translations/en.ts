@@ -19,6 +19,11 @@ export const EN = {
     clickToRead: '👆 Click on any section in the newspaper to read the full article',
     readArticle: 'Read Article',
     selectSection: 'Select a section to read the article',
+    clickToViewFull: 'Click to view full size',
+    goToSection: 'Go to this section',
+  },
+  footer: {
+    editor: 'Editor:',
   },
   share: {
     share: 'Share',

@@ -8,18 +8,18 @@ import { ShareButtonsComponent } from './shared/share-buttons/share-buttons.comp
 import { TranslationService } from './i18n/translation.service';
 import { TranslatePipe } from './i18n/translate.pipe';
 import { LocaleDatePipe } from './i18n/locale-date.pipe';
+import { DatePickerComponent } from './components/date-picker/date-picker.component';
 import { Subscription } from 'rxjs';
 
 @Component({
   selector: 'app-newspaper',
   standalone: true,
-  imports: [CommonModule, FormsModule, ShareButtonsComponent, TranslatePipe, LocaleDatePipe],
+  imports: [CommonModule, FormsModule, ShareButtonsComponent, TranslatePipe, LocaleDatePipe, DatePickerComponent],
   templateUrl: './newspaper.component.html',
   styleUrls: ['./newspaper.component.css']
 })
 export class NewspaperComponent implements OnInit, OnDestroy {
   @ViewChild('mainImage') mainImageRef?: ElementRef<HTMLImageElement>;
-  @ViewChild('datePickerInput') datePickerInputRef?: ElementRef<HTMLInputElement>;
   pages: NewspaperPage[] = [];
   currentPage: NewspaperPage | null = null;
   selectedSection: NewsSection | null = null;
@@ -256,15 +256,9 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     }
   }
 
-  openDatePicker() {
-    const input = this.datePickerInputRef?.nativeElement;
-    if (!input) return;
-    // showPicker() is supported in Chrome 99+, Firefox 101+, Safari 16+
-    if (typeof (input as any).showPicker === 'function') {
-      (input as any).showPicker();
-    } else {
-      input.click();
-    }
+  onDatePickerChange(date: string) {
+    this.selectedDate = date;
+    this.onDateChange();
   }
 
   formatShortDate(dateStr: string): string {

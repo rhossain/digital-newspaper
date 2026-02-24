@@ -9,23 +9,12 @@
             <polyline points="15 18 9 12 15 6"></polyline>
           </svg>
         </button>
-        <div class="date-picker-wrapper" (click)="openDatePicker()" [title]="ts.t('header.pickDate')">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="date-picker-icon">
-            <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
-            <line x1="16" y1="2" x2="16" y2="6"></line>
-            <line x1="8" y1="2" x2="8" y2="6"></line>
-            <line x1="3" y1="10" x2="21" y2="10"></line>
-          </svg>
-          <span class="date-picker-label">{{ selectedDate | localeDate:'short' }}</span>
-          <input
-            #datePickerInput
-            type="date"
-            [(ngModel)]="selectedDate"
-            (change)="onDateChange()"
-            class="date-picker-hidden"
-            [max]="todayDate"
-          />
-        </div>
+        <app-date-picker
+          [value]="selectedDate"
+          [max]="todayDate"
+          [availableDates]="availableDates"
+          (valueChange)="onDatePickerChange($event)"
+        ></app-date-picker>
         <button class="date-nav-btn" (click)="nextDay()" [disabled]="isToday" [title]="ts.t('header.nextDay')">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="9 18 15 12 9 6"></polyline>
@@ -134,7 +123,7 @@
               [style.opacity]="thumbnailsLoading[page.id] ? '0' : '1'"
             />
           </div>
-          <span class="page-number">{{ page.id }}</span>
+          <span class="page-number">{{ ts.toLocaleDigits(page.id) }}</span>
         </div>
       </div>
       <div class="empty-state" *ngIf="pages.length === 0">
@@ -230,7 +219,7 @@
         <div class="footer-info-inner">
           <div class="footer-info-item" *ngIf="settings?.editor">
             <!-- <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg> -->
-            <span class="footer-info-item-editor">সম্পাদকঃ <strong>{{ settings?.editor }}</strong></span>
+            <span class="footer-info-item-editor">{{ 'footer.editor' | translate }} <strong>{{ settings?.editor }}</strong></span>
           </div>
           <div class="footer-info-item" *ngIf="settings?.address?.line1">
             <!-- <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg> -->
@@ -268,7 +257,7 @@
       <!-- Full Section Image -->
       <div class="section-image-container" *ngIf="currentPage">
         <div class="section-item">
-          <div class="section-image-wrapper" (click)="openImageModal()" title="Click to view full size">
+          <div class="section-image-wrapper" (click)="openImageModal()" [title]="ts.t('viewer.clickToViewFull')">
             <div class="skeleton-loader section-image-skeleton" *ngIf="sectionImageLoading && croppedSectionImage"></div>
             <img 
               *ngIf="croppedSectionImage"
@@ -310,7 +299,7 @@
               *ngFor="let linkedSection of linkedSections"
               class="linked-section-item"
             >
-              <div class="linked-section-wrapper" (click)="openLinkedSectionImage(linkedSection)" title="Click to view full size">
+              <div class="linked-section-wrapper" (click)="openLinkedSectionImage(linkedSection)" [title]="ts.t('viewer.clickToViewFull')">
                 <img 
                   *ngIf="getCroppedImageForSection(linkedSection)"
                   [src]="getCroppedImageForSection(linkedSection)!" 
@@ -339,7 +328,7 @@
               <div class="linked-section-caption">
                 <p class="linked-page-number">
                   {{ 'viewer.page' | translate }} {{ ts.toLocaleDigits(linkedSection.pageId || 0) }}
-                  <button class="go-to-section-btn" (click)="selectLinkedSection(linkedSection)" title="Go to this section">
+                  <button class="go-to-section-btn" (click)="selectLinkedSection(linkedSection)" [title]="ts.t('viewer.goToSection')">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                       <line x1="5" y1="12" x2="19" y2="12"></line>
                       <polyline points="12 5 19 12 12 19"></polyline>

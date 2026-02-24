@@ -19,6 +19,11 @@ export const BN = {
     clickToRead: '👆 সংবাদটি পড়তে যেকোনো অংশে ক্লিক করুন',
     readArticle: 'আর্টিকেল পড়ুন',
     selectSection: 'আর্টিকেল পড়তে একটি অংশ নির্বাচন করুন',
+    clickToViewFull: 'পূর্ণ আকারে দেখতে ক্লিক করুন',
+    goToSection: 'এই অংশে যান',
+  },
+  footer: {
+    editor: 'সম্পাদকঃ',
   },
   share: {
     share: 'শেয়ার',
