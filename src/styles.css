@@ -101,7 +101,7 @@ html, body {
 }
 
 app-root {
-  max-width: 1920px;
+  max-width: 1600px;
   width: 100%;
   display: block;
   height: 100%;
