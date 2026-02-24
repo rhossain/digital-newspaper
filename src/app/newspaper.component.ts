@@ -5,12 +5,16 @@ import { Router, ActivatedRoute } from '@angular/router';
 import { NewspaperDataService, NewsSection, NewspaperPage, NewspaperEdition, GlobalSettings } from './services/newspaper-data.service';
 import { ToasterService } from './services/toaster.service';
 import { ShareButtonsComponent } from './shared/share-buttons/share-buttons.component';
+import { TranslationService } from './i18n/translation.service';
+import { TranslatePipe } from './i18n/translate.pipe';
+import { LocaleDatePipe } from './i18n/locale-date.pipe';
+import { DatePickerComponent } from './components/date-picker/date-picker.component';
 import { Subscription } from 'rxjs';
 
 @Component({
   selector: 'app-newspaper',
   standalone: true,
-  imports: [CommonModule, FormsModule, ShareButtonsComponent],
+  imports: [CommonModule, FormsModule, ShareButtonsComponent, TranslatePipe, LocaleDatePipe, DatePickerComponent],
   templateUrl: './newspaper.component.html',
   styleUrls: ['./newspaper.component.css']
 })
@@ -56,8 +60,12 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     private toaster: ToasterService,
     private cdr: ChangeDetectorRef,
     private router: Router,
-    private route: ActivatedRoute
+    private route: ActivatedRoute,
+    private translationService: TranslationService
   ) {}
+
+  /** Expose TranslationService to the template. */
+  get ts(): TranslationService { return this.translationService; }
 
   ngOnInit() {
     this.todayDate = this.dataService.getTodayDate();
@@ -143,6 +151,9 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   private refreshSettings(): void {
     this.settings = this.dataService.getSettings();
     this.socialLinks = this.settings?.socialLinks || {};
+    if (this.settings?.language) {
+      this.translationService.setLanguage(this.settings.language);
+    }
   }
 
   loadCurrentEdition() {
@@ -216,7 +227,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   }
 
   updateDisplayDate() {
-    this.displayDate = this.dataService.formatDisplayDate(this.selectedDate);
+    this.displayDate = this.translationService.formatDate(this.selectedDate, 'full');
   }
 
   checkIfToday() {
@@ -245,13 +256,13 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     }
   }
 
+  onDatePickerChange(date: string) {
+    this.selectedDate = date;
+    this.onDateChange();
+  }
+
   formatShortDate(dateStr: string): string {
-    const date = new Date(dateStr + 'T00:00:00');
-    return date.toLocaleDateString('en-US', { 
-      month: 'short', 
-      day: 'numeric', 
-      year: 'numeric' 
-    });
+    return this.translationService.formatDate(dateStr, 'short');
   }
   //   });
   // }

@@ -4,29 +4,28 @@
     <div class="header-inner">
     <div class="header-left">
       <div class="date-navigator">
-        <button class="date-nav-btn" (click)="previousDay()" title="Previous Day">
+        <button class="date-nav-btn" (click)="previousDay()" [title]="ts.t('header.previousDay')">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="15 18 9 12 15 6"></polyline>
           </svg>
         </button>
-        <input 
-          type="date" 
-          [(ngModel)]="selectedDate" 
-          (change)="onDateChange()"
-          class="date-picker"
+        <app-date-picker
+          [value]="selectedDate"
           [max]="todayDate"
-        />
-        <button class="date-nav-btn" (click)="nextDay()" [disabled]="isToday" title="Next Day">
+          [availableDates]="availableDates"
+          (valueChange)="onDatePickerChange($event)"
+        ></app-date-picker>
+        <button class="date-nav-btn" (click)="nextDay()" [disabled]="isToday" [title]="ts.t('header.nextDay')">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="9 18 15 12 9 6"></polyline>
           </svg>
         </button>
       </div>
       <div class="available-dates" *ngIf="availableDates.length > 1">
-        <span class="dates-label">Jump to:</span>
+        <span class="dates-label">{{ 'header.jumpTo' | translate }}</span>
         <select [(ngModel)]="selectedDate" (change)="onDateChange()" class="dates-dropdown">
           <option *ngFor="let date of availableDates" [value]="date">
-            {{ formatShortDate(date) }}
+            {{ date | localeDate:'short' }}
           </option>
         </select>
       </div>
@@ -107,7 +106,7 @@
   <div class="main-layout">
     <!-- Left Panel: Thumbnail List -->
     <div class="left-panel">
-      <h2 class="panel-title">Pages</h2>
+      <h2 class="panel-title">{{ 'header.pages' | translate }}</h2>
       <div class="thumbnail-list" *ngIf="pages.length > 0">
         <div
           *ngFor="let page of pages"
@@ -124,7 +123,7 @@
               [style.opacity]="thumbnailsLoading[page.id] ? '0' : '1'"
             />
           </div>
-          <span class="page-number">{{ page.id }}</span>
+          <span class="page-number">{{ ts.toLocaleDigits(page.id) }}</span>
         </div>
       </div>
       <div class="empty-state" *ngIf="pages.length === 0">
@@ -132,8 +131,8 @@
           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
           <polyline points="14 2 14 8 20 8"></polyline>
         </svg>
-        <p>No pages available</p>
-        <p class="empty-state-subtitle">for {{ displayDate }}</p>
+        <p>{{ 'viewer.noPagesAvailable' | translate }}</p>
+        <p class="empty-state-subtitle">{{ 'viewer.for' | translate }} {{ displayDate }}</p>
       </div>
     </div>
 
@@ -145,9 +144,9 @@
         <circle cx="8.5" cy="8.5" r="1.5"></circle>
         <polyline points="21 15 16 10 5 21"></polyline>
       </svg>
-      <h3>No Content Available</h3>
-      <p>There is no newspaper edition for {{ displayDate }}</p>
-      <p class="empty-state-subtitle">Please select a different date or check back later.</p>
+      <h3>{{ 'viewer.noContent' | translate }}</h3>
+      <p>{{ 'viewer.noEdition' | translate }} {{ displayDate }}</p>
+      <p class="empty-state-subtitle">{{ 'viewer.selectDifferentDate' | translate }}</p>
     </div>
 
     <div class="main-page-container" *ngIf="currentPage">
@@ -168,9 +167,9 @@
           class="pagination-page-btn"
           [class.active]="currentPage.id === page.id"
           (click)="selectPage(page)"
-          [title]="'Page ' + page.id"
+          [title]="ts.t('viewer.page') + ' ' + ts.toLocaleDigits(page.id)"
         >
-          {{ page.id }}
+          {{ ts.toLocaleDigits(page.id) }}
         </button>
 
         <button
@@ -189,7 +188,7 @@
           <img
             #mainImage
             [src]="resolveImageUrl(currentPage.fullImage)"
-            [alt]="'Page ' + currentPage.id"
+            [alt]="ts.t('viewer.page') + ' ' + ts.toLocaleDigits(currentPage.id)"
             class="main-page-image"
             (load)="onImageLoad()"
             (error)="onImageError()"
@@ -220,7 +219,7 @@
         <div class="footer-info-inner">
           <div class="footer-info-item" *ngIf="settings?.editor">
             <!-- <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg> -->
-            <span class="footer-info-item-editor">সম্পাদকঃ <strong>{{ settings?.editor }}</strong></span>
+            <span class="footer-info-item-editor">{{ 'footer.editor' | translate }} <strong>{{ settings?.editor }}</strong></span>
           </div>
           <div class="footer-info-item" *ngIf="settings?.address?.line1">
             <!-- <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg> -->
@@ -243,7 +242,7 @@
 
       <!-- Instructions -->
       <div class="instructions" *ngIf="!selectedSection">
-        <p>👆 Click on any section in the newspaper to read the full article</p>
+        <p>{{ 'viewer.clickToRead' | translate }}</p>
       </div>
     </div>
   </div>
@@ -258,7 +257,7 @@
       <!-- Full Section Image -->
       <div class="section-image-container" *ngIf="currentPage">
         <div class="section-item">
-          <div class="section-image-wrapper" (click)="openImageModal()" title="Click to view full size">
+          <div class="section-image-wrapper" (click)="openImageModal()" [title]="ts.t('viewer.clickToViewFull')">
             <div class="skeleton-loader section-image-skeleton" *ngIf="sectionImageLoading && croppedSectionImage"></div>
             <img 
               *ngIf="croppedSectionImage"
@@ -271,10 +270,10 @@
               [style.display]="sectionImageLoading ? 'none' : 'block'"
             />
             <div *ngIf="sectionImageError" class="section-image-loading">
-              Preview unavailable due to image permissions.
+              {{ 'viewer.previewUnavailable' | translate }}
             </div>
             <div *ngIf="!croppedSectionImage && !sectionImageError" class="section-image-loading">
-              Loading section image...
+              {{ 'viewer.loadingSectionImage' | translate }}
             </div>
             
             <!-- Zoom indicator -->
@@ -289,7 +288,7 @@
           </div>
           
           <div class="section-caption">
-            <p class="section-page-number">Page {{ currentPage.id }}</p>
+            <p class="section-page-number">{{ 'viewer.page' | translate }} {{ ts.toLocaleDigits(currentPage.id) }}</p>
           </div>
         </div>
 
@@ -300,7 +299,7 @@
               *ngFor="let linkedSection of linkedSections"
               class="linked-section-item"
             >
-              <div class="linked-section-wrapper" (click)="openLinkedSectionImage(linkedSection)" title="Click to view full size">
+              <div class="linked-section-wrapper" (click)="openLinkedSectionImage(linkedSection)" [title]="ts.t('viewer.clickToViewFull')">
                 <img 
                   *ngIf="getCroppedImageForSection(linkedSection)"
                   [src]="getCroppedImageForSection(linkedSection)!" 
@@ -328,8 +327,8 @@
               
               <div class="linked-section-caption">
                 <p class="linked-page-number">
-                  Page {{ linkedSection.pageId }}
-                  <button class="go-to-section-btn" (click)="selectLinkedSection(linkedSection)" title="Go to this section">
+                  {{ 'viewer.page' | translate }} {{ ts.toLocaleDigits(linkedSection.pageId || 0) }}
+                  <button class="go-to-section-btn" (click)="selectLinkedSection(linkedSection)" [title]="ts.t('viewer.goToSection')">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                       <line x1="5" y1="12" x2="19" y2="12"></line>
                       <polyline points="12 5 19 12 12 19"></polyline>
@@ -353,7 +352,7 @@
               <line x1="16" y1="13" x2="8" y2="13"></line>
               <line x1="16" y1="17" x2="8" y2="17"></line>
             </svg>
-            <span>Read Article</span>
+            <span>{{ 'viewer.readArticle' | translate }}</span>
           </button>
       </div>
     </div>
@@ -367,7 +366,7 @@
           <line x1="16" y1="17" x2="8" y2="17"></line>
           <polyline points="10 9 9 9 8 9"></polyline>
         </svg>
-        <p>Select a section to read the article</p>
+        <p>{{ 'viewer.selectSection' | translate }}</p>
       </div>
     </div>
   </div>

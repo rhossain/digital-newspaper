@@ -121,30 +121,6 @@
   cursor: not-allowed;
 }
 
-.date-picker {
-  padding: 6px 12px;
-  border-radius: 8px;
-  border: 2px solid var(--color-border-ui);
-  background: var(--color-white);
-  color: var(--color-primary);
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.3s ease;
-  min-width: 150px;
-}
-
-.date-picker:hover {
-  background: var(--color-bg-muted);
-  border-color: var(--color-primary);
-}
-
-.date-picker:focus {
-  outline: none;
-  border-color: var(--color-primary);
-  box-shadow: 0 0 0 3px rgba(25, 118, 210, 0.12);
-}
-
 .available-dates {
   display: flex;
   align-items: center;

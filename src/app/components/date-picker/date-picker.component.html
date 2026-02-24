@@ -1,0 +1,60 @@
+<div class="dp-host">
+
+  <!-- ── Trigger button ── -->
+  <button class="dp-trigger" type="button" (click)="toggle($event)">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="dp-trigger-icon">
+      <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+      <line x1="16" y1="2" x2="16" y2="6"></line>
+      <line x1="8" y1="2" x2="8" y2="6"></line>
+      <line x1="3" y1="10" x2="21" y2="10"></line>
+    </svg>
+    <span class="dp-trigger-label">{{ value | localeDate:'short' }}</span>
+    <svg class="dp-caret" [class.dp-caret-open]="isOpen"
+         width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+      <polyline points="6 9 12 15 18 9"></polyline>
+    </svg>
+  </button>
+
+  <!-- ── Calendar popup ── -->
+  <div class="dp-popup" *ngIf="isOpen" (click)="stopProp($event)">
+
+    <!-- Month navigation -->
+    <div class="dp-header">
+      <button class="dp-nav-btn" type="button" (click)="prevMonth()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <polyline points="15 18 9 12 15 6"></polyline>
+        </svg>
+      </button>
+      <span class="dp-month-label">{{ monthLabel }}</span>
+      <button class="dp-nav-btn" type="button" (click)="nextMonth()" [disabled]="isNextMonthDisabled()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <polyline points="9 18 15 12 9 6"></polyline>
+        </svg>
+      </button>
+    </div>
+
+    <!-- Weekday headers -->
+    <div class="dp-weekdays">
+      <span class="dp-weekday" *ngFor="let d of weekDayHeaders">{{ d }}</span>
+    </div>
+
+    <!-- Day rows -->
+    <div class="dp-week" *ngFor="let week of weeks">
+      <button
+        *ngFor="let day of week"
+        type="button"
+        class="dp-day"
+        [class.dp-other-month]="!day.inMonth"
+        [class.dp-today]="day.isToday && !day.isSelected"
+        [class.dp-selected]="day.isSelected"
+        [class.dp-available]="day.isAvailable && !day.isDisabled && !day.isSelected"
+        [class.dp-disabled]="day.isDisabled || !day.inMonth"
+        [disabled]="day.isDisabled || !day.inMonth"
+        (click)="selectDay(day)"
+      >
+        {{ ts.toLocaleDigits(day.day) }}
+      </button>
+    </div>
+
+  </div>
+</div>
