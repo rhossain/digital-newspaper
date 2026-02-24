@@ -918,6 +918,38 @@
   box-shadow: 0 10px 60px rgba(0, 0, 0, 0.5);
 }
 
+.modal-image-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  margin-top: 12px;
+}
+
+.modal-img-action-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 18px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  background: rgba(255, 255, 255, 0.12);
+  color: white;
+  backdrop-filter: blur(10px);
+  transition: background 0.2s ease, transform 0.15s ease;
+}
+
+.modal-img-action-btn:hover {
+  background: rgba(255, 255, 255, 0.25);
+  transform: translateY(-1px);
+}
+
+.modal-img-action-btn:active {
+  transform: translateY(0);
+}
+
 .modal-image-label {
   background: rgba(0, 0, 0, 0.75);
   color: white;

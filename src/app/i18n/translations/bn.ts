@@ -21,6 +21,8 @@ export const BN = {
     selectSection: 'আর্টিকেল পড়তে একটি অংশ নির্বাচন করুন',
     clickToViewFull: 'পূর্ণ আকারে দেখতে ক্লিক করুন',
     goToSection: 'এই অংশে যান',
+    print: 'প্রিন্ট করুন',
+    download: 'ডাউনলোড',
   },
   footer: {
     editor: 'সম্পাদকঃ',

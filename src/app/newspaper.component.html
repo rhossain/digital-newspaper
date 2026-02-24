@@ -394,7 +394,25 @@
             [alt]="modalImageTitle"
             class="modal-full-image"
           />
-          <div class="modal-image-label" *ngIf="modalImageTitle">{{ modalImageTitle }}</div>
+          <div class="modal-image-actions">
+            <button class="modal-img-action-btn" (click)="printImage(modalImage!, modalImageTitle)">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="6 9 6 2 18 2 18 9"></polyline>
+                <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
+                <rect x="6" y="14" width="12" height="8"></rect>
+              </svg>
+              {{ 'viewer.print' | translate }}
+            </button>
+            <button class="modal-img-action-btn" (click)="downloadImage(modalImage!, modalImageTitle)">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="7 10 12 15 17 10"></polyline>
+                <line x1="12" y1="15" x2="12" y2="3"></line>
+              </svg>
+              {{ 'viewer.download' | translate }}
+            </button>
+          </div>
+          <!-- <div class="modal-image-label" *ngIf="modalImageTitle">{{ modalImageTitle }}</div> -->
         </div>
         
         <!-- Linked Section Images -->
@@ -404,7 +422,25 @@
             [alt]="linkedSection.title"
             class="modal-full-image"
           />
-          <div class="modal-image-label">{{ linkedSection.title }}</div>
+          <div class="modal-image-actions">
+            <button class="modal-img-action-btn" (click)="printImage(getCroppedImageForSection(linkedSection)!, linkedSection.title)">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="6 9 6 2 18 2 18 9"></polyline>
+                <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
+                <rect x="6" y="14" width="12" height="8"></rect>
+              </svg>
+              {{ 'viewer.print' | translate }}
+            </button>
+            <button class="modal-img-action-btn" (click)="downloadImage(getCroppedImageForSection(linkedSection)!, linkedSection.title)">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="7 10 12 15 17 10"></polyline>
+                <line x1="12" y1="15" x2="12" y2="3"></line>
+              </svg>
+              {{ 'viewer.download' | translate }}
+            </button>
+          </div>
+          <!-- <div class="modal-image-label">{{ linkedSection.title }}</div> -->
         </div>
       </div>
     </div>

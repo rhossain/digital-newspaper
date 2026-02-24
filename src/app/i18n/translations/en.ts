@@ -21,6 +21,8 @@ export const EN = {
     selectSection: 'Select a section to read the article',
     clickToViewFull: 'Click to view full size',
     goToSection: 'Go to this section',
+    print: 'Print',
+    download: 'Download',
   },
   footer: {
     editor: 'Editor:',

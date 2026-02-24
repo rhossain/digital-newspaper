@@ -438,6 +438,46 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     this.modalLinkedSections = [];
   }
 
+  printImage(imageUrl: string, title: string): void {
+    const win = window.open('', '_blank');
+    if (!win) return;
+    win.document.write(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>${title}</title>
+        <style>
+          body { margin: 0; display: flex; justify-content: center; align-items: flex-start; background: white; }
+          img { max-width: 100%; height: auto; display: block; }
+          @media print { body { margin: 0; } }
+        </style>
+      </head>
+      <body>
+        <img src="${imageUrl}" alt="${title}" onload="window.print(); window.close();" />
+      </body>
+      </html>
+    `);
+    win.document.close();
+  }
+
+  async downloadImage(imageUrl: string, title: string): Promise<void> {
+    try {
+      const response = await fetch(imageUrl);
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const ext = blob.type.split('/')[1]?.replace('jpeg', 'jpg') || 'jpg';
+      a.download = `${title || 'image'}.${ext}`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch {
+      window.open(imageUrl, '_blank');
+    }
+  }
+
   openLinkedSectionImage(linkedSection: NewsSection) {
     // Show all sections in page order
     if (this.selectedSection && this.currentPage) {
