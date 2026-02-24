@@ -3,6 +3,7 @@ import { HttpClient } from '@angular/common/http';
 import { Observable, BehaviorSubject } from 'rxjs';
 import { tap, map, catchError } from 'rxjs/operators';
 import { AuthService } from './auth.service';
+import { WP_BASE_URL } from '../config';
 
 export interface NewsSection {
   id: string;
@@ -64,30 +65,32 @@ export interface NewspaperData {
   providedIn: 'root'
 })
 export class NewspaperDataService {
-  private dataSubject = new BehaviorSubject<NewspaperData>({
-    settings: {
-      defaultDateMode: 'current',
-      socialLinks: {}
-    },
-    editions: []
-  });
-  private currentDateSubject = new BehaviorSubject<string>(this.getTodayDate());
+  private static readonly SETTINGS_CACHE_KEY = 'dn_global_settings';
+
+  private dataSubject!: BehaviorSubject<NewspaperData>;
+  private currentDateSubject!: BehaviorSubject<string>;
   
-  currentDate$ = this.currentDateSubject.asObservable();
-  public data$ = this.dataSubject.asObservable();
+  currentDate$!: Observable<string>;
+  public data$!: Observable<NewspaperData>;
   
   // WordPress REST API base
   private assetsUrl = '/assets/newspaper-data.json';
+  private readonly wpBaseUrl = WP_BASE_URL;
+  private readonly apiUrl = `${WP_BASE_URL}/wp-json/digital-newspaper/v1/data`;
 
-  private get wpBaseUrl(): string {
-    return ((window as any).__WP_BASE_URL || 'http://localhost:8080').replace(/\/+$/, '');
+  constructor(private http: HttpClient, private auth: AuthService) {
+    const cachedSettings = NewspaperDataService._readCachedSettings();
+    this.dataSubject = new BehaviorSubject<NewspaperData>({
+      settings: cachedSettings || {
+        defaultDateMode: 'current',
+        socialLinks: {}
+      },
+      editions: []
+    });
+    this.currentDateSubject = new BehaviorSubject<string>(this.getTodayDate());
+    this.currentDate$ = this.currentDateSubject.asObservable();
+    this.data$ = this.dataSubject.asObservable();
   }
-
-  private get apiUrl(): string {
-    return `${this.wpBaseUrl}/wp-json/digital-newspaper/v1/data`;
-  }
-
-  constructor(private http: HttpClient, private auth: AuthService) {}
 
   // Date helper methods
   getTodayDate(): string {
@@ -158,6 +161,10 @@ export class NewspaperDataService {
             result.settings.editor = '';
           }
         }
+        // Cache settings from the API for offline / quick-startup use
+        if (result.settings) {
+          this.cacheSettings(result.settings);
+        }
         return result;
       }),
       tap((data: NewspaperData) => {
@@ -214,6 +221,11 @@ export class NewspaperDataService {
   saveData(data: NewspaperData): Observable<any> {
     // Update the local data
     this.dataSubject.next(data);
+    
+    // Persist settings to localStorage for cross-window availability
+    if (data.settings) {
+      this.cacheSettings(data.settings);
+    }
     
     // Save to backend API
     const headers = this.auth.getAuthHeaders();
@@ -360,9 +372,25 @@ export class NewspaperDataService {
   // Global Settings Management
   getSettings(): GlobalSettings {
     const data = this.getData();
-    return data.settings || {
-      defaultDateMode: 'current',
-      socialLinks: {}
+    const raw = data.settings;
+    if (!raw) {
+      return {
+        defaultDateMode: 'current',
+        socialLinks: {},
+        logo: { url: '', alt: 'Digital Newspaper' },
+        editor: '',
+        address: {}
+      };
+    }
+    // Ensure every sub-object exists so callers don't have to null-check
+    return {
+      ...raw,
+      logo: raw.logo || { url: '', alt: 'Digital Newspaper' },
+      socialLinks: (raw.socialLinks && !Array.isArray(raw.socialLinks))
+        ? raw.socialLinks
+        : {},
+      address: raw.address || {},
+      editor: raw.editor ?? ''
     };
   }
 
@@ -372,7 +400,8 @@ export class NewspaperDataService {
       ...currentData,
       settings
     });
-    
+    // Persist to localStorage so new windows pick it up immediately
+    this.cacheSettings(settings);
   }
 
   getDefaultDate(): string {
@@ -381,6 +410,36 @@ export class NewspaperDataService {
       return settings.specificDate;
     }
     return this.getTodayDate();
+  }
+
+  // --- localStorage settings cache ---
+  private cacheSettings(settings: GlobalSettings): void {
+    try {
+      localStorage.setItem(
+        NewspaperDataService.SETTINGS_CACHE_KEY,
+        JSON.stringify(settings)
+      );
+    } catch (_e) { /* quota exceeded or private mode – silently ignore */ }
+  }
+
+  /** Static helper so it can be called before the instance is fully constructed. */
+  private static _readCachedSettings(): GlobalSettings | null {
+    try {
+      const raw = localStorage.getItem(NewspaperDataService.SETTINGS_CACHE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as GlobalSettings;
+        // Normalize just like we do for API data
+        if (parsed.socialLinks && Array.isArray(parsed.socialLinks)) {
+          parsed.socialLinks = {};
+        }
+        return parsed;
+      }
+    } catch (_e) { /* corrupt data – ignore */ }
+    return null;
+  }
+
+  private loadCachedSettings(): GlobalSettings | null {
+    return NewspaperDataService._readCachedSettings();
   }
 
   downloadJSON(): void {

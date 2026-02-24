@@ -73,9 +73,6 @@ export class AdminComponent implements OnInit {
   logoInputMode: 'url' | 'file' = 'url';
   logoFile: File | null = null;
 
-  // WordPress base URL config
-  wpBaseUrl: string = '';
-  
   sectionForm: Partial<NewsSection> = {
     id: '',
     title: '',
@@ -115,7 +112,6 @@ export class AdminComponent implements OnInit {
     this.todayDate = this.dataService.getTodayDate();
     this.selectedDate = this.todayDate;
     this.availableDates = this.selectedDate ? [this.selectedDate] : [];
-    this.wpBaseUrl = (localStorage.getItem('DN_WP_BASE_URL') || (window as any).__WP_BASE_URL || '').trim();
     
     this.verifyAuth();
   }
@@ -147,11 +143,6 @@ export class AdminComponent implements OnInit {
 
   login() {
     this.authError = '';
-    if (!((window as any).__WP_BASE_URL)) {
-      this.authError = 'WordPress Base URL is not set. Enter it above and click "Save WP URL" first.';
-      this.toaster.error(this.authError);
-      return;
-    }
     this.isAuthenticating = true;
     this.authService.login(this.authForm.username, this.authForm.password).subscribe({
       next: () => {
@@ -161,13 +152,13 @@ export class AdminComponent implements OnInit {
       error: (err) => {
         this.isAuthenticating = false;
         if (err.status === 0 || err.name === 'HttpErrorResponse' && !err.status) {
-          this.authError = 'Cannot reach WordPress. Check the WP Base URL is correct and WordPress is online.';
+          this.authError = 'Cannot reach WordPress. Check that WordPress is online and CORS is configured.';
         } else if (err.status === 401 || err.status === 400) {
           this.authError = 'Invalid credentials. Please try again.';
         } else if (err.status === 403) {
           this.authError = 'Access denied. Your account may not have editor permissions.';
         } else {
-          this.authError = `Login failed (HTTP ${err.status || 'network error'}). Check the WP Base URL and CORS settings.`;
+          this.authError = `Login failed (HTTP ${err.status || 'network error'}). Check CORS settings.`;
         }
         this.toaster.error(this.authError);
       }
@@ -177,21 +168,6 @@ export class AdminComponent implements OnInit {
   logout() {
     this.authService.logout();
     this.authForm.password = '';
-  }
-
-  saveWpBaseUrl() {
-    const value = (this.wpBaseUrl || '').trim().replace(/\/+$/, '');
-    if (!value) {
-      localStorage.removeItem('DN_WP_BASE_URL');
-      delete (window as any).__WP_BASE_URL;
-      this.wpBaseUrl = '';
-      this.toaster.info('WP URL cleared.');
-      return;
-    }
-    localStorage.setItem('DN_WP_BASE_URL', value);
-    (window as any).__WP_BASE_URL = value;
-    this.wpBaseUrl = value;
-    this.toaster.success('WP URL saved! You can now log in.');
   }
 
   zoomOut() {

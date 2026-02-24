@@ -1,6 +1,7 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable, tap, map } from 'rxjs';
+import { WP_BASE_URL } from '../config';
 
 interface LoginResponse {
   token: string;
@@ -17,10 +18,7 @@ interface LoginResponse {
 })
 export class AuthService {
   private readonly tokenKey = 'dn_wp_token';
-
-  private get wpBaseUrl(): string {
-    return ((window as any).__WP_BASE_URL || 'http://localhost:8080').replace(/\/+$/, '');
-  }
+  private readonly wpBaseUrl = WP_BASE_URL;
 
   constructor(private http: HttpClient) {}
 

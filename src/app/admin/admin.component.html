@@ -51,16 +51,6 @@
   <!-- Auth Overlay -->
   <div class="auth-overlay" *ngIf="!isAuthenticated">
     <div class="auth-card">
-      <h2>WordPress Connection</h2>
-      <p class="auth-subtitle">Set your WordPress base URL to enable login.</p>
-      <div class="form-group">
-        <label>WordPress Base URL</label>
-        <input type="url" [(ngModel)]="wpBaseUrl" class="form-control" placeholder="https://your-wordpress-site.com" />
-      </div>
-      <button class="btn btn-primary" (click)="saveWpBaseUrl()">Save WP URL</button>
-
-      <div class="auth-divider"></div>
-
       <h2>Admin Login</h2>
       <div class="form-group">
         <label>Username</label>
@@ -450,17 +440,6 @@
       </div>
 
       <div class="settings-content">
-        <!-- WordPress Connection -->
-        <div class="settings-section">
-          <h3>WordPress Connection</h3>
-          <div class="form-group">
-            <label>WordPress Base URL</label>
-            <input type="url" [(ngModel)]="wpBaseUrl" class="form-control" placeholder="https://your-wordpress-site.com" />
-            <small class="hint-text">Used for API + Media uploads when app is on a different domain.</small>
-          </div>
-          <button class="btn btn-primary" (click)="saveWpBaseUrl()">Save WP URL</button>
-        </div>
-
         <!-- Logo Settings -->
         <div class="settings-section">
           <h3>Site Logo</h3>

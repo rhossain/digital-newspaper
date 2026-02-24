@@ -93,6 +93,8 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     
     // Subscribe to data changes
     const dataSubscription = this.dataService.data$.subscribe(() => {
+      // Always sync global settings from the latest data
+      this.refreshSettings();
       this.loadCurrentEdition();
       this.cdr.detectChanges();
     });
@@ -111,9 +113,10 @@ export class NewspaperComponent implements OnInit, OnDestroy {
       next: () => {
         this.availableDates = this.dataService.getAvailableDates();
         
-        // Load global settings
-        this.settings = this.dataService.getSettings();
-        this.socialLinks = this.settings?.socialLinks || {};
+        // Load global settings (also done in data$ subscriber, but
+        // kept here so settings are guaranteed up-to-date before we
+        // read defaultDate below).
+        this.refreshSettings();
         
         // If no date was set from URL, use the default date from settings
         if (!this.route.snapshot.paramMap.has('date')) {
@@ -134,6 +137,12 @@ export class NewspaperComponent implements OnInit, OnDestroy {
         this.cdr.detectChanges();
       }
     });
+  }
+
+  /** Pull the latest global settings from the data service into component state. */
+  private refreshSettings(): void {
+    this.settings = this.dataService.getSettings();
+    this.socialLinks = this.settings?.socialLinks || {};
   }
 
   loadCurrentEdition() {
