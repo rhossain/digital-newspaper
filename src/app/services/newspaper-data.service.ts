@@ -54,6 +54,7 @@ export interface GlobalSettings {
     email?: string;
     website?: string;
   };
+  language?: 'en' | 'bn';
 }
 
 export interface NewspaperData {
@@ -159,6 +160,10 @@ export class NewspaperDataService {
           // Ensure editor field always exists
           if (result.settings.editor === undefined) {
             result.settings.editor = '';
+          }
+          // Ensure language field always exists
+          if (!result.settings.language) {
+            result.settings.language = 'en';
           }
         }
         // Cache settings from the API for offline / quick-startup use
@@ -379,7 +384,8 @@ export class NewspaperDataService {
         socialLinks: {},
         logo: { url: '', alt: 'Digital Newspaper' },
         editor: '',
-        address: {}
+        address: {},
+        language: 'en'
       };
     }
     // Ensure every sub-object exists so callers don't have to null-check
@@ -390,7 +396,8 @@ export class NewspaperDataService {
         ? raw.socialLinks
         : {},
       address: raw.address || {},
-      editor: raw.editor ?? ''
+      editor: raw.editor ?? '',
+      language: raw.language || 'en'
     };
   }
 

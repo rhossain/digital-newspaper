@@ -5,17 +5,21 @@ import { Router, ActivatedRoute } from '@angular/router';
 import { NewspaperDataService, NewsSection, NewspaperPage, NewspaperEdition, GlobalSettings } from './services/newspaper-data.service';
 import { ToasterService } from './services/toaster.service';
 import { ShareButtonsComponent } from './shared/share-buttons/share-buttons.component';
+import { TranslationService } from './i18n/translation.service';
+import { TranslatePipe } from './i18n/translate.pipe';
+import { LocaleDatePipe } from './i18n/locale-date.pipe';
 import { Subscription } from 'rxjs';
 
 @Component({
   selector: 'app-newspaper',
   standalone: true,
-  imports: [CommonModule, FormsModule, ShareButtonsComponent],
+  imports: [CommonModule, FormsModule, ShareButtonsComponent, TranslatePipe, LocaleDatePipe],
   templateUrl: './newspaper.component.html',
   styleUrls: ['./newspaper.component.css']
 })
 export class NewspaperComponent implements OnInit, OnDestroy {
   @ViewChild('mainImage') mainImageRef?: ElementRef<HTMLImageElement>;
+  @ViewChild('datePickerInput') datePickerInputRef?: ElementRef<HTMLInputElement>;
   pages: NewspaperPage[] = [];
   currentPage: NewspaperPage | null = null;
   selectedSection: NewsSection | null = null;
@@ -56,8 +60,12 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     private toaster: ToasterService,
     private cdr: ChangeDetectorRef,
     private router: Router,
-    private route: ActivatedRoute
+    private route: ActivatedRoute,
+    private translationService: TranslationService
   ) {}
+
+  /** Expose TranslationService to the template. */
+  get ts(): TranslationService { return this.translationService; }
 
   ngOnInit() {
     this.todayDate = this.dataService.getTodayDate();
@@ -143,6 +151,9 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   private refreshSettings(): void {
     this.settings = this.dataService.getSettings();
     this.socialLinks = this.settings?.socialLinks || {};
+    if (this.settings?.language) {
+      this.translationService.setLanguage(this.settings.language);
+    }
   }
 
   loadCurrentEdition() {
@@ -216,7 +227,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   }
 
   updateDisplayDate() {
-    this.displayDate = this.dataService.formatDisplayDate(this.selectedDate);
+    this.displayDate = this.translationService.formatDate(this.selectedDate, 'full');
   }
 
   checkIfToday() {
@@ -245,13 +256,19 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     }
   }
 
+  openDatePicker() {
+    const input = this.datePickerInputRef?.nativeElement;
+    if (!input) return;
+    // showPicker() is supported in Chrome 99+, Firefox 101+, Safari 16+
+    if (typeof (input as any).showPicker === 'function') {
+      (input as any).showPicker();
+    } else {
+      input.click();
+    }
+  }
+
   formatShortDate(dateStr: string): string {
-    const date = new Date(dateStr + 'T00:00:00');
-    return date.toLocaleDateString('en-US', { 
-      month: 'short', 
-      day: 'numeric', 
-      year: 'numeric' 
-    });
+    return this.translationService.formatDate(dateStr, 'short');
   }
   //   });
   // }

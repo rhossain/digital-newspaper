@@ -68,7 +68,8 @@ export class AdminComponent implements OnInit {
       phone: '',
       email: '',
       website: ''
-    }
+    },
+    language: 'en'
   };
   logoInputMode: 'url' | 'file' = 'url';
   logoFile: File | null = null;
@@ -1050,7 +1051,8 @@ export class AdminComponent implements OnInit {
       defaultDateMode: settings.defaultDateMode || 'current',
       specificDate: settings.specificDate || '',
       editor: settings.editor || '',
-      address: settings.address || {}
+      address: settings.address || {},
+      language: settings.language || 'en'
     };
   }
 
@@ -1062,7 +1064,8 @@ export class AdminComponent implements OnInit {
       defaultDateMode: this.settingsForm.defaultDateMode || 'current',
       specificDate: this.settingsForm.specificDate || '',
       editor: this.settingsForm.editor || '',
-      address: this.settingsForm.address || {}
+      address: this.settingsForm.address || {},
+      language: this.settingsForm.language || 'en'
     };
     
     // Update settings in the data service

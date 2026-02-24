@@ -440,6 +440,21 @@
       </div>
 
       <div class="settings-content">
+        <!-- Language Settings -->
+        <div class="settings-section">
+          <h3>Language / ভাষা</h3>
+          <div class="form-group">
+            <label>Select Display Language</label>
+            <select [(ngModel)]="settingsForm.language" class="form-control">
+              <option value="en">English</option>
+              <option value="bn">বাংলা (Bangla)</option>
+            </select>
+          </div>
+          <div class="hint-text">
+            <p>🌐 This setting controls the display language for all readers of this newspaper. The admin panel always remains in English.</p>
+          </div>
+        </div>
+
         <!-- Logo Settings -->
         <div class="settings-section">
           <h3>Site Logo</h3>

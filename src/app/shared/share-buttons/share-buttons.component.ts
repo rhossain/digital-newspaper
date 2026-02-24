@@ -1,6 +1,7 @@
 import { Component, Input } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { ToasterService } from '../../services/toaster.service';
+import { TranslationService } from '../../i18n/translation.service';
 
 interface NewsSection {
   id: string;
@@ -27,7 +28,7 @@ export class ShareButtonsComponent {
   @Input() selectedDate!: string;
   @Input() logo?: { url: string; alt?: string };
 
-  constructor(private toaster: ToasterService) {}
+  constructor(private toaster: ToasterService, private ts: TranslationService) {}
 
   private getShareableUrl(section: NewsSection): string {
     const baseUrl = window.location.origin;
@@ -92,9 +93,9 @@ export class ShareButtonsComponent {
   copyShareLink(section: NewsSection) {
     const url = this.getShareableUrl(section);
     navigator.clipboard.writeText(url).then(() => {
-      this.toaster.success('Link copied to clipboard!');
+      this.toaster.success(this.ts.t('share.copied'));
     }).catch(() => {
-      this.toaster.error('Failed to copy link');
+      this.toaster.error(this.ts.t('share.copyFailed'));
     });
   }
 }
