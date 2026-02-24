@@ -25,6 +25,7 @@ interface NewsSection {
 export class ShareButtonsComponent {
   @Input() section!: NewsSection;
   @Input() selectedDate!: string;
+  @Input() logo?: { url: string; alt?: string };
 
   constructor(private toaster: ToasterService) {}
 

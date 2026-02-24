@@ -16,6 +16,13 @@
   gap: 12px;
 }
 
+.logo-img {
+  height: 32px;
+  width: auto;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
 .logo-icon {
   color: var(--color-accent-dark);
   stroke: var(--color-accent-dark);

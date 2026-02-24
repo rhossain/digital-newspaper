@@ -40,15 +40,15 @@
           [alt]="settings?.logo?.alt || 'Logo'"
           class="logo-image"
         />
-        <svg *ngIf="settings && !settings?.logo?.url" class="logo-icon" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <svg *ngIf="settings && !settings.logo?.url" class="logo-icon" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
           <polyline points="14 2 14 8 20 8"></polyline>
           <line x1="16" y1="13" x2="8" y2="13"></line>
           <line x1="16" y1="17" x2="8" y2="17"></line>
           <line x1="10" y1="9" x2="8" y2="9"></line>
         </svg>
-        <div class="header-text" *ngIf="settings && !settings?.logo?.url">
-          <h1 class="newspaper-title">{{ settings?.logo?.alt || 'Digital Newspaper' }}</h1>
+        <div class="header-text" *ngIf="settings && !settings.logo?.url">
+          <h1 class="newspaper-title">{{ settings.logo?.alt || 'Digital Newspaper' }}</h1>
           <p class="newspaper-date">{{ displayDate }}</p>
         </div>
       </div>
@@ -166,7 +166,7 @@
         <button
           *ngFor="let page of pages"
           class="pagination-page-btn"
-          [class.active]="currentPage?.id === page.id"
+          [class.active]="currentPage.id === page.id"
           (click)="selectPage(page)"
           [title]="'Page ' + page.id"
         >
@@ -383,7 +383,8 @@
       <app-share-buttons 
         *ngIf="selectedSection" 
         [section]="selectedSection" 
-        [selectedDate]="selectedDate">
+        [selectedDate]="selectedDate"
+        [logo]="settings?.logo">
       </app-share-buttons>
       
       <div class="modal-images-container">
@@ -421,7 +422,8 @@
       <app-share-buttons 
         *ngIf="selectedSection" 
         [section]="selectedSection" 
-        [selectedDate]="selectedDate">
+        [selectedDate]="selectedDate"
+        [logo]="settings?.logo">
       </app-share-buttons>
       
       <div class="modal-body" *ngIf="selectedSection">
