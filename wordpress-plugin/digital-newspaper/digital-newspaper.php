@@ -54,6 +54,14 @@ class Digital_Newspaper_API {
         'logo' => [
           'url' => '',
           'alt' => 'Digital Newspaper'
+        ],
+        'editor' => '',
+        'address' => [
+          'line1'   => '',
+          'line2'   => '',
+          'phone'   => '',
+          'email'   => '',
+          'website' => ''
         ]
       ],
       'editions' => []

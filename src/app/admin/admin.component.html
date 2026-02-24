@@ -558,6 +558,35 @@
             <input type="url" [(ngModel)]="settingsForm.socialLinks!.youtube" class="form-control" placeholder="https://youtube.com/c/yourchannel" />
           </div>
         </div>
+
+        <!-- Contact / Address Information -->
+        <div class="settings-section">
+          <h3>Contact Information</h3>
+          <div class="form-group">
+            <label>Editor Name</label>
+            <input type="text" [(ngModel)]="settingsForm.editor" class="form-control" placeholder="e.g. John Smith" />
+          </div>
+          <div class="form-group">
+            <label>Address Line 1</label>
+            <input type="text" [(ngModel)]="settingsForm.address!.line1" class="form-control" placeholder="123 Main Street, City" />
+          </div>
+          <div class="form-group">
+            <label>Address Line 2</label>
+            <input type="text" [(ngModel)]="settingsForm.address!.line2" class="form-control" placeholder="State, Country — ZIP" />
+          </div>
+          <div class="form-group">
+            <label>Phone</label>
+            <input type="text" [(ngModel)]="settingsForm.address!.phone" class="form-control" placeholder="+1 (555) 000-0000" />
+          </div>
+          <div class="form-group">
+            <label>Email</label>
+            <input type="email" [(ngModel)]="settingsForm.address!.email" class="form-control" placeholder="contact@yournewspaper.com" />
+          </div>
+          <div class="form-group">
+            <label>Website</label>
+            <input type="url" [(ngModel)]="settingsForm.address!.website" class="form-control" placeholder="https://yournewspaper.com" />
+          </div>
+        </div>
       </div>
     </div>
   </div>

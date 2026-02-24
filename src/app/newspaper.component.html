@@ -151,32 +151,92 @@
     </div>
 
     <div class="main-page-container" *ngIf="currentPage">
-      <div class="image-wrapper">
-        <div class="skeleton-loader main-image-skeleton" *ngIf="!imageLoaded"></div>
-        <img
-          #mainImage
-          [src]="resolveImageUrl(currentPage.fullImage)"
-          [alt]="'Page ' + currentPage.id"
-          class="main-page-image"
-          (load)="onImageLoad()"
-          (error)="onImageError()"
-          [style.opacity]="imageLoaded ? '1' : '0'"
-        />
 
-        <!-- Clickable sections overlay -->
-        <div class="sections-overlay" *ngIf="imageLoaded">
-          <div
-            *ngFor="let section of currentPage.sections"
-            class="clickable-section"
-            [style.left.%]="section.x"
-            [style.top.%]="section.y"
-            [style.width.%]="section.width"
-            [style.height.%]="section.height"
-            [class.selected]="selectedSection?.id === section.id"
-            (click)="selectSection(section)"
-            [title]="section.title"
-          >
-            <div class="section-label">{{ section.title }}</div>
+      <!-- Page Pagination Bar -->
+      <div class="page-pagination" *ngIf="pages.length > 1">
+        <button
+          class="pagination-btn"
+          (click)="selectPage(pages[pages.indexOf(currentPage) - 1])"
+          [disabled]="pages.indexOf(currentPage) === 0"
+          title="Previous Page"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"></polyline></svg>
+        </button>
+
+        <button
+          *ngFor="let page of pages"
+          class="pagination-page-btn"
+          [class.active]="currentPage?.id === page.id"
+          (click)="selectPage(page)"
+          [title]="'Page ' + page.id"
+        >
+          {{ page.id }}
+        </button>
+
+        <button
+          class="pagination-btn"
+          (click)="selectPage(pages[pages.indexOf(currentPage) + 1])"
+          [disabled]="pages.indexOf(currentPage) === pages.length - 1"
+          title="Next Page"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>
+        </button>
+      </div>
+
+      <div class="image-wrapper">
+        <div class="image-inner">
+          <div class="skeleton-loader main-image-skeleton" *ngIf="!imageLoaded"></div>
+          <img
+            #mainImage
+            [src]="resolveImageUrl(currentPage.fullImage)"
+            [alt]="'Page ' + currentPage.id"
+            class="main-page-image"
+            (load)="onImageLoad()"
+            (error)="onImageError()"
+            [style.opacity]="imageLoaded ? '1' : '0'"
+          />
+
+          <!-- Clickable sections overlay -->
+          <div class="sections-overlay" *ngIf="imageLoaded">
+            <div
+              *ngFor="let section of currentPage.sections"
+              class="clickable-section"
+              [style.left.%]="section.x"
+              [style.top.%]="section.y"
+              [style.width.%]="section.width"
+              [style.height.%]="section.height"
+              [class.selected]="selectedSection?.id === section.id"
+              (click)="selectSection(section)"
+              [title]="section.title"
+            >
+              <div class="section-label">{{ section.title }}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Page Footer Info -->
+      <div class="page-footer-info" *ngIf="settings?.editor || settings?.address?.line1 || settings?.address?.phone || settings?.address?.email || settings?.address?.website">
+        <div class="footer-info-inner">
+          <div class="footer-info-item" *ngIf="settings?.editor">
+            <!-- <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg> -->
+            <span class="footer-info-item-editor">সম্পাদকঃ <strong>{{ settings?.editor }}</strong></span>
+          </div>
+          <div class="footer-info-item" *ngIf="settings?.address?.line1">
+            <!-- <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg> -->
+            <span class="footer-info-item-address">{{ settings?.address?.line1 }}<ng-container *ngIf="settings?.address?.line2">, {{ settings?.address?.line2 }}</ng-container></span>
+          </div>
+          <div class="footer-info-item" *ngIf="settings?.address?.phone">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.61 3.41 2 2 0 0 1 3.59 1.24h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.8a16 16 0 0 0 6.29 6.29l.96-.96a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
+            <a class="footer-info-item-phone" [href]="'tel:' + settings?.address?.phone">{{ settings?.address?.phone }}</a>
+          </div>
+          <div class="footer-info-item" *ngIf="settings?.address?.email">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
+            <a class="footer-info-item-email" [href]="'mailto:' + settings?.address?.email">{{ settings?.address?.email }}</a>
+          </div>
+          <div class="footer-info-item" *ngIf="settings?.address?.website">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
+            <a class="footer-info-item-website" [href]="settings?.address?.website" target="_blank" rel="noopener noreferrer">{{ settings?.address?.website }}</a>
           </div>
         </div>
       </div>

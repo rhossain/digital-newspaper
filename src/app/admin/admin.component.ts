@@ -60,7 +60,15 @@ export class AdminComponent implements OnInit {
       youtube: ''
     },
     defaultDateMode: 'current',
-    specificDate: ''
+    specificDate: '',
+    editor: '',
+    address: {
+      line1: '',
+      line2: '',
+      phone: '',
+      email: '',
+      website: ''
+    }
   };
   logoInputMode: 'url' | 'file' = 'url';
   logoFile: File | null = null;
@@ -1064,7 +1072,9 @@ export class AdminComponent implements OnInit {
       logo: settings.logo || { url: '', alt: 'Digital Newspaper' },
       socialLinks: settings.socialLinks || {},
       defaultDateMode: settings.defaultDateMode || 'current',
-      specificDate: settings.specificDate || ''
+      specificDate: settings.specificDate || '',
+      editor: settings.editor || '',
+      address: settings.address || {}
     };
   }
 
@@ -1074,7 +1084,9 @@ export class AdminComponent implements OnInit {
       logo: this.settingsForm.logo || { url: '', alt: 'Digital Newspaper' },
       socialLinks: this.settingsForm.socialLinks || {},
       defaultDateMode: this.settingsForm.defaultDateMode || 'current',
-      specificDate: this.settingsForm.specificDate || ''
+      specificDate: this.settingsForm.specificDate || '',
+      editor: this.settingsForm.editor || '',
+      address: this.settingsForm.address || {}
     };
     
     // Update settings in the data service

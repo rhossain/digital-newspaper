@@ -45,6 +45,14 @@ export interface GlobalSettings {
   };
   defaultDateMode: 'current' | 'specific';
   specificDate?: string; // Format: YYYY-MM-DD
+  editor?: string;
+  address?: {
+    line1?: string;
+    line2?: string;
+    phone?: string;
+    email?: string;
+    website?: string;
+  };
 }
 
 export interface NewspaperData {
@@ -140,6 +148,14 @@ export class NewspaperDataService {
           // Ensure logo object always exists
           if (!result.settings.logo) {
             result.settings.logo = { url: '', alt: 'Digital Newspaper' };
+          }
+          // Ensure address object always exists
+          if (!result.settings.address) {
+            result.settings.address = {};
+          }
+          // Ensure editor field always exists
+          if (result.settings.editor === undefined) {
+            result.settings.editor = '';
           }
         }
         return result;
