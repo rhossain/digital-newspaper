@@ -75,7 +75,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     const routeSubscription = this.route.paramMap.subscribe(params => {
       const dateParam = params.get('date');
       const sectionParam = params.get('section');
-
+      
       if (dateParam) {
         this.selectedDate = dateParam;
         this.dataService.setCurrentDate(dateParam);
@@ -128,14 +128,10 @@ export class NewspaperComponent implements OnInit, OnDestroy {
         this.refreshSettings();
         
         // If no date was set from URL, use the default date from settings
-        // and navigate to /:date/ so the URL reflects the loaded edition.
         if (!this.route.snapshot.paramMap.has('date')) {
           const defaultDate = this.dataService.getDefaultDate();
           this.selectedDate = defaultDate;
           this.dataService.setCurrentDate(defaultDate);
-          // Navigate to the date URL so the browser shows e.g. /2026-02-07/
-          // Use replaceUrl so the blank root entry is replaced, not stacked.
-          this.router.navigate(['/', defaultDate], { replaceUrl: true });
         }
         
         // loadCurrentEdition will be called by the data$ subscription
@@ -184,12 +180,10 @@ export class NewspaperComponent implements OnInit, OnDestroy {
           const found = this.navigateToSection(this.pendingSectionSlug);
           this.pendingSectionSlug = null; // Clear after use
           if (!found) {
-            // Slug not found — show first page, leave right panel empty
-            this.selectPage(this.pages[0], undefined, true);
+            this.selectPage(this.pages[0]);
           }
         } else {
-          // No section in URL — show first page but leave right panel empty
-          this.selectPage(this.pages[0], undefined, true);
+          this.selectPage(this.pages[0]);
         }
       } else {
         this.currentPage = null;
@@ -274,7 +268,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   //   });
   // }
 
-  selectPage(page: NewspaperPage, targetSectionId?: string, suppressUrlUpdate = false) {
+  selectPage(page: NewspaperPage, targetSectionId?: string) {
     this.currentPage = page;
     this.imageLoaded = false;
 
@@ -286,33 +280,31 @@ export class NewspaperComponent implements OnInit, OnDestroy {
       }
     }, 0);
     
-    // Only auto-select a section if a specific targetSectionId was requested;
-    // clicking a page thumbnail should just show the page, not open the right panel.
-    if (targetSectionId && page.sections && page.sections.length > 0) {
-      const targetSection = page.sections.find(s => s.id === targetSectionId);
-      if (targetSection) {
-        this.selectSection(targetSection, suppressUrlUpdate);
-      } else {
-        this.selectedSection = null;
-        this.linkedSections = [];
+    // If a target section is specified, select it; otherwise select the first section
+    if (page.sections && page.sections.length > 0) {
+      let sectionToSelect = page.sections[0];
+      
+      if (targetSectionId) {
+        const targetSection = page.sections.find(s => s.id === targetSectionId);
+        if (targetSection) {
+          sectionToSelect = targetSection;
+        }
       }
+      
+      // Use selectSection to properly initialize everything including linked sections
+      this.selectSection(sectionToSelect);
+      
+      // Scroll right panel to top when page changes
+      setTimeout(() => {
+        const rightPanel = document.querySelector('.right-panel');
+        if (rightPanel) {
+          rightPanel.scrollTop = 0;
+        }
+      }, 0);
     } else {
-      // No specific section requested — clear right panel
       this.selectedSection = null;
-      this.croppedSectionImage = null;
       this.linkedSections = [];
-      if (!suppressUrlUpdate) {
-        this.updateUrl();
-      }
     }
-
-    // Scroll right panel to top
-    setTimeout(() => {
-      const rightPanel = document.querySelector('.right-panel');
-      if (rightPanel) {
-        rightPanel.scrollTop = 0;
-      }
-    }, 0);
   }
 
   onThumbnailLoad(pageId: number) {
@@ -339,7 +331,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     this.imageLoaded = true;
   }
 
-  selectSection(section: NewsSection, suppressUrlUpdate = false) {
+  selectSection(section: NewsSection) {
     this.selectedSection = section;
     this.sectionImageError = false;
     
@@ -372,10 +364,8 @@ export class NewspaperComponent implements OnInit, OnDestroy {
       rightPanel.scrollTop = 0;
     }
     
-    // Update URL with section (unless suppressed for auto-selections on load)
-    if (!suppressUrlUpdate) {
-      this.updateUrl();
-    }
+    // Update URL with section
+    this.updateUrl();
   }
 
   onSectionImageLoad() {
@@ -644,18 +634,17 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   }
 
   private updateUrl() {
-    // Always use location.replaceState (never router.navigate) for URL updates
-    // after the initial load. router.navigate between /:date and /:date/:section
-    // switches route patterns, which causes Angular to RECREATE the component —
-    // wiping selectedSection and causing the right panel to flicker on first click.
-    // location.replaceState just updates the browser URL bar with zero side-effects;
-    // paramMap never fires, no component recreation, no cascade.
-    // Shared / direct-load URLs still work because ngOnInit reads paramMap on first load.
+    // Update URL with current date and section if selected
     if (this.selectedDate) {
       if (this.selectedSection) {
+        // Use title-based slug with section ID fallback
         const slug = this.createSectionSlug(this.selectedSection.title, this.selectedSection.id);
-        this.location.replaceState('/' + this.selectedDate + '/' + slug + '/');
+        this.router.navigate(['/', this.selectedDate, slug], { replaceUrl: true });
       } else {
+        // Use Location.replaceState instead of router.navigate so that
+        // paramMap does NOT fire — this prevents the cascade:
+        // paramMap → setCurrentDate → currentDate$ → loadCurrentEdition
+        // → selectPage → selectSection → updateUrl (loop back to section URL)
         this.location.replaceState('/' + this.selectedDate + '/');
       }
     }
