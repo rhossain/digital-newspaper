@@ -301,6 +301,28 @@ export class AdminComponent implements OnInit {
     return name;
   }
 
+  /** Display label for a page in the admin UI (EN / BN side-by-side). */
+  getPageLabel(page: NewspaperPage): string {
+    const en = page.pageLabels?.['en'] ?? '';
+    const bn = page.pageLabels?.['bn'] ?? '';
+    if (en || bn) {
+      return en && bn ? `${en} / ${bn}` : en || bn;
+    }
+    const idx = this.pages.indexOf(page) + 1 || page.id;
+    const enName = this.getPageOrdinalName(idx, 'en');
+    const bnName = this.getPageOrdinalName(idx, 'bn');
+    return `${enName} / ${bnName}`;
+  }
+
+  /** Returns the ordinal page name for a specific language. */
+  private getPageOrdinalName(num: number, lang: 'en' | 'bn'): string {
+    const prevLang = this.translationService.language;
+    this.translationService.setLanguage(lang);
+    const name = this.translationService.getPageName(num);
+    this.translationService.setLanguage(prevLang);
+    return name;
+  }
+
   createNewDate() {
     const newDate = prompt('Enter date (YYYY-MM-DD):', this.todayDate);
     if (newDate && /^\d{4}-\d{2}-\d{2}$/.test(newDate)) {
@@ -333,7 +355,8 @@ export class AdminComponent implements OnInit {
       id: this.dataService.getNextPageId(this.selectedDate, this.selectedEditionNumber),
       thumbnail: '',
       fullImage: '',
-      sections: []
+      sections: [],
+      pageLabels: { en: '', bn: '' }
     };
     this.fullImageInputMode = 'url';
     this.thumbnailInputMode = 'url';
@@ -343,7 +366,7 @@ export class AdminComponent implements OnInit {
 
   editPage(page: NewspaperPage) {
     this.isEditingPage = true;
-    this.pageForm = { ...page };
+    this.pageForm = { ...page, pageLabels: { en: page.pageLabels?.['en'] ?? '', bn: page.pageLabels?.['bn'] ?? '' } };
     this.fullImageInputMode = 'url';
     this.thumbnailInputMode = 'url';
     this.fullImageFile = null;
@@ -352,7 +375,17 @@ export class AdminComponent implements OnInit {
 
   savePage() {
     if (this.pageForm.id && this.pageForm.fullImage) {
-      const page = this.pageForm as NewspaperPage;
+      const page = { ...this.pageForm } as NewspaperPage;
+      // Strip empty pageLabels
+      if (page.pageLabels) {
+        const en = (page.pageLabels['en'] || '').trim();
+        const bn = (page.pageLabels['bn'] || '').trim();
+        if (en || bn) {
+          page.pageLabels = { en, bn };
+        } else {
+          delete page.pageLabels;
+        }
+      }
       const existingPage = this.pages.find(p => p.id === page.id);
       
       if (existingPage) {
@@ -390,7 +423,7 @@ export class AdminComponent implements OnInit {
 
   cancelPageEdit() {
     this.isEditingPage = false;
-    this.pageForm = { id: 0, thumbnail: '', fullImage: '', sections: [] };
+    this.pageForm = { id: 0, thumbnail: '', fullImage: '', sections: [], pageLabels: { en: '', bn: '' } };
   }
 
   // Section Management

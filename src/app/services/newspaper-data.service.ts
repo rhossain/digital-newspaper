@@ -24,6 +24,8 @@ export interface NewspaperPage {
   thumbnail: string;
   fullImage: string;
   sections: NewsSection[];
+  /** Multilingual page name keyed by language code, e.g. { en: 'Sports', bn: 'খেলাধুলা' } */
+  pageLabels?: { [lang: string]: string };
 }
 
 export interface NewspaperEdition {
@@ -245,6 +247,20 @@ export class NewspaperDataService {
     
     this.dataSubject.next({ ...currentData, editions: newEditions });
     return newEdition;
+  }
+
+  /**
+   * Returns the display label for a page in the given language.
+   * Falls back to another available language, then empty string.
+   */
+  getPageDisplayLabel(page: NewspaperPage, lang: string): string {
+    if (page.pageLabels) {
+      const label = page.pageLabels[lang];
+      if (label) return label;
+      const fallback = Object.values(page.pageLabels).find(v => v);
+      if (fallback) return fallback;
+    }
+    return '';
   }
 
   /**

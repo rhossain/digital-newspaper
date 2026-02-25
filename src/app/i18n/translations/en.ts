@@ -29,6 +29,10 @@ export const EN = {
       'Fifth Edition', 'Sixth Edition', 'Seventh Edition', 'Eighth Edition',
       'Ninth Edition', 'Tenth Edition',
     ],
+    pageNames: [
+      'First Page', 'Second Page', 'Third Page', 'Fourth Page', 'Fifth Page',
+      'Sixth Page', 'Seventh Page', 'Eighth Page', 'Ninth Page', 'Tenth Page',
+    ],
   },
   footer: {
     editor: 'Editor:',

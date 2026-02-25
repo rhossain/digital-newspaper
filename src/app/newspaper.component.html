@@ -108,38 +108,6 @@
     <div class="left-panel">
       <h2 class="panel-title">{{ 'header.pages' | translate }}</h2>
 
-      <!-- Edition Selector: text-only for 1 edition, dropdown for multiple -->
-      <div class="edition-selector" *ngIf="editionsForDate.length > 0">
-        <div
-          class="edition-display"
-          [class.has-dropdown]="editionsForDate.length > 1"
-          (click)="editionsForDate.length > 1 && (editionDropdownOpen = !editionDropdownOpen)"
-          (keydown.enter)="editionsForDate.length > 1 && (editionDropdownOpen = !editionDropdownOpen)"
-          [attr.tabindex]="editionsForDate.length > 1 ? 0 : -1"
-        >
-          <span class="edition-label">{{ currentEdition ? getEditionLabel(currentEdition) : '' }}</span>
-          <svg *ngIf="editionsForDate.length > 1" class="edition-arrow" [class.open]="editionDropdownOpen"
-            width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-            <polyline points="6 9 12 15 18 9"></polyline>
-          </svg>
-        </div>
-
-        <!-- Dropdown options -->
-        <div class="edition-dropdown" *ngIf="editionsForDate.length > 1 && editionDropdownOpen">
-          <button
-            *ngFor="let ed of editionsForDate"
-            class="edition-option"
-            [class.active]="selectedEditionNumber === (ed.edition || 1)"
-            (click)="onEditionChange(ed.edition || 1)"
-          >
-            {{ getEditionLabel(ed) }}
-          </button>
-        </div>
-
-        <!-- Backdrop to close dropdown -->
-        <div class="edition-backdrop" *ngIf="editionDropdownOpen" (click)="editionDropdownOpen = false"></div>
-      </div>
-
       <div class="thumbnail-list" *ngIf="pages.length > 0">
         <div
           *ngFor="let page of pages"
@@ -183,6 +151,67 @@
     </div>
 
     <div class="main-page-container" *ngIf="currentPage">
+
+      <!-- Selectors Bar: Edition & Page Name (before pagination) -->
+      <div class="selectors-bar" *ngIf="editionsForDate.length > 0 || pages.length > 0">
+
+        <!-- Edition Selector -->
+        <div class="selector-widget" *ngIf="editionsForDate.length > 0">
+          <div
+            class="edition-display"
+            [class.has-dropdown]="editionsForDate.length > 1"
+            (click)="editionsForDate.length > 1 && (editionDropdownOpen = !editionDropdownOpen)"
+            (keydown.enter)="editionsForDate.length > 1 && (editionDropdownOpen = !editionDropdownOpen)"
+            [attr.tabindex]="editionsForDate.length > 1 ? 0 : -1"
+          >
+            <span class="edition-label">{{ currentEdition ? getEditionLabel(currentEdition) : '' }}</span>
+            <svg *ngIf="editionsForDate.length > 1" class="edition-arrow" [class.open]="editionDropdownOpen"
+              width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <polyline points="6 9 12 15 18 9"></polyline>
+            </svg>
+          </div>
+          <div class="edition-dropdown" *ngIf="editionsForDate.length > 1 && editionDropdownOpen">
+            <button
+              *ngFor="let ed of editionsForDate"
+              class="edition-option"
+              [class.active]="selectedEditionNumber === (ed.edition || 1)"
+              (click)="onEditionChange(ed.edition || 1)"
+            >
+              {{ getEditionLabel(ed) }}
+            </button>
+          </div>
+          <div class="edition-backdrop" *ngIf="editionDropdownOpen" (click)="editionDropdownOpen = false"></div>
+        </div>
+
+        <!-- Page Name Selector -->
+        <div class="selector-widget" *ngIf="pages.length > 0">
+          <div
+            class="edition-display"
+            [class.has-dropdown]="pages.length > 1"
+            (click)="pages.length > 1 && (pageDropdownOpen = !pageDropdownOpen)"
+            (keydown.enter)="pages.length > 1 && (pageDropdownOpen = !pageDropdownOpen)"
+            [attr.tabindex]="pages.length > 1 ? 0 : -1"
+          >
+            <span class="edition-label">{{ currentPage ? getPageLabel(currentPage) : '' }}</span>
+            <svg *ngIf="pages.length > 1" class="edition-arrow" [class.open]="pageDropdownOpen"
+              width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <polyline points="6 9 12 15 18 9"></polyline>
+            </svg>
+          </div>
+          <div class="edition-dropdown" *ngIf="pages.length > 1 && pageDropdownOpen">
+            <button
+              *ngFor="let page of pages"
+              class="edition-option"
+              [class.active]="currentPage.id === page.id"
+              (click)="selectPage(page); pageDropdownOpen = false"
+            >
+              {{ getPageLabel(page) }}
+            </button>
+          </div>
+          <div class="edition-backdrop" *ngIf="pageDropdownOpen" (click)="pageDropdownOpen = false"></div>
+        </div>
+
+      </div>
 
       <!-- Page Pagination Bar -->
       <div class="page-pagination" *ngIf="pages.length > 1">

@@ -285,6 +285,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   }
 
   editionDropdownOpen = false;
+  pageDropdownOpen = false;
 
   get currentEdition(): NewspaperEdition | null {
     return this.editionsForDate.find(e => (e.edition || 1) === this.selectedEditionNumber) || this.editionsForDate[0] || null;
@@ -294,6 +295,12 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   getEditionLabel(ed: NewspaperEdition): string {
     const label = this.dataService.getEditionDisplayLabel(ed, this.translationService.language);
     return label || this.translationService.getEditionName(ed.edition || 1);
+  }
+
+  /** Returns the display label for a page in the current UI language. */
+  getPageLabel(page: NewspaperPage): string {
+    const label = this.dataService.getPageDisplayLabel(page, this.translationService.language);
+    return label || this.translationService.getPageName(this.pages.indexOf(page) + 1);
   }
 
   formatShortDate(dateStr: string): string {

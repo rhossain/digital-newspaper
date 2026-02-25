@@ -195,7 +195,7 @@
             <img [src]="page.thumbnail || page.fullImage" [alt]="'Page ' + page.id" loading="lazy" decoding="async" />
           </div>
           <div class="page-info">
-            <h3>Page {{ page.id }}</h3>
+            <h3>{{ getPageLabel(page) }}</h3>
             <p>{{ page.sections.length }} sections</p>
           </div>
           <div class="page-actions">
@@ -288,6 +288,30 @@
             <div class="image-preview" *ngIf="pageForm.fullImage" [class.loading]="previewLoading">
               <div class="image-preview-skeleton" *ngIf="previewLoading"></div>
               <img [src]="pageForm.fullImage" alt="Preview" (load)="onFullImagePreviewLoad()" (error)="onFullImagePreviewError()" />
+            </div>
+            <!-- Page Name (multilingual) -->
+            <div class="form-group">
+              <label>Page Name <span style="font-weight:400; color:#888">(optional)</span></label>
+              <div class="edition-label-fields">
+                <label class="edition-label-field">
+                  <span class="edition-label-lang">EN</span>
+                  <input
+                    type="text"
+                    [(ngModel)]="pageForm.pageLabels!['en']"
+                    class="edition-label-input"
+                    placeholder="e.g. Sports"
+                  />
+                </label>
+                <label class="edition-label-field">
+                  <span class="edition-label-lang">বাং</span>
+                  <input
+                    type="text"
+                    [(ngModel)]="pageForm.pageLabels!['bn']"
+                    class="edition-label-input"
+                    placeholder="যেমন: খেলাধুলা"
+                  />
+                </label>
+              </div>
             </div>
           </div>
           <div class="modal-footer">

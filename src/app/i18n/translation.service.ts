@@ -52,6 +52,16 @@ export class TranslationService {
   }
 
   /**
+   * Returns the ordinal page name for a given 1-based page index in the active language.
+   * e.g. 1 → "First Page" / "প্রথম পাতা"
+   * Falls back to "পাতা N" / "Page N" for numbers beyond the list.
+   */
+  getPageName(num: number): string {
+    const names = this.translations[this.language].viewer.pageNames;
+    return names[num - 1] ?? `${this.t('viewer.page')} ${this.toLocaleDigits(num)}`;
+  }
+
+  /**
    * Format a YYYY-MM-DD string according to the active locale.
    * format:
    *   'full'  → weekday + day + month + year  (e.g. "Friday, 24 February 2026")

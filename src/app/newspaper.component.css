@@ -243,12 +243,32 @@
   background-color: var(--color-bg-surface);
 }
 
-/* Edition Selector – same visual for 1 or multiple editions */
-.edition-selector {
-  position: relative;
+/* Selectors Bar – holds Edition and Page Name selectors before the pagination */
+.selectors-bar {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 8px;
   padding: 8px 12px;
   background-color: var(--color-bg-surface);
   border-bottom: 1px solid var(--color-border);
+  align-items: center;
+}
+
+/* Individual selector widget (edition or page) */
+.selector-widget {
+  position: relative;
+  flex: 1;
+  min-width: 120px;
+  max-width: 280px;
+}
+
+/* Edition Selector – kept for backward compat class name on each widget */
+.edition-selector {
+  position: relative;
+  flex: 1;
+  min-width: 120px;
+  max-width: 280px;
 }
 
 .edition-display {
