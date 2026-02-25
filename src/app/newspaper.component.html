@@ -152,65 +152,87 @@
 
     <div class="main-page-container" *ngIf="currentPage">
 
-      <!-- Selectors Bar: Edition & Page Name (before pagination) -->
-      <div class="selectors-bar" *ngIf="editionsForDate.length > 0 || pages.length > 0">
+      <!-- Page Toolbar: Print & Download (left) | Edition & Page selectors (right) -->
+      <div class="page-toolbar">
 
-        <!-- Edition Selector -->
-        <div class="selector-widget" *ngIf="editionsForDate.length > 0">
-          <div
-            class="edition-display"
-            [class.has-dropdown]="editionsForDate.length > 1"
-            (click)="editionsForDate.length > 1 && (editionDropdownOpen = !editionDropdownOpen)"
-            (keydown.enter)="editionsForDate.length > 1 && (editionDropdownOpen = !editionDropdownOpen)"
-            [attr.tabindex]="editionsForDate.length > 1 ? 0 : -1"
-          >
-            <span class="edition-label">{{ currentEdition ? getEditionLabel(currentEdition) : '' }}</span>
-            <svg *ngIf="editionsForDate.length > 1" class="edition-arrow" [class.open]="editionDropdownOpen"
-              width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <polyline points="6 9 12 15 18 9"></polyline>
-            </svg>
-          </div>
-          <div class="edition-dropdown" *ngIf="editionsForDate.length > 1 && editionDropdownOpen">
-            <button
-              *ngFor="let ed of editionsForDate"
-              class="edition-option"
-              [class.active]="selectedEditionNumber === (ed.edition || 1)"
-              (click)="onEditionChange(ed.edition || 1)"
+        <!-- Left: Edition & Page name selectors -->
+        <div class="toolbar-left">
+          <!-- Edition Selector -->
+          <div class="selector-widget" *ngIf="editionsForDate.length > 0">
+            <div
+              class="edition-display"
+              [class.has-dropdown]="editionsForDate.length > 1"
+              (click)="editionsForDate.length > 1 && (editionDropdownOpen = !editionDropdownOpen)"
+              (keydown.enter)="editionsForDate.length > 1 && (editionDropdownOpen = !editionDropdownOpen)"
+              [attr.tabindex]="editionsForDate.length > 1 ? 0 : -1"
             >
-              {{ getEditionLabel(ed) }}
-            </button>
+              <span class="edition-label">{{ currentEdition ? getEditionLabel(currentEdition) : '' }}</span>
+              <svg *ngIf="editionsForDate.length > 1" class="edition-arrow" [class.open]="editionDropdownOpen"
+                width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <polyline points="6 9 12 15 18 9"></polyline>
+              </svg>
+            </div>
+            <div class="edition-dropdown" *ngIf="editionsForDate.length > 1 && editionDropdownOpen">
+              <button
+                *ngFor="let ed of editionsForDate"
+                class="edition-option"
+                [class.active]="selectedEditionNumber === (ed.edition || 1)"
+                (click)="onEditionChange(ed.edition || 1)"
+              >
+                {{ getEditionLabel(ed) }}
+              </button>
+            </div>
+            <div class="edition-backdrop" *ngIf="editionDropdownOpen" (click)="editionDropdownOpen = false"></div>
           </div>
-          <div class="edition-backdrop" *ngIf="editionDropdownOpen" (click)="editionDropdownOpen = false"></div>
+
+          <!-- Page Name Selector -->
+          <div class="selector-widget" *ngIf="pages.length > 0">
+            <div
+              class="edition-display"
+              [class.has-dropdown]="pages.length > 1"
+              (click)="pages.length > 1 && (pageDropdownOpen = !pageDropdownOpen)"
+              (keydown.enter)="pages.length > 1 && (pageDropdownOpen = !pageDropdownOpen)"
+              [attr.tabindex]="pages.length > 1 ? 0 : -1"
+            >
+              <span class="edition-label">{{ currentPage ? getPageLabel(currentPage) : '' }}</span>
+              <svg *ngIf="pages.length > 1" class="edition-arrow" [class.open]="pageDropdownOpen"
+                width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <polyline points="6 9 12 15 18 9"></polyline>
+              </svg>
+            </div>
+            <div class="edition-dropdown" *ngIf="pages.length > 1 && pageDropdownOpen">
+              <button
+                *ngFor="let page of pages"
+                class="edition-option"
+                [class.active]="currentPage.id === page.id"
+                (click)="selectPage(page); pageDropdownOpen = false"
+              >
+                {{ getPageLabel(page) }}
+              </button>
+            </div>
+            <div class="edition-backdrop" *ngIf="pageDropdownOpen" (click)="pageDropdownOpen = false"></div>
+          </div>
         </div>
 
-        <!-- Page Name Selector -->
-        <div class="selector-widget" *ngIf="pages.length > 0">
-          <div
-            class="edition-display"
-            [class.has-dropdown]="pages.length > 1"
-            (click)="pages.length > 1 && (pageDropdownOpen = !pageDropdownOpen)"
-            (keydown.enter)="pages.length > 1 && (pageDropdownOpen = !pageDropdownOpen)"
-            [attr.tabindex]="pages.length > 1 ? 0 : -1"
-          >
-            <span class="edition-label">{{ currentPage ? getPageLabel(currentPage) : '' }}</span>
-            <svg *ngIf="pages.length > 1" class="edition-arrow" [class.open]="pageDropdownOpen"
-              width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <polyline points="6 9 12 15 18 9"></polyline>
+        <!-- Right: Print & Download the full page image -->
+        <div class="toolbar-right">
+          <button class="toolbar-btn" (click)="printImage(resolveImageUrl(currentPage.fullImage), (ts.t('viewer.page') + ' ' + ts.toLocaleDigits(currentPage.id)))" [title]="ts.t('viewer.print')">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="6 9 6 2 18 2 18 9"></polyline>
+              <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
+              <rect x="6" y="14" width="12" height="8"></rect>
             </svg>
-          </div>
-          <div class="edition-dropdown" *ngIf="pages.length > 1 && pageDropdownOpen">
-            <button
-              *ngFor="let page of pages"
-              class="edition-option"
-              [class.active]="currentPage.id === page.id"
-              (click)="selectPage(page); pageDropdownOpen = false"
-            >
-              {{ getPageLabel(page) }}
-            </button>
-          </div>
-          <div class="edition-backdrop" *ngIf="pageDropdownOpen" (click)="pageDropdownOpen = false"></div>
+            <span>{{ 'viewer.print' | translate }}</span>
+          </button>
+          <button class="toolbar-btn" (click)="downloadImage(resolveImageUrl(currentPage.fullImage), (ts.t('viewer.page') + ' ' + ts.toLocaleDigits(currentPage.id)))" [title]="ts.t('viewer.download')">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="7 10 12 15 17 10"></polyline>
+              <line x1="12" y1="15" x2="12" y2="3"></line>
+            </svg>
+            <span>{{ 'viewer.download' | translate }}</span>
+          </button>
         </div>
-
       </div>
 
       <!-- Page Pagination Bar -->

@@ -243,32 +243,74 @@
   background-color: var(--color-bg-surface);
 }
 
-/* Selectors Bar – holds Edition and Page Name selectors before the pagination */
-.selectors-bar {
+/* Page Toolbar: Print/Download (left) | Edition & Page selectors (right) */
+.page-toolbar {
   display: flex;
   flex-direction: row;
-  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
   gap: 8px;
+  width: 100%;
   padding: 8px 12px;
   background-color: var(--color-bg-surface);
   border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.toolbar-left {
+  display: flex;
+  flex-direction: row;
+  gap: 6px;
   align-items: center;
+  flex-shrink: 0;
+}
+
+.toolbar-right {
+  display: flex;
+  flex-direction: row;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  border-radius: 20px;
+  border: 1.5px solid var(--color-border-ui);
+  background: var(--color-bg-muted);
+  color: var(--color-text-medium);
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+  line-height: 1;
+}
+
+.toolbar-btn:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  background: var(--color-primary-light);
 }
 
 /* Individual selector widget (edition or page) */
 .selector-widget {
   position: relative;
-  flex: 1;
   min-width: 120px;
-  max-width: 280px;
+  max-width: 220px;
 }
 
 /* Edition Selector – kept for backward compat class name on each widget */
 .edition-selector {
   position: relative;
-  flex: 1;
   min-width: 120px;
-  max-width: 280px;
+  max-width: 220px;
 }
 
 .edition-display {
