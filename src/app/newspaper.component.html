@@ -214,7 +214,7 @@
       </div>
 
       <!-- Page Pagination Bar -->
-      <div class="page-pagination" *ngIf="pages.length > 1">
+      <div class="page-pagination" *ngIf="pages.length > 1 && settings?.showPagePagination !== false">
         <button
           class="pagination-btn"
           (click)="selectPage(pages[pages.indexOf(currentPage) - 1])"

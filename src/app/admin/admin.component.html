@@ -524,6 +524,18 @@
       </div>
 
       <div class="settings-content">
+        <!-- Viewer UI Settings -->
+        <div class="settings-section">
+          <h3>Viewer Options</h3>
+          <div class="form-group">
+            <label class="toggle-label">
+              <input type="checkbox" [(ngModel)]="settingsForm.showPagePagination" />
+              <span>Show Page Pagination Bar</span>
+            </label>
+            <p class="hint-text">When enabled, a numbered pagination bar is shown above the newspaper page in the viewer.</p>
+          </div>
+        </div>
+
         <!-- Language Settings -->
         <div class="settings-section">
           <h3>Language / ভাষা</h3>

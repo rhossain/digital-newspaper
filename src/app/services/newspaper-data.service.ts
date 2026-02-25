@@ -62,6 +62,7 @@ export interface GlobalSettings {
     website?: string;
   };
   language?: 'en' | 'bn';
+  showPagePagination?: boolean;
 }
 
 export interface NewspaperData {

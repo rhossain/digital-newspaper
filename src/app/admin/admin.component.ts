@@ -1167,7 +1167,8 @@ export class AdminComponent implements OnInit {
       specificDate: settings.specificDate || '',
       editor: settings.editor || '',
       address: settings.address || {},
-      language: settings.language || 'en'
+      language: settings.language || 'en',
+      showPagePagination: settings.showPagePagination !== false
     };
   }
 
@@ -1180,7 +1181,8 @@ export class AdminComponent implements OnInit {
       specificDate: this.settingsForm.specificDate || '',
       editor: this.settingsForm.editor || '',
       address: this.settingsForm.address || {},
-      language: this.settingsForm.language || 'en'
+      language: this.settingsForm.language || 'en',
+      showPagePagination: this.settingsForm.showPagePagination !== false
     };
     
     // Update settings in the data service
