@@ -245,6 +245,11 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     this.displayDate = this.translationService.formatDate(this.selectedDate, 'full');
   }
 
+  /** Always shows today's date formatted in the active locale. */
+  get todayDisplayDate(): string {
+    return this.translationService.formatDate(this.todayDate, 'full');
+  }
+
   checkIfToday() {
     this.isToday = this.selectedDate === this.todayDate;
   }

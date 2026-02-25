@@ -48,7 +48,7 @@
         </svg>
         <div class="header-text" *ngIf="settings && !settings.logo?.url">
           <h1 class="newspaper-title">{{ settings.logo?.alt || 'Digital Newspaper' }}</h1>
-          <p class="newspaper-date">{{ displayDate }}</p>
+          <p class="newspaper-date">{{ todayDisplayDate }}</p>
         </div>
       </div>
     </div>
@@ -91,7 +91,7 @@
           </svg>
         </a>
       </div>
-      <p class="newspaper-date">{{ displayDate }}</p>
+      <p class="newspaper-date">{{ todayDisplayDate }}</p>
       <!-- <a href="/admin" class="admin-link" title="Admin Panel">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="12" cy="12" r="3"></circle>
