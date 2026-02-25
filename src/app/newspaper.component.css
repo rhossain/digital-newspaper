@@ -231,11 +231,20 @@
   border-right: 1px solid var(--color-border);
   overflow-y: auto;
   box-shadow: 2px 0 5px rgba(0, 0, 0, 0.05);
+  transition: width 0.3s ease, min-width 0.3s ease, border 0.3s ease, box-shadow 0.3s ease;
+}
+
+.left-panel.hidden {
+  width: 0 !important;
+  min-width: 0 !important;
+  border-right: none;
+  overflow: hidden;
+  box-shadow: none;
 }
 
 .panel-title {
   margin: 0;
-  padding: 20px;
+  padding: 10px 12px;
   font-size: 20px;
   font-weight: bold;
   color: var(--color-text-base);
@@ -789,6 +798,17 @@
 
 .right-panel.open {
   animation: slideIn 0.3s ease;
+}
+
+.panel-toggle-btn {
+  border-color: var(--color-border-ui);
+  color: var(--color-text-medium);
+}
+
+.panel-toggle-btn.panel-hidden {
+  background: var(--color-primary-light);
+  border-color: var(--color-primary);
+  color: var(--color-primary);
 }
 
 @keyframes slideIn {

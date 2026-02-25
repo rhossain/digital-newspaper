@@ -286,6 +286,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
 
   editionDropdownOpen = false;
   pageDropdownOpen = false;
+  leftPanelVisible = true;
 
   get currentEdition(): NewspaperEdition | null {
     return this.editionsForDate.find(e => (e.edition || 1) === this.selectedEditionNumber) || this.editionsForDate[0] || null;
