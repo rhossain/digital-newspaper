@@ -202,6 +202,146 @@
   box-shadow: 0 0 0 3px rgba(25, 118, 210, 0.1);
 }
 
+/* Edition bar */
+.edition-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  width: 100%;          /* force wrap to own row inside date-selector-bar */
+  order: 10;            /* render after date controls */
+  border-top: 1px solid var(--color-border-ui);
+  padding-top: 8px;
+  margin-top: -4px;     /* tighten the gap above */
+}
+
+.edition-bar-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  margin-right: 4px;
+  white-space: nowrap;
+}
+
+.edition-btn {
+  padding: 5px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  border: 1.5px solid var(--color-primary);
+  border-radius: 20px;
+  background: transparent;
+  color: var(--color-primary);
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+  white-space: nowrap;
+}
+
+.edition-btn:hover {
+  background: color-mix(in srgb, var(--color-primary) 12%, transparent);
+}
+
+.edition-btn.active {
+  background: var(--color-primary);
+  color: var(--color-white);
+}
+
+/* Pencil icon button beside each edition tab */
+.edition-label-edit-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  margin-left: -4px;
+  margin-right: 6px;
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  color: var(--color-text-muted);
+  opacity: 0.6;
+  transition: opacity 0.2s, color 0.2s;
+}
+
+.edition-label-edit-btn:hover {
+  opacity: 1;
+  color: var(--color-primary);
+}
+
+/* Inline label editor panel */
+.edition-label-editor {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  width: 100%;
+  padding: 8px 10px;
+  margin-top: 6px;
+  background: var(--color-white);
+  border: 1.5px solid var(--color-primary);
+  border-radius: 8px;
+}
+
+.edition-label-editor-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-primary);
+  white-space: nowrap;
+}
+
+.edition-label-fields {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  flex: 1;
+}
+
+.edition-label-field {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.edition-label-lang {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.edition-label-input {
+  border: 1px solid var(--color-border-ui);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 13px;
+  width: 130px;
+  min-width: 80px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.edition-label-input:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px rgba(25, 118, 210, 0.12);
+}
+
+.edition-label-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.btn-outline {
+  background: transparent;
+  border: 1.5px dashed var(--color-text-muted);
+  color: var(--color-text-muted);
+  border-radius: 20px;
+}
+
+.btn-outline:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
 /* Body Layout */
 .admin-body {
   display: flex;

@@ -42,6 +42,16 @@ export class TranslationService {
   }
 
   /**
+   * Returns the ordinal edition name for a given 1-based number in the active language.
+   * e.g. 1 → "First Edition" / "প্রথম সংস্করণ"
+   * Falls back to "<edition-word> N" for numbers beyond the list.
+   */
+  getEditionName(num: number): string {
+    const names = this.translations[this.language].viewer.editionNames;
+    return names[num - 1] ?? `${this.t('viewer.edition')} ${this.toLocaleDigits(num)}`;
+  }
+
+  /**
    * Format a YYYY-MM-DD string according to the active locale.
    * format:
    *   'full'  → weekday + day + month + year  (e.g. "Friday, 24 February 2026")

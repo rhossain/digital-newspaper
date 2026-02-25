@@ -23,6 +23,12 @@ export const EN = {
     goToSection: 'Go to this section',
     print: 'Print',
     download: 'Download',
+    edition: 'Edition',
+    editionNames: [
+      'First Edition', 'Second Edition', 'Third Edition', 'Fourth Edition',
+      'Fifth Edition', 'Sixth Edition', 'Seventh Edition', 'Eighth Edition',
+      'Ninth Edition', 'Tenth Edition',
+    ],
   },
   footer: {
     editor: 'Editor:',

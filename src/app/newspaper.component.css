@@ -243,6 +243,102 @@
   background-color: var(--color-bg-surface);
 }
 
+/* Edition Selector – same visual for 1 or multiple editions */
+.edition-selector {
+  position: relative;
+  padding: 8px 12px;
+  background-color: var(--color-bg-surface);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.edition-display {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1.5px solid var(--color-primary);
+  border-radius: 20px;
+  background: var(--color-primary);
+  color: var(--color-white);
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  user-select: none;
+}
+
+.edition-display.has-dropdown {
+  cursor: pointer;
+}
+
+.edition-display.has-dropdown:hover {
+  background: color-mix(in srgb, var(--color-primary) 85%, black);
+}
+
+.edition-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.edition-arrow {
+  flex-shrink: 0;
+  transition: transform 0.2s ease;
+}
+
+.edition-arrow.open {
+  transform: rotate(180deg);
+}
+
+.edition-dropdown {
+  position: absolute;
+  top: calc(100% - 4px);
+  left: 12px;
+  right: 12px;
+  background: var(--color-white);
+  border: 1.5px solid var(--color-primary);
+  border-radius: 12px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+  z-index: 200;
+  overflow: hidden;
+}
+
+.edition-option {
+  display: block;
+  width: 100%;
+  padding: 9px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--color-primary);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.edition-option:not(:last-child) {
+  border-bottom: 1px solid var(--color-border);
+}
+
+.edition-option:hover {
+  background: color-mix(in srgb, var(--color-primary) 10%, transparent);
+}
+
+.edition-option.active {
+  background: var(--color-primary);
+  color: var(--color-white);
+}
+
+.edition-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 199;
+}
+
 .thumbnail-list {
   padding: 10px;
 }

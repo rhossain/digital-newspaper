@@ -111,6 +111,66 @@
         New Date
       </button>
     </div>
+
+    <!-- Edition selector (shown when a date has multiple editions) -->
+    <div class="edition-bar" *ngIf="activeMainTab === 'content' && editionsForDate.length > 0">
+      <span class="edition-bar-label">Edition:</span>
+      <ng-container *ngFor="let ed of editionsForDate">
+        <button
+          class="edition-btn"
+          [class.active]="selectedEditionNumber === (ed.edition || 1)"
+          (click)="onEditionChange(ed.edition || 1)"
+        >
+          {{ getEditionLabel(ed) }}
+        </button>
+        <button
+          class="edition-label-edit-btn"
+          (click)="openEditionLabelEditor(ed); $event.stopPropagation()"
+          title="Edit labels for this edition"
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+          </svg>
+        </button>
+      </ng-container>
+      <button class="btn btn-sm btn-outline" (click)="createNewEdition()" title="Add another edition for this date">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="12" y1="5" x2="12" y2="19"></line>
+          <line x1="5" y1="12" x2="19" y2="12"></line>
+        </svg>
+        Add Edition
+      </button>
+
+      <!-- Inline multilingual label editor -->
+      <div class="edition-label-editor" *ngIf="editingEditionLabel">
+        <span class="edition-label-editor-title">Labels for Edition {{ editingEditionLabel.edition || 1 }}:</span>
+        <div class="edition-label-fields">
+          <label class="edition-label-field">
+            <span class="edition-label-lang">EN</span>
+            <input
+              type="text"
+              [(ngModel)]="editionLabelForm.en"
+              class="edition-label-input"
+              placeholder="e.g. Morning"
+            />
+          </label>
+          <label class="edition-label-field">
+            <span class="edition-label-lang">বাং</span>
+            <input
+              type="text"
+              [(ngModel)]="editionLabelForm.bn"
+              class="edition-label-input"
+              placeholder="যেমন: সকাল"
+            />
+          </label>
+        </div>
+        <div class="edition-label-actions">
+          <button class="btn btn-sm btn-success" (click)="saveEditionLabels()">Save</button>
+          <button class="btn btn-sm btn-secondary" (click)="editingEditionLabel = null">Cancel</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <div class="admin-body" *ngIf="isAuthenticated && activeMainTab === 'content'">

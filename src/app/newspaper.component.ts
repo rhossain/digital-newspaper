@@ -48,6 +48,10 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   availableDates: string[] = [];
   isToday: boolean = true;
   isLoading: boolean = false;
+
+  // Edition navigation
+  selectedEditionNumber: number = 1;
+  editionsForDate: NewspaperEdition[] = [];
   
   // Global settings
   settings: GlobalSettings | null = null;
@@ -87,6 +91,13 @@ export class NewspaperComponent implements OnInit, OnDestroy {
       }
     });
     this.subscriptions.push(routeSubscription);
+
+    // Subscribe to query parameters (edition number)
+    const querySubscription = this.route.queryParamMap.subscribe(params => {
+      const editionParam = params.get('e');
+      this.selectedEditionNumber = editionParam ? parseInt(editionParam, 10) : 1;
+    });
+    this.subscriptions.push(querySubscription);
     
     // Subscribe to date changes
     const dateSubscription = this.dataService.currentDate$.subscribe(date => {
@@ -166,7 +177,10 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     this.imageLoaded = false;
     this.sectionImageLoading = false;
 
-    const edition = this.dataService.getCurrentEdition();
+    // Populate edition tabs for current date
+    this.editionsForDate = this.dataService.getEditionsByDate(this.selectedDate);
+
+    const edition = this.dataService.getCurrentEdition(this.selectedEditionNumber);
     if (edition) {
       this.pages = edition.pages;
       // Initialize loading states for thumbnails
@@ -236,6 +250,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   }
 
   onDateChange() {
+    this.selectedEditionNumber = 1;
     this.dataService.setCurrentDate(this.selectedDate);
     this.loadCurrentEdition();
     this.checkIfToday();
@@ -260,6 +275,25 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   onDatePickerChange(date: string) {
     this.selectedDate = date;
     this.onDateChange();
+  }
+
+  onEditionChange(editionNumber: number) {
+    this.selectedEditionNumber = editionNumber;
+    this.editionDropdownOpen = false;
+    this.loadCurrentEdition();
+    this.updateUrl();
+  }
+
+  editionDropdownOpen = false;
+
+  get currentEdition(): NewspaperEdition | null {
+    return this.editionsForDate.find(e => (e.edition || 1) === this.selectedEditionNumber) || this.editionsForDate[0] || null;
+  }
+
+  /** Returns the display label for an edition in the current UI language. */
+  getEditionLabel(ed: NewspaperEdition): string {
+    const label = this.dataService.getEditionDisplayLabel(ed, this.translationService.language);
+    return label || this.translationService.getEditionName(ed.edition || 1);
   }
 
   formatShortDate(dateStr: string): string {
@@ -634,12 +668,15 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   }
 
   private updateUrl() {
-    // Update URL with current date and section if selected
+    // Update URL with current date, optional edition, and section if selected
     if (this.selectedDate) {
+      const queryParams = this.selectedEditionNumber > 1 ? { e: this.selectedEditionNumber } : {};
       if (this.selectedSection) {
         // Use title-based slug with section ID fallback
         const slug = this.createSectionSlug(this.selectedSection.title, this.selectedSection.id);
-        this.router.navigate(['/', this.selectedDate, slug], { replaceUrl: true });
+        this.router.navigate(['/', this.selectedDate, slug], { queryParams, replaceUrl: true });
+      } else if (this.selectedEditionNumber > 1) {
+        this.router.navigate(['/', this.selectedDate], { queryParams, replaceUrl: true });
       } else {
         // Use Location.replaceState instead of router.navigate so that
         // paramMap does NOT fire — this prevents the cascade:

@@ -2,9 +2,10 @@ import { Component, OnInit, ViewChild, ElementRef, ChangeDetectorRef } from '@an
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
-import { NewspaperDataService, NewspaperPage, NewsSection, GlobalSettings } from '../services/newspaper-data.service';
+import { NewspaperDataService, NewspaperPage, NewsSection, GlobalSettings, NewspaperEdition } from '../services/newspaper-data.service';
 import { AuthService } from '../services/auth.service';
 import { ToasterService } from '../services/toaster.service';
+import { TranslationService } from '../i18n/translation.service';
 
 @Component({
   selector: 'app-admin',
@@ -25,6 +26,12 @@ export class AdminComponent implements OnInit {
   availableDates: string[] = [];
   todayDate: string = '';
   isLoadingEdition: boolean = false;
+
+  // Edition management
+  selectedEditionNumber: number = 1;
+  editionsForDate: NewspaperEdition[] = [];
+  editingEditionLabel: NewspaperEdition | null = null;
+  editionLabelForm: { en: string; bn: string } = { en: '', bn: '' };
   
   // UI State
   activeTab: 'pages' | 'sections' = 'pages';
@@ -106,7 +113,8 @@ export class AdminComponent implements OnInit {
     private router: Router,
     private cdr: ChangeDetectorRef,
     private toaster: ToasterService,
-    private authService: AuthService
+    private authService: AuthService,
+    private translationService: TranslationService
   ) {}
 
   ngOnInit() {
@@ -198,13 +206,18 @@ export class AdminComponent implements OnInit {
     this.isLoadingEdition = true;
     this.dataService.setCurrentDate(this.selectedDate);
     
+    // Populate edition tabs for this date
+    this.editionsForDate = this.dataService.getEditionsByDate(this.selectedDate);
+
     // Load edition immediately from service (no network delay)
-    const edition = this.dataService.getCurrentEdition();
+    const edition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);
     if (edition) {
       this.pages = edition.pages;
     } else {
-      // Create new edition if it doesn't exist
-      this.dataService.getOrCreateEdition(this.selectedDate);
+      // Auto-create the first edition; additional editions are created explicitly
+      if (this.selectedEditionNumber === 1) {
+        this.dataService.getOrCreateEdition(this.selectedDate, 1);
+      }
       this.pages = [];
     }
     this.isLoadingEdition = false;
@@ -212,11 +225,80 @@ export class AdminComponent implements OnInit {
   }
 
   onDateChange() {
+    this.selectedEditionNumber = 1;
     this.loadCurrentEdition();
     this.selectedPage = null;
     this.selectedSection = null;
     this.isEditingPage = false;
     this.isEditingSection = false;
+  }
+
+  onEditionChange(editionNumber: number) {
+    this.selectedEditionNumber = editionNumber;
+    this.selectedPage = null;
+    this.selectedSection = null;
+    this.isEditingPage = false;
+    this.isEditingSection = false;
+    this.loadCurrentEdition();
+  }
+
+  createNewEdition() {
+    const editionNumbers = this.editionsForDate.map(e => e.edition || 1);
+    const nextEditionNumber = editionNumbers.length > 0 ? Math.max(...editionNumbers) + 1 : 2;
+
+    this.dataService.getOrCreateEdition(this.selectedDate, nextEditionNumber);
+    this.selectedEditionNumber = nextEditionNumber;
+    this.loadCurrentEdition();
+    this.toaster.success(`Edition ${nextEditionNumber} created!`);
+
+    // Open label editor immediately for the new edition
+    const newEd = this.editionsForDate.find(e => (e.edition || 1) === nextEditionNumber);
+    if (newEd) this.openEditionLabelEditor(newEd);
+  }
+
+  openEditionLabelEditor(ed: NewspaperEdition) {
+    this.editingEditionLabel = ed;
+    this.editionLabelForm = {
+      en: ed.editionLabels?.['en'] ?? ed.editionLabel ?? '',
+      bn: ed.editionLabels?.['bn'] ?? '',
+    };
+  }
+
+  saveEditionLabels() {
+    if (!this.editingEditionLabel) return;
+    const targetNum = this.editingEditionLabel.edition || 1;
+    const data = this.dataService.getData();
+    const editions = data.editions.map(e =>
+      e.date === this.selectedDate && (e.edition || 1) === targetNum
+        ? { ...e, editionLabels: { en: this.editionLabelForm.en.trim(), bn: this.editionLabelForm.bn.trim() } }
+        : e
+    );
+    this.dataService['dataSubject'].next({ ...data, editions });
+    this.editingEditionLabel = null;
+    this.loadCurrentEdition();
+    this.toaster.success('Edition labels saved!');
+  }
+
+  /** Display label for the admin UI (always shows EN / BN side-by-side if custom labels are set). */
+  getEditionLabel(ed: NewspaperEdition): string {
+    const en = ed.editionLabels?.['en'] ?? ed.editionLabel ?? '';
+    const bn = ed.editionLabels?.['bn'] ?? '';
+    if (en || bn) {
+      return en && bn ? `${en} / ${bn}` : en || bn;
+    }
+    // No custom label: show ordinal names for both languages separated by /
+    const enName = this.getEditionOrdinalName(ed.edition || 1, 'en');
+    const bnName = this.getEditionOrdinalName(ed.edition || 1, 'bn');
+    return `${enName} / ${bnName}`;
+  }
+
+  /** Returns the ordinal edition name for a specific language. */
+  private getEditionOrdinalName(num: number, lang: 'en' | 'bn'): string {
+    const prevLang = this.translationService.language;
+    this.translationService.setLanguage(lang);
+    const name = this.translationService.getEditionName(num);
+    this.translationService.setLanguage(prevLang);
+    return name;
   }
 
   createNewDate() {
@@ -248,7 +330,7 @@ export class AdminComponent implements OnInit {
   newPage() {
     this.isEditingPage = true;
     this.pageForm = {
-      id: this.dataService.getNextPageId(this.selectedDate),
+      id: this.dataService.getNextPageId(this.selectedDate, this.selectedEditionNumber),
       thumbnail: '',
       fullImage: '',
       sections: []
@@ -274,13 +356,13 @@ export class AdminComponent implements OnInit {
       const existingPage = this.pages.find(p => p.id === page.id);
       
       if (existingPage) {
-        this.dataService.updatePage(page.id, page, this.selectedDate);
+        this.dataService.updatePage(page.id, page, this.selectedDate, this.selectedEditionNumber);
       } else {
-        this.dataService.addPage(page, this.selectedDate);
+        this.dataService.addPage(page, this.selectedDate, this.selectedEditionNumber);
       }
       
       // Update local pages immediately from service (no network call)
-      const edition = this.dataService.getCurrentEdition();
+      const edition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);
       if (edition) {
         this.pages = edition.pages;
       }
@@ -292,13 +374,13 @@ export class AdminComponent implements OnInit {
 
   deletePage(page: NewspaperPage) {
     if (confirm(`Delete page ${page.id}?`)) {
-      this.dataService.deletePage(page.id, this.selectedDate);
+      this.dataService.deletePage(page.id, this.selectedDate, this.selectedEditionNumber);
       if (this.selectedPage?.id === page.id) {
         this.selectedPage = null;
       }
       
       // Update local pages immediately from service (no network call)
-      const edition = this.dataService.getCurrentEdition();
+      const edition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);
       if (edition) {
         this.pages = edition.pages;
       }
@@ -373,20 +455,20 @@ export class AdminComponent implements OnInit {
       console.log('Saving section:', section);
       
       // Check if section exists by looking in the service data (not the stale selectedPage)
-      const currentEdition = this.dataService.getEditionByDate(this.selectedDate);
+      const currentEdition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);
       const currentPage = currentEdition?.pages.find(p => p.id === this.selectedPage?.id);
       const existingSection = currentPage?.sections.find(s => s.id === section.id);
       
       if (existingSection) {
         console.log('Updating existing section');
-        this.dataService.updateSection(this.selectedPage.id, section.id, section, this.selectedDate);
+        this.dataService.updateSection(this.selectedPage.id, section.id, section, this.selectedDate, this.selectedEditionNumber);
       } else {
         console.log('Adding new section');
-        this.dataService.addSection(this.selectedPage.id, section, this.selectedDate);
+        this.dataService.addSection(this.selectedPage.id, section, this.selectedDate, this.selectedEditionNumber);
       }
       
       // Update local pages immediately from service (no network call)
-      const edition = this.dataService.getCurrentEdition();
+      const edition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);
       if (edition) {
         this.pages = edition.pages;
       }
@@ -409,10 +491,10 @@ export class AdminComponent implements OnInit {
 
   deleteSection(section: NewsSection) {
     if (this.selectedPage && confirm(`Delete section "${section.title}"?`)) {
-      this.dataService.deleteSection(this.selectedPage.id, section.id, this.selectedDate);
+      this.dataService.deleteSection(this.selectedPage.id, section.id, this.selectedDate, this.selectedEditionNumber);
       
       // Update local pages immediately from service (no network call)
-      const edition = this.dataService.getCurrentEdition();
+      const edition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);
       if (edition) {
         this.pages = edition.pages;
       }
