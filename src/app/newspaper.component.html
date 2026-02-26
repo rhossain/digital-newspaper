@@ -317,17 +317,26 @@
             <!-- <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg> -->
             <span class="footer-info-item-address">{{ settings?.address?.line1 }}<ng-container *ngIf="settings?.address?.line2">, {{ settings?.address?.line2 }}</ng-container></span>
           </div>
-          <div class="footer-info-item" *ngIf="settings?.address?.phone">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.61 3.41 2 2 0 0 1 3.59 1.24h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.8a16 16 0 0 0 6.29 6.29l.96-.96a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
-            <a class="footer-info-item-phone" [href]="'tel:' + settings?.address?.phone">{{ settings?.address?.phone }}</a>
-          </div>
-          <div class="footer-info-item" *ngIf="settings?.address?.email">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
-            <a class="footer-info-item-email" [href]="'mailto:' + settings?.address?.email">{{ settings?.address?.email }}</a>
-          </div>
-          <div class="footer-info-item" *ngIf="settings?.address?.website">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
-            <a class="footer-info-item-website" [href]="settings?.address?.website" target="_blank" rel="noopener noreferrer">{{ settings?.address?.website }}</a>
+          <div class="footer-info-item footer-contact-row"
+               *ngIf="settings?.address?.phone || settings?.address?.email || settings?.address?.website">
+            <div class="footer-info-item-phone" *ngIf="settings?.address?.phone">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.61 3.41 2 2 0 0 1 3.59 1.24h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.8a16 16 0 0 0 6.29 6.29l.96-.96a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
+              <a [href]="'tel:' + settings?.address?.phone">{{ settings?.address?.phone }}</a>
+            </div>
+            <span class="footer-contact-divider"
+                  *ngIf="settings?.address?.phone && settings?.address?.email">|</span>
+            <div class="footer-info-item-email" *ngIf="settings?.address?.email">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
+              <a [href]="'mailto:' + settings?.address?.email">{{ settings?.address?.email }}</a>
+            </div>
+            <span class="footer-contact-divider"
+                  *ngIf="settings?.address?.email && settings?.address?.website">|</span>
+            <span class="footer-contact-divider"
+                  *ngIf="!settings?.address?.email && settings?.address?.phone && settings?.address?.website">|</span>
+            <div class="footer-info-item-website" *ngIf="settings?.address?.website">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
+              <a [href]="settings?.address?.website" target="_blank" rel="noopener noreferrer">{{ settings?.address?.website }}</a>
+            </div>
           </div>
         </div>
       </div>
