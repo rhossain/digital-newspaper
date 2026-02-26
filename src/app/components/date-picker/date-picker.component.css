@@ -9,13 +9,14 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 12px;
+  padding: 7px 12px;
   border-radius: 8px;
   border: 2px solid var(--color-border-ui);
   background: var(--color-white);
   color: var(--color-primary);
   font-size: 14px;
   font-weight: 600;
+  line-height: 100%;
   cursor: pointer;
   transition: background 0.2s, border-color 0.2s;
   white-space: nowrap;

@@ -288,6 +288,7 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  min-height: 34px;
   padding: 5px 12px;
   border-radius: 20px;
   border: 1.5px solid var(--color-border-ui);
@@ -318,7 +319,7 @@
 /* Edition Selector – kept for backward compat class name on each widget */
 .edition-selector {
   position: relative;
-  min-width: 120px;
+  min-width: 130px;
   max-width: 220px;
 }
 
@@ -335,6 +336,7 @@
   font-size: 12px;
   font-weight: 600;
   font-family: inherit;
+  line-height: 17px;
   user-select: none;
 }
 
@@ -365,12 +367,12 @@
 
 .edition-dropdown {
   position: absolute;
-  top: calc(100% - 4px);
-  left: 12px;
-  right: 12px;
+  top: calc(100% + 1px);
+  left: 4px;
+  right: 4px;
   background: var(--color-white);
   border: 1.5px solid var(--color-primary);
-  border-radius: 12px;
+  border-radius: 4px;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
   z-index: 200;
   overflow: hidden;
@@ -379,10 +381,11 @@
 .edition-option {
   display: block;
   width: 100%;
-  padding: 9px 14px;
+  padding: 8px;
   font-size: 12px;
   font-weight: 600;
   font-family: inherit;
+  line-height: 100%;
   text-align: left;
   background: transparent;
   border: none;
@@ -464,11 +467,17 @@
   right: 15px;
   background-color: rgba(25, 118, 210, 0.9);
   color: var(--color-white);
-  padding: 4px 10px;
+  padding: 4px 2px;
   border-radius: 12px;
   font-size: 12px;
   font-weight: bold;
   z-index: 1;
+  line-height: 100%;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 /* Skeleton Loader Styles */
@@ -654,8 +663,7 @@
 
 /* Page Footer Info Bar */
 .page-footer-info {
-  width: 80%;
-  max-width: 500px;
+  width: 100%;
   margin: 4px 20px 0;
   background: var(--color-white);
   border-top: 2px solid var(--color-border-ui);
@@ -973,6 +981,7 @@
   border-radius: 25px;
   font-size: 14px;
   font-weight: bold;
+  line-height: 100%;
   cursor: pointer;
   display: flex;
   align-items: center;
