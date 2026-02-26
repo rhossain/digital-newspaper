@@ -307,21 +307,21 @@
       </div>
 
       <!-- Page Footer Info -->
-      <div class="page-footer-info" *ngIf="settings?.editor || settings?.address?.line1 || settings?.address?.phone || settings?.address?.email || settings?.address?.website">
+      <div class="page-footer-info" *ngIf="localizedEditor || localizedAddressLine1 || settings?.address?.phone || settings?.address?.email || settings?.address?.website">
         <div class="footer-info-inner">
-          <div class="footer-info-item" *ngIf="settings?.editor">
+          <div class="footer-info-item" *ngIf="localizedEditor">
             <!-- <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg> -->
-            <span class="footer-info-item-editor">{{ 'footer.editor' | translate }} <strong>{{ settings?.editor }}</strong></span>
+            <span class="footer-info-item-editor">{{ 'footer.editor' | translate }} <strong>{{ localizedEditor }}</strong></span>
           </div>
-          <div class="footer-info-item" *ngIf="settings?.address?.line1">
+          <div class="footer-info-item" *ngIf="localizedAddressLine1">
             <!-- <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg> -->
-            <span class="footer-info-item-address">{{ settings?.address?.line1 }}<ng-container *ngIf="settings?.address?.line2">, {{ settings?.address?.line2 }}</ng-container></span>
+            <span class="footer-info-item-address">{{ localizedAddressLine1 }}<ng-container *ngIf="localizedAddressLine2">, {{ localizedAddressLine2 }}</ng-container></span>
           </div>
           <div class="footer-info-item footer-contact-row"
                *ngIf="settings?.address?.phone || settings?.address?.email || settings?.address?.website">
             <div class="footer-info-item-phone" *ngIf="settings?.address?.phone">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.61 3.41 2 2 0 0 1 3.59 1.24h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.8a16 16 0 0 0 6.29 6.29l.96-.96a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
-              <a [href]="'tel:' + settings?.address?.phone">{{ settings?.address?.phone }}</a>
+              <a [href]="'tel:' + settings?.address?.phone">{{ localizedPhone }}</a>
             </div>
             <span class="footer-contact-divider"
                   *ngIf="settings?.address?.phone && settings?.address?.email">|</span>

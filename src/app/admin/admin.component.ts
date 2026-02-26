@@ -69,10 +69,14 @@ export class AdminComponent implements OnInit {
     defaultDateMode: 'current',
     specificDate: '',
     editor: '',
+    editorLabels: { en: '', bn: '' },
     address: {
       line1: '',
+      line1Labels: { en: '', bn: '' },
       line2: '',
+      line2Labels: { en: '', bn: '' },
       phone: '',
+      phoneLabels: { en: '', bn: '' },
       email: '',
       website: ''
     },
@@ -1160,27 +1164,69 @@ export class AdminComponent implements OnInit {
   // Global Settings Management
   loadSettings(): void {
     const settings = this.dataService.getSettings();
+    const addr = settings.address || {};
     this.settingsForm = {
       logo: settings.logo || { url: '', alt: 'Digital Newspaper' },
       socialLinks: settings.socialLinks || {},
       defaultDateMode: settings.defaultDateMode || 'current',
       specificDate: settings.specificDate || '',
       editor: settings.editor || '',
-      address: settings.address || {},
+      editorLabels: {
+        en: settings.editorLabels?.['en'] ?? settings.editor ?? '',
+        bn: settings.editorLabels?.['bn'] ?? ''
+      },
+      address: {
+        ...addr,
+        line1Labels: {
+          en: addr.line1Labels?.['en'] ?? addr.line1 ?? '',
+          bn: addr.line1Labels?.['bn'] ?? ''
+        },
+        line2Labels: {
+          en: addr.line2Labels?.['en'] ?? addr.line2 ?? '',
+          bn: addr.line2Labels?.['bn'] ?? ''
+        },
+        phoneLabels: {
+          en: addr.phoneLabels?.['en'] ?? addr.phone ?? '',
+          bn: addr.phoneLabels?.['bn'] ?? ''
+        }
+      },
       language: settings.language || 'en',
       showPagePagination: settings.showPagePagination !== false
     };
   }
 
   saveSettings(): void {
+    // Strip empty labels so we don't bloat saved data
+    const editorLabels = this.settingsForm.editorLabels || {};
+    const cleanEditorLabels = { en: (editorLabels['en'] || '').trim(), bn: (editorLabels['bn'] || '').trim() };
+
+    const addr = this.settingsForm.address || {};
+    const line1Labels = addr.line1Labels || {};
+    const line2Labels = addr.line2Labels || {};
+    const phoneLabels = addr.phoneLabels || {};
+    const cleanLine1Labels = { en: (line1Labels['en'] || '').trim(), bn: (line1Labels['bn'] || '').trim() };
+    const cleanLine2Labels = { en: (line2Labels['en'] || '').trim(), bn: (line2Labels['bn'] || '').trim() };
+    const cleanPhoneLabels = { en: (phoneLabels['en'] || '').trim(), bn: (phoneLabels['bn'] || '').trim() };
+
     // Ensure settings structure is complete
     const completeSettings: GlobalSettings = {
       logo: this.settingsForm.logo || { url: '', alt: 'Digital Newspaper' },
       socialLinks: this.settingsForm.socialLinks || {},
       defaultDateMode: this.settingsForm.defaultDateMode || 'current',
       specificDate: this.settingsForm.specificDate || '',
-      editor: this.settingsForm.editor || '',
-      address: this.settingsForm.address || {},
+      // Keep base scalar field in sync with EN label for backward compat
+      editor: cleanEditorLabels.en || this.settingsForm.editor || '',
+      editorLabels: cleanEditorLabels,
+      address: {
+        ...addr,
+        // Sync base fields with EN labels for backward compat
+        line1: cleanLine1Labels.en || addr.line1 || '',
+        line1Labels: cleanLine1Labels,
+        line2: cleanLine2Labels.en || addr.line2 || '',
+        line2Labels: cleanLine2Labels,
+        phone: cleanPhoneLabels.en || addr.phone || '',
+        phoneLabels: cleanPhoneLabels
+      },
       language: this.settingsForm.language || 'en',
       showPagePagination: this.settingsForm.showPagePagination !== false
     };

@@ -265,6 +265,34 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     return this.translationService.formatDate(this.todayDate, 'full');
   }
 
+  /** Localized editor name, falling back to the base editor field. */
+  get localizedEditor(): string {
+    return this.dataService.getLocalizedSetting(
+      this.settings?.editorLabels, this.settings?.editor, this.translationService.language
+    );
+  }
+
+  /** Localized address line 1, falling back to the base field. */
+  get localizedAddressLine1(): string {
+    return this.dataService.getLocalizedSetting(
+      this.settings?.address?.line1Labels, this.settings?.address?.line1, this.translationService.language
+    );
+  }
+
+  /** Localized address line 2, falling back to the base field. */
+  get localizedAddressLine2(): string {
+    return this.dataService.getLocalizedSetting(
+      this.settings?.address?.line2Labels, this.settings?.address?.line2, this.translationService.language
+    );
+  }
+
+  /** Localized phone display, falling back to the base phone field. */
+  get localizedPhone(): string {
+    return this.dataService.getLocalizedSetting(
+      this.settings?.address?.phoneLabels, this.settings?.address?.phone, this.translationService.language
+    );
+  }
+
   checkIfToday() {
     this.isToday = this.selectedDate === this.todayDate;
   }

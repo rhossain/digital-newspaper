@@ -290,7 +290,7 @@
               <img [src]="pageForm.fullImage" alt="Preview" (load)="onFullImagePreviewLoad()" (error)="onFullImagePreviewError()" />
             </div>
             <!-- Page Name (multilingual) -->
-            <div class="form-group">
+            <div class="form-group" style="margin-top: 16px;">
               <label>Page Name <span style="font-weight:400; color:#888">(optional)</span></label>
               <div class="edition-label-fields">
                 <label class="edition-label-field">
@@ -524,18 +524,6 @@
       </div>
 
       <div class="settings-content">
-        <!-- Viewer UI Settings -->
-        <div class="settings-section">
-          <h3>Viewer Options</h3>
-          <div class="form-group">
-            <label class="toggle-label">
-              <input type="checkbox" [(ngModel)]="settingsForm.showPagePagination" />
-              <span>Show Page Pagination Bar</span>
-            </label>
-            <p class="hint-text">When enabled, a numbered pagination bar is shown above the newspaper page in the viewer.</p>
-          </div>
-        </div>
-
         <!-- Language Settings -->
         <div class="settings-section">
           <h3>Language / ভাষা</h3>
@@ -548,6 +536,36 @@
           </div>
           <div class="hint-text">
             <p>🌐 This setting controls the display language for all readers of this newspaper. The admin panel always remains in English.</p>
+          </div>
+        </div>
+
+        <!-- Default Date Settings -->
+        <div class="settings-section">
+          <h3>Default Date Loading</h3>
+          <div class="form-group">
+            <label>When users visit the site, load:</label>
+            <div class="input-mode-options">
+              <label class="radio-option">
+                <input type="radio" name="defaultDateMode" value="current" [(ngModel)]="settingsForm.defaultDateMode" />
+                <span>Current Date (Today's Edition)</span>
+              </label>
+              <label class="radio-option">
+                <input type="radio" name="defaultDateMode" value="specific" [(ngModel)]="settingsForm.defaultDateMode" />
+                <span>Specific Date</span>
+              </label>
+            </div>
+          </div>
+          <div class="form-group" *ngIf="settingsForm.defaultDateMode === 'specific'">
+            <label>Specific Date</label>
+            <input type="date" [(ngModel)]="settingsForm.specificDate" class="form-control" />
+          </div>
+          <div class="hint-text">
+            <p *ngIf="settingsForm.defaultDateMode === 'current'">
+              📅 The newspaper will always load today's edition by default.
+            </p>
+            <p *ngIf="settingsForm.defaultDateMode === 'specific' && settingsForm.specificDate">
+              📅 The newspaper will always load the edition from {{ settingsForm.specificDate }}.
+            </p>
           </div>
         </div>
 
@@ -590,33 +608,15 @@
           </div>
         </div>
 
-        <!-- Default Date Settings -->
+        <!-- Viewer UI Settings -->
         <div class="settings-section">
-          <h3>Default Date Loading</h3>
+          <h3>Viewer Options</h3>
           <div class="form-group">
-            <label>When users visit the site, load:</label>
-            <div class="input-mode-options">
-              <label class="radio-option">
-                <input type="radio" name="defaultDateMode" value="current" [(ngModel)]="settingsForm.defaultDateMode" />
-                <span>Current Date (Today's Edition)</span>
-              </label>
-              <label class="radio-option">
-                <input type="radio" name="defaultDateMode" value="specific" [(ngModel)]="settingsForm.defaultDateMode" />
-                <span>Specific Date</span>
-              </label>
-            </div>
-          </div>
-          <div class="form-group" *ngIf="settingsForm.defaultDateMode === 'specific'">
-            <label>Specific Date</label>
-            <input type="date" [(ngModel)]="settingsForm.specificDate" class="form-control" />
-          </div>
-          <div class="hint-text">
-            <p *ngIf="settingsForm.defaultDateMode === 'current'">
-              📅 The newspaper will always load today's edition by default.
-            </p>
-            <p *ngIf="settingsForm.defaultDateMode === 'specific' && settingsForm.specificDate">
-              📅 The newspaper will always load the edition from {{ settingsForm.specificDate }}.
-            </p>
+            <label class="toggle-label">
+              <input type="checkbox" [(ngModel)]="settingsForm.showPagePagination" />
+              <span>Show Page Pagination Bar</span>
+            </label>
+            <p class="hint-text">When enabled, a numbered pagination bar is shown above the newspaper page in the viewer.</p>
           </div>
         </div>
 
@@ -654,19 +654,63 @@
           <h3>Contact Information</h3>
           <div class="form-group">
             <label>Editor Name</label>
-            <input type="text" [(ngModel)]="settingsForm.editor" class="form-control" placeholder="e.g. John Smith" />
+            <div class="edition-label-fields">
+              <label class="edition-label-field">
+                <span class="edition-label-lang">EN</span>
+                <input type="text" [(ngModel)]="settingsForm.editorLabels!['en']"
+                       class="edition-label-input" placeholder="e.g. John Smith" />
+              </label>
+              <label class="edition-label-field">
+                <span class="edition-label-lang">বাং</span>
+                <input type="text" [(ngModel)]="settingsForm.editorLabels!['bn']"
+                       class="edition-label-input" placeholder="যেমন: মোহাম্মদ আলী" />
+              </label>
+            </div>
           </div>
           <div class="form-group">
             <label>Address Line 1</label>
-            <input type="text" [(ngModel)]="settingsForm.address!.line1" class="form-control" placeholder="123 Main Street, City" />
+            <div class="edition-label-fields">
+              <label class="edition-label-field">
+                <span class="edition-label-lang">EN</span>
+                <input type="text" [(ngModel)]="settingsForm.address!.line1Labels!['en']"
+                       class="edition-label-input" placeholder="123 Main Street, City" />
+              </label>
+              <label class="edition-label-field">
+                <span class="edition-label-lang">বাং</span>
+                <input type="text" [(ngModel)]="settingsForm.address!.line1Labels!['bn']"
+                       class="edition-label-input" placeholder="যেমন: ১২৩ প্রধান সড়ক" />
+              </label>
+            </div>
           </div>
           <div class="form-group">
             <label>Address Line 2</label>
-            <input type="text" [(ngModel)]="settingsForm.address!.line2" class="form-control" placeholder="State, Country — ZIP" />
+            <div class="edition-label-fields">
+              <label class="edition-label-field">
+                <span class="edition-label-lang">EN</span>
+                <input type="text" [(ngModel)]="settingsForm.address!.line2Labels!['en']"
+                       class="edition-label-input" placeholder="State, Country — ZIP" />
+              </label>
+              <label class="edition-label-field">
+                <span class="edition-label-lang">বাং</span>
+                <input type="text" [(ngModel)]="settingsForm.address!.line2Labels!['bn']"
+                       class="edition-label-input" placeholder="যেমন: ঢাকা, বাংলাদেশ" />
+              </label>
+            </div>
           </div>
           <div class="form-group">
             <label>Phone</label>
-            <input type="text" [(ngModel)]="settingsForm.address!.phone" class="form-control" placeholder="+1 (555) 000-0000" />
+            <div class="edition-label-fields">
+              <label class="edition-label-field">
+                <span class="edition-label-lang">EN</span>
+                <input type="text" [(ngModel)]="settingsForm.address!.phoneLabels!['en']"
+                       class="edition-label-input" placeholder="+1 (555) 000-0000" />
+              </label>
+              <label class="edition-label-field">
+                <span class="edition-label-lang">বাং</span>
+                <input type="text" [(ngModel)]="settingsForm.address!.phoneLabels!['bn']"
+                       class="edition-label-input" placeholder="যেমন: +৮৮০ ১৭..." />
+              </label>
+            </div>
           </div>
           <div class="form-group">
             <label>Email</label>

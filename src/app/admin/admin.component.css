@@ -290,9 +290,14 @@
 
 .edition-label-fields {
   display: flex;
+  flex-direction: column;
   gap: 8px;
   flex-wrap: wrap;
   flex: 1;
+}
+
+.form-group label.edition-label-field {
+  width: 100%;
 }
 
 .edition-label-field {
@@ -316,6 +321,7 @@
   font-size: 13px;
   width: 130px;
   min-width: 80px;
+  flex: 1;
   outline: none;
   transition: border-color 0.2s;
 }

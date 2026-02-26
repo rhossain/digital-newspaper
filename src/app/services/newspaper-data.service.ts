@@ -54,10 +54,18 @@ export interface GlobalSettings {
   defaultDateMode: 'current' | 'specific';
   specificDate?: string; // Format: YYYY-MM-DD
   editor?: string;
+  /** Multilingual editor name keyed by language code, e.g. { en: 'John Smith', bn: 'জন স্মিথ' } */
+  editorLabels?: { [lang: string]: string };
   address?: {
     line1?: string;
+    /** Multilingual Address Line 1 */
+    line1Labels?: { [lang: string]: string };
     line2?: string;
+    /** Multilingual Address Line 2 */
+    line2Labels?: { [lang: string]: string };
     phone?: string;
+    /** Multilingual phone display */
+    phoneLabels?: { [lang: string]: string };
     email?: string;
     website?: string;
   };
@@ -279,6 +287,24 @@ export class NewspaperDataService {
     // Backward compat with old single-string field
     if (edition.editionLabel) return edition.editionLabel;
     return '';
+  }
+
+  /**
+   * Generic helper: returns the best localized value for a settings field.
+   * Falls back to: requested lang → any available lang → base scalar fallback.
+   */
+  getLocalizedSetting(
+    labels: { [lang: string]: string } | undefined,
+    fallback: string | undefined,
+    lang: string
+  ): string {
+    if (labels) {
+      const val = labels[lang];
+      if (val) return val;
+      const anyVal = Object.values(labels).find(v => v);
+      if (anyVal) return anyVal;
+    }
+    return fallback || '';
   }
 
   saveData(data: NewspaperData): Observable<any> {
