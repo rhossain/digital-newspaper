@@ -48,6 +48,8 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   availableDates: string[] = [];
   isToday: boolean = true;
   isLoading: boolean = false;
+  /** Guard to prevent redundant loadCurrentEdition() calls during initialization. */
+  private initialLoadComplete = false;
 
   // Edition navigation
   selectedEditionNumber: number = 1;
@@ -111,12 +113,18 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     });
     this.subscriptions.push(dateSubscription);
     
-    // Subscribe to data changes
+    // Subscribe to data changes.
+    // Guard with initialLoadComplete so that the BehaviorSubject's immediate
+    // emit and the tap()-triggered emit during loadNewspaperData() do NOT call
+    // loadCurrentEdition() — that single call is made explicitly in
+    // loadNewspaperData() after the correct date has been established.
     const dataSubscription = this.dataService.data$.subscribe(() => {
       // Always sync global settings from the latest data
       this.refreshSettings();
-      this.loadCurrentEdition();
-      this.cdr.detectChanges();
+      if (this.initialLoadComplete) {
+        this.loadCurrentEdition();
+        this.cdr.detectChanges();
+      }
     });
     this.subscriptions.push(dataSubscription);
     
@@ -138,14 +146,20 @@ export class NewspaperComponent implements OnInit, OnDestroy {
         // read defaultDate below).
         this.refreshSettings();
         
-        // If no date was set from URL, use the default date from settings
+        // If no date was set from URL, use the default date from settings.
+        // data$ is gated by initialLoadComplete, so no premature edition load
+        // has happened — we simply set the correct date here.
         if (!this.route.snapshot.paramMap.has('date')) {
           const defaultDate = this.dataService.getDefaultDate();
           this.selectedDate = defaultDate;
           this.dataService.setCurrentDate(defaultDate);
         }
         
-        // loadCurrentEdition will be called by the data$ subscription
+        // Single, authoritative loadCurrentEdition() call: always runs once
+        // here after the date is finalised, preventing the double-call race
+        // that left sectionImageLoading stuck at true for cached images.
+        this.loadCurrentEdition();
+        this.initialLoadComplete = true;
         this.isLoading = false;
         this.cdr.detectChanges();
       },
@@ -153,6 +167,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
         console.error('Error loading newspaper data:', error);
         this.toaster.error('Failed to load newspaper data');
         this.pages = [];
+        this.initialLoadComplete = true; // allow future data$ triggers to work
         this.isLoading = false;
         this.cdr.detectChanges();
       }
@@ -399,6 +414,22 @@ export class NewspaperComponent implements OnInit, OnDestroy {
       this.sectionImageLoading = resolvedUrl !== this.croppedSectionImage;
       this.croppedSectionImage = resolvedUrl;
       console.log('Loading section image from:', resolvedUrl);
+
+      // Safety net: after Angular's next change-detection pass, check whether
+      // the <img> is already complete (e.g. pulled from browser cache) but
+      // the load event was never received.  If so, clear the loading flag.
+      if (this.sectionImageLoading) {
+        const capturedSection = section;
+        setTimeout(() => {
+          if (this.sectionImageLoading && this.selectedSection === capturedSection) {
+            const imgEl = document.querySelector('.section-full-image') as HTMLImageElement;
+            if (imgEl && imgEl.complete && imgEl.naturalWidth > 0) {
+              this.sectionImageLoading = false;
+              this.cdr.detectChanges();
+            }
+          }
+        }, 0);
+      }
     } else {
       this.croppedSectionImage = null;
       this.sectionImageLoading = true;
