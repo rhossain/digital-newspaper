@@ -22,7 +22,14 @@
             "tsConfig": "tsconfig.app.json",
             "assets": [
               "src/favicon.ico",
-              "src/assets"
+              {
+                "glob": "**/*",
+                "input": "src/assets",
+                "output": "assets",
+                "ignore": [
+                  "newspaper-data.json"
+                ]
+              }
             ],
             "styles": [
               "src/styles.css"
