@@ -8,8 +8,9 @@
     "dev": "concurrently \"npm run server\" \"npm start\"",
     "build": "ng build",
     "watch": "ng build --watch --configuration development",
-    "deploy": "node deploy.js",
-    "webhook": "node webhook-server.js"
+    "deploy": "npm run build && wrangler deploy",
+    "webhook": "node webhook-server.js",
+    "preview": "npm run build && wrangler dev"
   },
   "private": true,
   "dependencies": {
@@ -38,6 +39,7 @@
     "dotenv": "^17.2.4",
     "ftp-deploy": "^2.4.7",
     "ssh2-sftp-client": "^12.0.1",
-    "typescript": "~5.9.0"
+    "typescript": "~5.9.0",
+    "wrangler": "^4.79.0"
   }
 }
