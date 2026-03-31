@@ -18,21 +18,73 @@
           </svg>
           Save All
         </button>
-        <button class="btn btn-primary" (click)="downloadJSON()">
+        <button class="btn btn-primary" *ngIf="isAuthenticated" (click)="downloadJSON()" title="Export a local JSON backup of all WordPress data">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
             <polyline points="7 10 12 15 17 10"></polyline>
             <line x1="12" y1="15" x2="12" y2="3"></line>
           </svg>
-          Download JSON
+          Export Backup
+        </button>
+        <input
+          #importFileInput
+          type="file"
+          accept=".json,application/json"
+          style="display:none"
+          (change)="importBackup($event)"
+        />
+        <button class="btn btn-warning" *ngIf="isAuthenticated" (click)="importFileInput.click()" title="Import a JSON backup and overwrite WordPress data">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="17 8 12 3 7 8"></polyline>
+            <line x1="12" y1="3" x2="12" y2="15"></line>
+          </svg>
+          Import Backup
+        </button>
+        <button class="btn btn-danger" *ngIf="isAuthenticated" (click)="logout()">
+          Logout
         </button>
       </div>
     </div>
   </header>
 
+  <!-- Auth Overlay -->
+  <div class="auth-overlay" *ngIf="!isAuthenticated">
+    <div class="auth-card">
+      <h2>Admin Login</h2>
+      <div class="form-group">
+        <label>Username</label>
+        <input type="text" [(ngModel)]="authForm.username" class="form-control" />
+      </div>
+      <div class="form-group">
+        <label>Password</label>
+        <input type="password" [(ngModel)]="authForm.password" class="form-control" />
+      </div>
+      <div class="auth-error" *ngIf="authError">{{ authError }}</div>
+      <button class="btn btn-primary" (click)="login()" [disabled]="isAuthenticating">
+        {{ isAuthenticating ? 'Signing in...' : 'Sign In' }}
+      </button>
+    </div>
+  </div>
+
   <!-- Date Selector Bar -->
-  <div class="date-selector-bar">
-    <div class="date-info">
+  <div class="date-selector-bar" *ngIf="isAuthenticated">
+    <div class="main-tabs">
+      <button 
+        class="main-tab" 
+        [class.active]="activeMainTab === 'content'"
+        (click)="activeMainTab = 'content'">
+        📄 Content Management
+      </button>
+      <button 
+        class="main-tab" 
+        [class.active]="activeMainTab === 'settings'"
+        (click)="activeMainTab = 'settings'">
+        ⚙️ Global Settings
+      </button>
+    </div>
+
+    <div class="date-info" *ngIf="activeMainTab === 'content'">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
         <line x1="16" y1="2" x2="16" y2="6"></line>
@@ -43,7 +95,7 @@
       <strong class="current-date">{{ formatDisplayDate(selectedDate) }}</strong>
     </div>
     
-    <div class="date-controls">
+    <div class="date-controls" *ngIf="activeMainTab === 'content'">
       <label class="date-control-label">Select Date:</label>
       <select [(ngModel)]="selectedDate" (change)="onDateChange()" class="date-select">
         <option *ngFor="let date of availableDates" [value]="date">
@@ -59,9 +111,69 @@
         New Date
       </button>
     </div>
+
+    <!-- Edition selector (shown when a date has multiple editions) -->
+    <div class="edition-bar" *ngIf="activeMainTab === 'content' && editionsForDate.length > 0">
+      <span class="edition-bar-label">Edition:</span>
+      <ng-container *ngFor="let ed of editionsForDate">
+        <button
+          class="edition-btn"
+          [class.active]="selectedEditionNumber === (ed.edition || 1)"
+          (click)="onEditionChange(ed.edition || 1)"
+        >
+          {{ getEditionLabel(ed) }}
+        </button>
+        <button
+          class="edition-label-edit-btn"
+          (click)="openEditionLabelEditor(ed); $event.stopPropagation()"
+          title="Edit labels for this edition"
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+          </svg>
+        </button>
+      </ng-container>
+      <button class="btn btn-sm btn-outline" (click)="createNewEdition()" title="Add another edition for this date">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="12" y1="5" x2="12" y2="19"></line>
+          <line x1="5" y1="12" x2="19" y2="12"></line>
+        </svg>
+        Add Edition
+      </button>
+
+      <!-- Inline multilingual label editor -->
+      <div class="edition-label-editor" *ngIf="editingEditionLabel">
+        <span class="edition-label-editor-title">Labels for Edition {{ editingEditionLabel.edition || 1 }}:</span>
+        <div class="edition-label-fields">
+          <label class="edition-label-field">
+            <span class="edition-label-lang">EN</span>
+            <input
+              type="text"
+              [(ngModel)]="editionLabelForm.en"
+              class="edition-label-input"
+              placeholder="e.g. Morning"
+            />
+          </label>
+          <label class="edition-label-field">
+            <span class="edition-label-lang">বাং</span>
+            <input
+              type="text"
+              [(ngModel)]="editionLabelForm.bn"
+              class="edition-label-input"
+              placeholder="যেমন: সকাল"
+            />
+          </label>
+        </div>
+        <div class="edition-label-actions">
+          <button class="btn btn-sm btn-success" (click)="saveEditionLabels()">Save</button>
+          <button class="btn btn-sm btn-secondary" (click)="editingEditionLabel = null">Cancel</button>
+        </div>
+      </div>
+    </div>
   </div>
 
-  <div class="admin-body">
+  <div class="admin-body" *ngIf="isAuthenticated && activeMainTab === 'content'">
     <!-- Sidebar -->
     <aside class="sidebar">
       <div class="sidebar-header">
@@ -70,6 +182,9 @@
       </div>
       
       <div class="page-list">
+        <div class="loading-state" *ngIf="isLoadingEdition" style="padding: 20px; text-align: center; color: #666;">
+          Loading edition...
+        </div>
         <div 
           *ngFor="let page of pages"
           class="page-item"
@@ -77,10 +192,10 @@
           (click)="selectPage(page)"
         >
           <div class="page-thumbnail">
-            <img [src]="page.thumbnail || page.fullImage" [alt]="'Page ' + page.id" />
+            <img [src]="page.thumbnail || page.fullImage" [alt]="'Page ' + page.id" loading="lazy" decoding="async" />
           </div>
           <div class="page-info">
-            <h3>Page {{ page.id }}</h3>
+            <h3>{{ getPageLabel(page) }}</h3>
             <p>{{ page.sections.length }} sections</p>
           </div>
           <div class="page-actions">
@@ -116,15 +231,87 @@
               <input type="number" [(ngModel)]="pageForm.id" [disabled]="isEditingDisabled()" class="form-control" />
             </div>
             <div class="form-group">
-              <label>Full Image URL</label>
-              <input type="text" [(ngModel)]="pageForm.fullImage" class="form-control" placeholder="https://example.com/page-image.jpg" />
+              <label>Full Image</label>
+              <div class="input-mode-options">
+                <label class="radio-option">
+                  <input type="radio" name="fullImageMode" value="url" [(ngModel)]="fullImageInputMode" />
+                  <span>External URL</span>
+                </label>
+                <label class="radio-option">
+                  <input type="radio" name="fullImageMode" value="file" [(ngModel)]="fullImageInputMode" />
+                  <span>Upload File</span>
+                </label>
+              </div>
+              <input 
+                *ngIf="fullImageInputMode === 'url'" 
+                type="text" 
+                [(ngModel)]="pageForm.fullImage" 
+                (ngModelChange)="onFullImageUrlChange($event)"
+                class="form-control" 
+                placeholder="https://example.com/page-image.jpg" 
+              />
+              <input 
+                *ngIf="fullImageInputMode === 'file'" 
+                type="file" 
+                (change)="onFullImageFileSelected($event)" 
+                accept="image/*" 
+                class="form-control" 
+              />
             </div>
             <div class="form-group">
-              <label>Thumbnail URL (optional)</label>
-              <input type="text" [(ngModel)]="pageForm.thumbnail" class="form-control" placeholder="Leave empty to use full image" />
+              <label>Thumbnail (optional)</label>
+              <div class="input-mode-options">
+                <label class="radio-option">
+                  <input type="radio" name="thumbnailMode" value="url" [(ngModel)]="thumbnailInputMode" />
+                  <span>External URL</span>
+                </label>
+                <label class="radio-option">
+                  <input type="radio" name="thumbnailMode" value="file" [(ngModel)]="thumbnailInputMode" />
+                  <span>Upload File</span>
+                </label>
+              </div>
+              <input 
+                *ngIf="thumbnailInputMode === 'url'" 
+                type="text" 
+                [(ngModel)]="pageForm.thumbnail" 
+                class="form-control" 
+                placeholder="Leave empty to use full image" 
+              />
+              <input 
+                *ngIf="thumbnailInputMode === 'file'" 
+                type="file" 
+                (change)="onThumbnailFileSelected($event)" 
+                accept="image/*" 
+                class="form-control" 
+              />
             </div>
-            <div class="image-preview" *ngIf="pageForm.fullImage">
-              <img [src]="pageForm.fullImage" alt="Preview" />
+            <div class="image-preview" *ngIf="pageForm.fullImage" [class.loading]="previewLoading">
+              <div class="image-preview-skeleton" *ngIf="previewLoading"></div>
+              <img [src]="pageForm.fullImage" alt="Preview" (load)="onFullImagePreviewLoad()" (error)="onFullImagePreviewError()" />
+            </div>
+            <!-- Page Name (multilingual) -->
+            <div class="form-group" style="margin-top: 16px;">
+              <label>Page Name <span style="font-weight:400; color:#888">(optional)</span></label>
+              <div class="edition-label-fields">
+                <label class="edition-label-field">
+                  <span class="edition-label-lang">EN</span>
+                  <input
+                    type="text"
+                    [(ngModel)]="pageForm.pageLabels!['en']"
+                    class="edition-label-input"
+                    placeholder="e.g. Sports"
+                  />
+                </label>
+                <label class="edition-label-field">
+                  <span class="edition-label-lang">বাং</span>
+                  <input
+                    type="text"
+                    [(ngModel)]="pageForm.pageLabels!['bn']"
+                    class="edition-label-input"
+                    placeholder="যেমন: খেলাধুলা"
+                  />
+                </label>
+              </div>
             </div>
           </div>
           <div class="modal-footer">
@@ -320,6 +507,223 @@
       </div>
     </main>
   </div>
+
+  <!-- Global Settings Panel -->
+  <div class="admin-body settings-panel" *ngIf="isAuthenticated && activeMainTab === 'settings'">
+    <div class="settings-container">
+      <div class="settings-header">
+        <h2>⚙️ Global Settings</h2>
+        <button class="btn btn-success" (click)="saveSettings()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+            <polyline points="17 21 17 13 7 13 7 21"></polyline>
+            <polyline points="7 3 7 8 15 8"></polyline>
+          </svg>
+          Save Settings
+        </button>
+      </div>
+
+      <div class="settings-content">
+        <!-- Language Settings -->
+        <div class="settings-section">
+          <h3>Language / ভাষা</h3>
+          <div class="form-group">
+            <label>Select Display Language</label>
+            <select [(ngModel)]="settingsForm.language" class="form-control">
+              <option value="en">English</option>
+              <option value="bn">বাংলা (Bangla)</option>
+            </select>
+          </div>
+          <div class="hint-text">
+            <p>🌐 This setting controls the display language for all readers of this newspaper. The admin panel always remains in English.</p>
+          </div>
+        </div>
+
+        <!-- Default Date Settings -->
+        <div class="settings-section">
+          <h3>Default Date Loading</h3>
+          <div class="form-group">
+            <label>When users visit the site, load:</label>
+            <div class="input-mode-options">
+              <label class="radio-option">
+                <input type="radio" name="defaultDateMode" value="current" [(ngModel)]="settingsForm.defaultDateMode" />
+                <span>Current Date (Today's Edition)</span>
+              </label>
+              <label class="radio-option">
+                <input type="radio" name="defaultDateMode" value="specific" [(ngModel)]="settingsForm.defaultDateMode" />
+                <span>Specific Date</span>
+              </label>
+            </div>
+          </div>
+          <div class="form-group" *ngIf="settingsForm.defaultDateMode === 'specific'">
+            <label>Specific Date</label>
+            <input type="date" [(ngModel)]="settingsForm.specificDate" class="form-control" />
+          </div>
+          <div class="hint-text">
+            <p *ngIf="settingsForm.defaultDateMode === 'current'">
+              📅 The newspaper will always load today's edition by default.
+            </p>
+            <p *ngIf="settingsForm.defaultDateMode === 'specific' && settingsForm.specificDate">
+              📅 The newspaper will always load the edition from {{ settingsForm.specificDate }}.
+            </p>
+          </div>
+        </div>
+
+        <!-- Logo Settings -->
+        <div class="settings-section">
+          <h3>Site Logo</h3>
+          <div class="form-group">
+            <label>Logo</label>
+            <div class="input-mode-options">
+              <label class="radio-option">
+                <input type="radio" name="logoMode" value="url" [(ngModel)]="logoInputMode" />
+                <span>External URL</span>
+              </label>
+              <label class="radio-option">
+                <input type="radio" name="logoMode" value="file" [(ngModel)]="logoInputMode" />
+                <span>Upload File</span>
+              </label>
+            </div>
+            <input 
+              *ngIf="logoInputMode === 'url'" 
+              type="text" 
+              [(ngModel)]="settingsForm.logo!.url" 
+              class="form-control" 
+              placeholder="https://example.com/logo.png" 
+            />
+            <input 
+              *ngIf="logoInputMode === 'file'" 
+              type="file" 
+              (change)="onLogoFileSelected($event)" 
+              accept="image/*" 
+              class="form-control" 
+            />
+          </div>
+          <div class="form-group">
+            <label>Logo Alt Text</label>
+            <input type="text" [(ngModel)]="settingsForm.logo!.alt" class="form-control" placeholder="Digital Newspaper" />
+          </div>
+          <div class="logo-preview" *ngIf="settingsForm.logo?.url">
+            <img [src]="settingsForm.logo!.url" [alt]="settingsForm.logo!.alt || 'Logo'" />
+          </div>
+        </div>
+
+        <!-- Viewer UI Settings -->
+        <div class="settings-section">
+          <h3>Viewer Options</h3>
+          <div class="form-group">
+            <label class="toggle-label">
+              <input type="checkbox" [(ngModel)]="settingsForm.showPagePagination" />
+              <span>Show Page Pagination Bar</span>
+            </label>
+            <p class="hint-text">When enabled, a numbered pagination bar is shown above the newspaper page in the viewer.</p>
+          </div>
+        </div>
+
+        <!-- Social Media Links -->
+        <div class="settings-section">
+          <h3>Social Media Links</h3>
+          <div class="form-group">
+            <label>Facebook URL</label>
+            <input type="url" [(ngModel)]="settingsForm.socialLinks!.facebook" class="form-control" placeholder="https://facebook.com/yourpage" />
+          </div>
+          <div class="form-group">
+            <label>Twitter URL</label>
+            <input type="url" [(ngModel)]="settingsForm.socialLinks!.twitter" class="form-control" placeholder="https://twitter.com/yourhandle" />
+          </div>
+          <div class="form-group">
+            <label>LinkedIn URL</label>
+            <input type="url" [(ngModel)]="settingsForm.socialLinks!.linkedin" class="form-control" placeholder="https://linkedin.com/company/yourcompany" />
+          </div>
+          <div class="form-group">
+            <label>WhatsApp Number</label>
+            <input type="url" [(ngModel)]="settingsForm.socialLinks!.whatsapp" class="form-control" placeholder="https://wa.me/1234567890" />
+          </div>
+          <div class="form-group">
+            <label>Instagram URL</label>
+            <input type="url" [(ngModel)]="settingsForm.socialLinks!.instagram" class="form-control" placeholder="https://instagram.com/yourprofile" />
+          </div>
+          <div class="form-group">
+            <label>YouTube URL</label>
+            <input type="url" [(ngModel)]="settingsForm.socialLinks!.youtube" class="form-control" placeholder="https://youtube.com/c/yourchannel" />
+          </div>
+        </div>
+
+        <!-- Contact / Address Information -->
+        <div class="settings-section">
+          <h3>Contact Information</h3>
+          <div class="form-group">
+            <label>Editor Name</label>
+            <div class="edition-label-fields">
+              <label class="edition-label-field">
+                <span class="edition-label-lang">EN</span>
+                <input type="text" [(ngModel)]="settingsForm.editorLabels!['en']"
+                       class="edition-label-input" placeholder="e.g. John Smith" />
+              </label>
+              <label class="edition-label-field">
+                <span class="edition-label-lang">বাং</span>
+                <input type="text" [(ngModel)]="settingsForm.editorLabels!['bn']"
+                       class="edition-label-input" placeholder="যেমন: মোহাম্মদ আলী" />
+              </label>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Address Line 1</label>
+            <div class="edition-label-fields">
+              <label class="edition-label-field">
+                <span class="edition-label-lang">EN</span>
+                <input type="text" [(ngModel)]="settingsForm.address!.line1Labels!['en']"
+                       class="edition-label-input" placeholder="123 Main Street, City" />
+              </label>
+              <label class="edition-label-field">
+                <span class="edition-label-lang">বাং</span>
+                <input type="text" [(ngModel)]="settingsForm.address!.line1Labels!['bn']"
+                       class="edition-label-input" placeholder="যেমন: ১২৩ প্রধান সড়ক" />
+              </label>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Address Line 2</label>
+            <div class="edition-label-fields">
+              <label class="edition-label-field">
+                <span class="edition-label-lang">EN</span>
+                <input type="text" [(ngModel)]="settingsForm.address!.line2Labels!['en']"
+                       class="edition-label-input" placeholder="State, Country — ZIP" />
+              </label>
+              <label class="edition-label-field">
+                <span class="edition-label-lang">বাং</span>
+                <input type="text" [(ngModel)]="settingsForm.address!.line2Labels!['bn']"
+                       class="edition-label-input" placeholder="যেমন: ঢাকা, বাংলাদেশ" />
+              </label>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Phone</label>
+            <div class="edition-label-fields">
+              <label class="edition-label-field">
+                <span class="edition-label-lang">EN</span>
+                <input type="text" [(ngModel)]="settingsForm.address!.phoneLabels!['en']"
+                       class="edition-label-input" placeholder="+1 (555) 000-0000" />
+              </label>
+              <label class="edition-label-field">
+                <span class="edition-label-lang">বাং</span>
+                <input type="text" [(ngModel)]="settingsForm.address!.phoneLabels!['bn']"
+                       class="edition-label-input" placeholder="যেমন: +৮৮০ ১৭..." />
+              </label>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Email</label>
+            <input type="email" [(ngModel)]="settingsForm.address!.email" class="form-control" placeholder="contact@yournewspaper.com" />
+          </div>
+          <div class="form-group">
+            <label>Website</label>
+            <input type="url" [(ngModel)]="settingsForm.address!.website" class="form-control" placeholder="https://yournewspaper.com" />
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- Image Cropper Modal -->
@@ -333,32 +737,43 @@
       <div class="cropper-instructions">
         <p>📍 Click and drag on the image to select the section area</p>
         <p>The coordinates will be automatically calculated in percentages</p>
+        <div class="cropper-zoom">
+          <label>Zoom: {{ (cropperZoom * 100) | number:'1.0-0' }}%</label>
+          <input type="range" min="1" max="3" step="0.1" [(ngModel)]="cropperZoom" />
+          <div class="zoom-buttons">
+            <button class="btn btn-sm btn-secondary" (click)="zoomOut()">-</button>
+            <button class="btn btn-sm btn-secondary" (click)="zoomIn()">+</button>
+          </div>
+        </div>
       </div>
       
       <div class="cropper-container">
-        <img 
-          #cropperImage
-          [src]="selectedPage?.fullImage" 
-          alt="Full page"
-          (load)="onCropperImageLoad($event)"
-        />
-        <div 
-          class="crop-overlay"
-          (mousedown)="onCropperMouseDown($event)"
-          (mousemove)="onCropperMouseMove($event)"
-          (mouseup)="onCropperMouseUp()"
-          (mouseleave)="onCropperMouseUp()"
-        ></div>
-        <div 
-          class="crop-selection"
-          [style.left]="getCropStyle().left"
-          [style.top]="getCropStyle().top"
-          [style.width]="getCropStyle().width"
-          [style.height]="getCropStyle().height"
-          [style.display]="(isDrawing || (cropperEndX > 0 && cropperEndY > 0)) ? 'block' : 'none'"
-        ></div>
+        <div class="cropper-stage" [style.transform]="'scale(' + cropperZoom + ')'">
+          <img 
+            #cropperImage
+            [src]="selectedPage?.fullImage" 
+            alt="Full page"
+            (load)="onCropperImageLoad($event)"
+          />
+          <div 
+            class="crop-overlay"
+            (mousedown)="onCropperMouseDown($event)"
+            (mousemove)="onCropperMouseMove($event)"
+            (mouseup)="onCropperMouseUp()"
+            (mouseleave)="onCropperMouseUp()"
+          ></div>
+          <div 
+            class="crop-selection"
+            [style.left]="getCropStyle().left"
+            [style.top]="getCropStyle().top"
+            [style.width]="getCropStyle().width"
+            [style.height]="getCropStyle().height"
+            [style.display]="(isDrawing || (cropperEndX > 0 && cropperEndY > 0)) ? 'block' : 'none'"
+          ></div>
+        </div>
       </div>
-
+    </div>
+    <div class="modal-footer modal-image-selection">
       <div class="crop-info" *ngIf="sectionForm && (sectionForm.width ?? 0) > 0">
         <div class="info-item">
           <strong>X:</strong> {{ sectionForm.x }}%
@@ -373,10 +788,10 @@
           <strong>Height:</strong> {{ sectionForm.height }}%
         </div>
       </div>
-    </div>
-    <div class="modal-footer">
-      <button class="btn btn-secondary" (click)="closeCropper()">Cancel</button>
-      <button class="btn btn-primary" (click)="applyCrop()" [disabled]="(sectionForm.width ?? 0) === 0">Apply Selection</button>
+      <div class="actions">
+        <button class="btn btn-secondary" (click)="closeCropper()">Cancel</button>
+        <button class="btn btn-primary" (click)="applyCrop()" [disabled]="(sectionForm.width ?? 0) === 0">Apply Selection</button>
+      </div>
     </div>
   </div>
 </div>

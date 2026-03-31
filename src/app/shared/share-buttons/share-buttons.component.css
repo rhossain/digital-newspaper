@@ -1,0 +1,104 @@
+/* Modal share header */
+.modal-share-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px 40px 20px 24px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(10px);
+  border-radius: 12px 12px 0 0;
+}
+
+.modal-logo {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.logo-img {
+  height: 32px;
+  width: auto;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.logo-icon {
+  color: var(--color-accent-dark);
+  stroke: var(--color-accent-dark);
+  flex-shrink: 0;
+}
+
+.logo-text {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--color-text-dark);
+}
+
+.modal-share-buttons {
+  display: flex;
+  gap: 12px;
+}
+
+.share-btn {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s ease;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.share-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+}
+
+.share-btn.facebook {
+  background: var(--color-facebook);
+  color: var(--color-white);
+}
+
+.share-btn.facebook:hover {
+  background: var(--color-facebook-hover);
+}
+
+.share-btn.twitter {
+  background: var(--color-twitter);
+  color: var(--color-white);
+}
+
+.share-btn.twitter:hover {
+  background: var(--color-twitter-hover);
+}
+
+.share-btn.linkedin {
+  background: var(--color-linkedin);
+  color: var(--color-white);
+}
+
+.share-btn.linkedin:hover {
+  background: var(--color-linkedin-hover);
+}
+
+.share-btn.whatsapp {
+  background: var(--color-whatsapp);
+  color: var(--color-white);
+}
+
+.share-btn.whatsapp:hover {
+  background: var(--color-whatsapp-hover);
+}
+
+.share-btn.copy {
+  background: var(--color-copy);
+  color: var(--color-white);
+}
+
+.share-btn.copy:hover {
+  background: var(--color-copy-hover);
+}

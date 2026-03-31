@@ -1,0 +1,199 @@
+/* ── Host container ─────────────────────────────────────────── */
+.dp-host {
+  position: relative;
+  display: inline-block;
+}
+
+/* ── Trigger button ─────────────────────────────────────────── */
+.dp-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-radius: 8px;
+  border: 2px solid var(--color-border-ui);
+  background: var(--color-white);
+  color: var(--color-primary);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 100%;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.dp-trigger:hover {
+  background: var(--color-primary-light);
+  border-color: var(--color-primary);
+}
+
+.dp-trigger-icon {
+  flex-shrink: 0;
+  opacity: 0.65;
+}
+
+.dp-trigger-label {
+  flex: 1;
+}
+
+.dp-caret {
+  flex-shrink: 0;
+  opacity: 0.55;
+  transition: transform 0.2s ease;
+}
+
+.dp-caret.dp-caret-open {
+  transform: rotate(180deg);
+}
+
+/* ── Popup ──────────────────────────────────────────────────── */
+.dp-popup {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 2000;
+  background: var(--color-white);
+  border: 1px solid var(--color-border-ui);
+  border-radius: 14px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.16);
+  padding: 16px;
+  min-width: 288px;
+  animation: dp-fade-in 0.15s ease;
+}
+
+@keyframes dp-fade-in {
+  from { opacity: 0; transform: translateY(-8px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0)   scale(1);    }
+}
+
+/* ── Month navigation header ────────────────────────────────── */
+.dp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.dp-nav-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  border: 1px solid var(--color-border-ui);
+  background: var(--color-bg-muted);
+  color: var(--color-primary);
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.dp-nav-btn:hover:not(:disabled) {
+  background: var(--color-primary-light);
+  border-color: var(--color-primary);
+}
+
+.dp-nav-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.dp-month-label {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--color-text-dark);
+  letter-spacing: 0.01em;
+}
+
+/* ── Weekday header row ──────────────────────────────────────── */
+.dp-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  margin-bottom: 4px;
+}
+
+.dp-weekday {
+  text-align: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--color-text-muted);
+  padding: 4px 0 6px;
+  letter-spacing: 0.04em;
+}
+
+/* ── Day grid ───────────────────────────────────────────────── */
+.dp-week {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+}
+
+.dp-day {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  margin: 1px auto;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--color-text-base);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.13s, color 0.13s;
+}
+
+/* Hover state for selectable days */
+.dp-day:hover:not(:disabled):not(.dp-selected) {
+  background: var(--color-primary-light);
+  color: var(--color-primary);
+}
+
+/* Today ring */
+.dp-day.dp-today {
+  background: var(--color-bg-muted);
+  color: var(--color-primary);
+  font-weight: 700;
+  border: 2px solid var(--color-primary);
+}
+
+/* Selected day */
+.dp-day.dp-selected {
+  background: var(--color-primary);
+  color: #fff;
+  font-weight: 700;
+}
+
+/* Available edition dates – bold + dot indicator */
+.dp-day.dp-available {
+  font-weight: 700;
+  color: var(--color-primary-dark);
+}
+
+.dp-day.dp-available::after {
+  content: '';
+  position: absolute;
+  bottom: 4px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--color-primary);
+}
+
+/* Days outside the current month / disabled */
+.dp-day.dp-other-month,
+.dp-day.dp-disabled {
+  color: var(--color-text-light);
+  cursor: default;
+  pointer-events: none;
+}
+
+.dp-day:disabled {
+  cursor: not-allowed;
+}

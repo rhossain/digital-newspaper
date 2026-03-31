@@ -2,8 +2,10 @@ import { Component, OnInit, ViewChild, ElementRef, ChangeDetectorRef } from '@an
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
-import { NewspaperDataService, NewspaperPage, NewsSection } from '../services/newspaper-data.service';
+import { NewspaperDataService, NewspaperPage, NewsSection, GlobalSettings, NewspaperEdition } from '../services/newspaper-data.service';
+import { AuthService } from '../services/auth.service';
 import { ToasterService } from '../services/toaster.service';
+import { TranslationService } from '../i18n/translation.service';
 
 @Component({
   selector: 'app-admin',
@@ -23,9 +25,17 @@ export class AdminComponent implements OnInit {
   selectedDate: string = '';
   availableDates: string[] = [];
   todayDate: string = '';
+  isLoadingEdition: boolean = false;
+
+  // Edition management
+  selectedEditionNumber: number = 1;
+  editionsForDate: NewspaperEdition[] = [];
+  editingEditionLabel: NewspaperEdition | null = null;
+  editionLabelForm: { en: string; bn: string } = { en: '', bn: '' };
   
   // UI State
   activeTab: 'pages' | 'sections' = 'pages';
+  activeMainTab: 'content' | 'settings' = 'content';
   isEditingPage = false;
   isEditingSection = false;
   showImageCropper = false;
@@ -38,6 +48,43 @@ export class AdminComponent implements OnInit {
     sections: []
   };
   
+  // Image input modes
+  fullImageInputMode: 'url' | 'file' = 'url';
+  thumbnailInputMode: 'url' | 'file' = 'url';
+  fullImageFile: File | null = null;
+  thumbnailFile: File | null = null;
+  previewLoading: boolean = false;
+
+  // Global Settings
+  settingsForm: GlobalSettings = {
+    logo: { url: '', alt: 'Digital Newspaper' },
+    socialLinks: {
+      facebook: '',
+      twitter: '',
+      linkedin: '',
+      whatsapp: '',
+      instagram: '',
+      youtube: ''
+    },
+    defaultDateMode: 'current',
+    specificDate: '',
+    editor: '',
+    editorLabels: { en: '', bn: '' },
+    address: {
+      line1: '',
+      line1Labels: { en: '', bn: '' },
+      line2: '',
+      line2Labels: { en: '', bn: '' },
+      phone: '',
+      phoneLabels: { en: '', bn: '' },
+      email: '',
+      website: ''
+    },
+    language: 'en'
+  };
+  logoInputMode: 'url' | 'file' = 'url';
+  logoFile: File | null = null;
+
   sectionForm: Partial<NewsSection> = {
     id: '',
     title: '',
@@ -63,19 +110,85 @@ export class AdminComponent implements OnInit {
   isDrawing = false;
   imageNaturalWidth = 0;
   imageNaturalHeight = 0;
+  cropperZoom = 1;
 
   constructor(
     private dataService: NewspaperDataService,
     private router: Router,
     private cdr: ChangeDetectorRef,
-    private toaster: ToasterService
+    private toaster: ToasterService,
+    private authService: AuthService,
+    private translationService: TranslationService
   ) {}
 
   ngOnInit() {
     this.todayDate = this.dataService.getTodayDate();
     this.selectedDate = this.todayDate;
+    this.availableDates = this.selectedDate ? [this.selectedDate] : [];
     
-    this.loadData();
+    this.verifyAuth();
+  }
+
+  get isAuthenticated(): boolean {
+    return this.authService.isAuthenticated();
+  }
+
+  authForm = {
+    username: '',
+    password: ''
+  };
+  authError = '';
+  isAuthenticating = false;
+
+  verifyAuth() {
+    if (!this.authService.isAuthenticated()) {
+      return;
+    }
+    this.authService.verifyToken().subscribe({
+      next: () => this.loadData(),
+      error: () => {
+        this.authService.logout();
+        this.authError = 'Session expired. Please login again.';
+        this.toaster.error(this.authError);
+      }
+    });
+  }
+
+  login() {
+    this.authError = '';
+    this.isAuthenticating = true;
+    this.authService.login(this.authForm.username, this.authForm.password).subscribe({
+      next: () => {
+        this.isAuthenticating = false;
+        this.loadData();
+      },
+      error: (err) => {
+        this.isAuthenticating = false;
+        if (err.status === 0 || err.name === 'HttpErrorResponse' && !err.status) {
+          this.authError = 'Cannot reach WordPress. Check that WordPress is online and CORS is configured.';
+        } else if (err.status === 401 || err.status === 400) {
+          this.authError = 'Invalid credentials. Please try again.';
+        } else if (err.status === 403) {
+          this.authError = 'Access denied. Your account may not have editor permissions.';
+        } else {
+          this.authError = `Login failed (HTTP ${err.status || 'network error'}). Check CORS settings.`;
+        }
+        this.toaster.error(this.authError);
+      }
+    });
+  }
+
+  logout() {
+    this.authService.logout();
+    this.authForm.password = '';
+  }
+
+  zoomOut() {
+    this.cropperZoom = Math.max(1, parseFloat((this.cropperZoom - 0.1).toFixed(1)));
+  }
+
+  zoomIn() {
+    this.cropperZoom = Math.min(3, parseFloat((this.cropperZoom + 0.1).toFixed(1)));
   }
 
   loadData() {
@@ -86,6 +199,7 @@ export class AdminComponent implements OnInit {
           this.availableDates.unshift(this.selectedDate);
         }
         this.loadCurrentEdition();
+        this.loadSettings();
         this.cdr.detectChanges(); // Explicitly trigger change detection
       },
       error: (error) => console.error('Error loading data:', error)
@@ -93,23 +207,124 @@ export class AdminComponent implements OnInit {
   }
 
   loadCurrentEdition() {
+    this.isLoadingEdition = true;
     this.dataService.setCurrentDate(this.selectedDate);
-    const edition = this.dataService.getCurrentEdition();
+    
+    // Populate edition tabs for this date
+    this.editionsForDate = this.dataService.getEditionsByDate(this.selectedDate);
+
+    // Load edition immediately from service (no network delay)
+    const edition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);
     if (edition) {
       this.pages = edition.pages;
     } else {
-      // Create new edition if it doesn't exist
-      this.dataService.getOrCreateEdition(this.selectedDate);
+      // Auto-create the first edition; additional editions are created explicitly
+      if (this.selectedEditionNumber === 1) {
+        this.dataService.getOrCreateEdition(this.selectedDate, 1);
+      }
       this.pages = [];
     }
+    this.isLoadingEdition = false;
+    this.cdr.detectChanges();
   }
 
   onDateChange() {
+    this.selectedEditionNumber = 1;
     this.loadCurrentEdition();
     this.selectedPage = null;
     this.selectedSection = null;
     this.isEditingPage = false;
     this.isEditingSection = false;
+  }
+
+  onEditionChange(editionNumber: number) {
+    this.selectedEditionNumber = editionNumber;
+    this.selectedPage = null;
+    this.selectedSection = null;
+    this.isEditingPage = false;
+    this.isEditingSection = false;
+    this.loadCurrentEdition();
+  }
+
+  createNewEdition() {
+    const editionNumbers = this.editionsForDate.map(e => e.edition || 1);
+    const nextEditionNumber = editionNumbers.length > 0 ? Math.max(...editionNumbers) + 1 : 2;
+
+    this.dataService.getOrCreateEdition(this.selectedDate, nextEditionNumber);
+    this.selectedEditionNumber = nextEditionNumber;
+    this.loadCurrentEdition();
+    this.toaster.success(`Edition ${nextEditionNumber} created!`);
+
+    // Open label editor immediately for the new edition
+    const newEd = this.editionsForDate.find(e => (e.edition || 1) === nextEditionNumber);
+    if (newEd) this.openEditionLabelEditor(newEd);
+  }
+
+  openEditionLabelEditor(ed: NewspaperEdition) {
+    this.editingEditionLabel = ed;
+    this.editionLabelForm = {
+      en: ed.editionLabels?.['en'] ?? ed.editionLabel ?? '',
+      bn: ed.editionLabels?.['bn'] ?? '',
+    };
+  }
+
+  saveEditionLabels() {
+    if (!this.editingEditionLabel) return;
+    const targetNum = this.editingEditionLabel.edition || 1;
+    const data = this.dataService.getData();
+    const editions = data.editions.map(e =>
+      e.date === this.selectedDate && (e.edition || 1) === targetNum
+        ? { ...e, editionLabels: { en: this.editionLabelForm.en.trim(), bn: this.editionLabelForm.bn.trim() } }
+        : e
+    );
+    this.dataService['dataSubject'].next({ ...data, editions });
+    this.editingEditionLabel = null;
+    this.loadCurrentEdition();
+    this.toaster.success('Edition labels saved!');
+  }
+
+  /** Display label for the admin UI (always shows EN / BN side-by-side if custom labels are set). */
+  getEditionLabel(ed: NewspaperEdition): string {
+    const en = ed.editionLabels?.['en'] ?? ed.editionLabel ?? '';
+    const bn = ed.editionLabels?.['bn'] ?? '';
+    if (en || bn) {
+      return en && bn ? `${en} / ${bn}` : en || bn;
+    }
+    // No custom label: show ordinal names for both languages separated by /
+    const enName = this.getEditionOrdinalName(ed.edition || 1, 'en');
+    const bnName = this.getEditionOrdinalName(ed.edition || 1, 'bn');
+    return `${enName} / ${bnName}`;
+  }
+
+  /** Returns the ordinal edition name for a specific language. */
+  private getEditionOrdinalName(num: number, lang: 'en' | 'bn'): string {
+    const prevLang = this.translationService.language;
+    this.translationService.setLanguage(lang);
+    const name = this.translationService.getEditionName(num);
+    this.translationService.setLanguage(prevLang);
+    return name;
+  }
+
+  /** Display label for a page in the admin UI (EN / BN side-by-side). */
+  getPageLabel(page: NewspaperPage): string {
+    const en = page.pageLabels?.['en'] ?? '';
+    const bn = page.pageLabels?.['bn'] ?? '';
+    if (en || bn) {
+      return en && bn ? `${en} / ${bn}` : en || bn;
+    }
+    const idx = this.pages.indexOf(page) + 1 || page.id;
+    const enName = this.getPageOrdinalName(idx, 'en');
+    const bnName = this.getPageOrdinalName(idx, 'bn');
+    return `${enName} / ${bnName}`;
+  }
+
+  /** Returns the ordinal page name for a specific language. */
+  private getPageOrdinalName(num: number, lang: 'en' | 'bn'): string {
+    const prevLang = this.translationService.language;
+    this.translationService.setLanguage(lang);
+    const name = this.translationService.getPageName(num);
+    this.translationService.setLanguage(prevLang);
+    return name;
   }
 
   createNewDate() {
@@ -141,31 +356,53 @@ export class AdminComponent implements OnInit {
   newPage() {
     this.isEditingPage = true;
     this.pageForm = {
-      id: this.dataService.getNextPageId(this.selectedDate),
+      id: this.dataService.getNextPageId(this.selectedDate, this.selectedEditionNumber),
       thumbnail: '',
       fullImage: '',
-      sections: []
+      sections: [],
+      pageLabels: { en: '', bn: '' }
     };
+    this.fullImageInputMode = 'url';
+    this.thumbnailInputMode = 'url';
+    this.fullImageFile = null;
+    this.thumbnailFile = null;
   }
 
   editPage(page: NewspaperPage) {
     this.isEditingPage = true;
-    this.pageForm = { ...page };
+    this.pageForm = { ...page, pageLabels: { en: page.pageLabels?.['en'] ?? '', bn: page.pageLabels?.['bn'] ?? '' } };
+    this.fullImageInputMode = 'url';
+    this.thumbnailInputMode = 'url';
+    this.fullImageFile = null;
+    this.thumbnailFile = null;
   }
 
   savePage() {
     if (this.pageForm.id && this.pageForm.fullImage) {
-      const page = this.pageForm as NewspaperPage;
+      const page = { ...this.pageForm } as NewspaperPage;
+      // Strip empty pageLabels
+      if (page.pageLabels) {
+        const en = (page.pageLabels['en'] || '').trim();
+        const bn = (page.pageLabels['bn'] || '').trim();
+        if (en || bn) {
+          page.pageLabels = { en, bn };
+        } else {
+          delete page.pageLabels;
+        }
+      }
       const existingPage = this.pages.find(p => p.id === page.id);
       
       if (existingPage) {
-        this.dataService.updatePage(page.id, page, this.selectedDate);
+        this.dataService.updatePage(page.id, page, this.selectedDate, this.selectedEditionNumber);
       } else {
-        this.dataService.addPage(page, this.selectedDate);
+        this.dataService.addPage(page, this.selectedDate, this.selectedEditionNumber);
       }
       
-      // Reload pages from the current edition
-      this.loadCurrentEdition();
+      // Update local pages immediately from service (no network call)
+      const edition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);
+      if (edition) {
+        this.pages = edition.pages;
+      }
       
       this.cancelPageEdit();
       this.toaster.success('Page saved successfully!');
@@ -174,20 +411,23 @@ export class AdminComponent implements OnInit {
 
   deletePage(page: NewspaperPage) {
     if (confirm(`Delete page ${page.id}?`)) {
-      this.dataService.deletePage(page.id, this.selectedDate);
+      this.dataService.deletePage(page.id, this.selectedDate, this.selectedEditionNumber);
       if (this.selectedPage?.id === page.id) {
         this.selectedPage = null;
       }
       
-      // Reload pages from the current edition
-      this.loadCurrentEdition();
+      // Update local pages immediately from service (no network call)
+      const edition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);
+      if (edition) {
+        this.pages = edition.pages;
+      }
       this.toaster.success('Page deleted successfully!');
     }
   }
 
   cancelPageEdit() {
     this.isEditingPage = false;
-    this.pageForm = { id: 0, thumbnail: '', fullImage: '', sections: [] };
+    this.pageForm = { id: 0, thumbnail: '', fullImage: '', sections: [], pageLabels: { en: '', bn: '' } };
   }
 
   // Section Management
@@ -252,20 +492,23 @@ export class AdminComponent implements OnInit {
       console.log('Saving section:', section);
       
       // Check if section exists by looking in the service data (not the stale selectedPage)
-      const edition = this.dataService.getEditionByDate(this.selectedDate);
-      const currentPage = edition?.pages.find(p => p.id === this.selectedPage?.id);
+      const currentEdition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);
+      const currentPage = currentEdition?.pages.find(p => p.id === this.selectedPage?.id);
       const existingSection = currentPage?.sections.find(s => s.id === section.id);
       
       if (existingSection) {
         console.log('Updating existing section');
-        this.dataService.updateSection(this.selectedPage.id, section.id, section, this.selectedDate);
+        this.dataService.updateSection(this.selectedPage.id, section.id, section, this.selectedDate, this.selectedEditionNumber);
       } else {
         console.log('Adding new section');
-        this.dataService.addSection(this.selectedPage.id, section, this.selectedDate);
+        this.dataService.addSection(this.selectedPage.id, section, this.selectedDate, this.selectedEditionNumber);
       }
       
-      // Reload pages from the current edition
-      this.loadCurrentEdition();
+      // Update local pages immediately from service (no network call)
+      const edition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);
+      if (edition) {
+        this.pages = edition.pages;
+      }
       // Update selected page reference
       this.selectedPage = this.pages.find(p => p.id === this.selectedPage?.id) || null;
       
@@ -285,10 +528,13 @@ export class AdminComponent implements OnInit {
 
   deleteSection(section: NewsSection) {
     if (this.selectedPage && confirm(`Delete section "${section.title}"?`)) {
-      this.dataService.deleteSection(this.selectedPage.id, section.id, this.selectedDate);
+      this.dataService.deleteSection(this.selectedPage.id, section.id, this.selectedDate, this.selectedEditionNumber);
       
-      // Reload pages from the current edition
-      this.loadCurrentEdition();
+      // Update local pages immediately from service (no network call)
+      const edition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);
+      if (edition) {
+        this.pages = edition.pages;
+      }
       // Update selected page reference
       this.selectedPage = this.pages.find(p => p.id === this.selectedPage?.id) || null;
       
@@ -320,6 +566,7 @@ export class AdminComponent implements OnInit {
     }
     this.showImageCropper = true;
     this.cropperImageLoaded = false;
+    this.cropperZoom = 1;
   }
 
   onCropperImageLoad(event: Event) {
@@ -342,11 +589,9 @@ export class AdminComponent implements OnInit {
       return;
     }
     
-    const imgRect = this.cropperImageRef.nativeElement.getBoundingClientRect();
-    console.log('Image rect:', imgRect);
-    
-    this.cropperStartX = event.clientX - imgRect.left;
-    this.cropperStartY = event.clientY - imgRect.top;
+    const zoom = this.cropperZoom || 1;
+    this.cropperStartX = event.offsetX ?? 0;
+    this.cropperStartY = event.offsetY ?? 0;
     this.cropperEndX = this.cropperStartX;
     this.cropperEndY = this.cropperStartY;
     this.isDrawing = true;
@@ -358,9 +603,9 @@ export class AdminComponent implements OnInit {
   onCropperMouseMove(event: MouseEvent) {
     if (!this.isDrawing || !this.cropperImageRef) return;
     
-    const imgRect = this.cropperImageRef.nativeElement.getBoundingClientRect();
-    this.cropperEndX = event.clientX - imgRect.left;
-    this.cropperEndY = event.clientY - imgRect.top;
+    const zoom = this.cropperZoom || 1;
+    this.cropperEndX = event.offsetX ?? 0;
+    this.cropperEndY = event.offsetY ?? 0;
     
     console.log('Move coordinates:', { x: this.cropperEndX, y: this.cropperEndY });
     
@@ -411,6 +656,7 @@ export class AdminComponent implements OnInit {
   async generateAndUploadCroppedImageFromFullSize(fullImageUrl: string) {
     try {
       console.log('Fetching full-size image from:', fullImageUrl);
+      const proxyUrl = `${this.dataService.getApiBaseUrl()}/wp-json/digital-newspaper/v1/proxy?url=${encodeURIComponent(fullImageUrl)}`;
       console.log('Using crop coordinates (%):', { 
         x: this.sectionForm.x, 
         y: this.sectionForm.y, 
@@ -419,7 +665,15 @@ export class AdminComponent implements OnInit {
       });
       
       // Fetch the full-size image
-      const response = await fetch(fullImageUrl);
+      const response = await fetch(proxyUrl);
+      if (!response.ok) {
+        throw new Error(`Proxy fetch failed (${response.status})`);
+      }
+      const contentType = response.headers.get('content-type') || '';
+      if (!contentType.startsWith('image/')) {
+        const text = await response.text();
+        throw new Error(`Proxy returned ${contentType || 'unknown'}: ${text.slice(0, 200)}`);
+      }
       const blob = await response.blob();
       
       // Create a new image from the blob
@@ -499,40 +753,28 @@ export class AdminComponent implements OnInit {
   }
 
   uploadCroppedImage(imageData: string, fileName: string) {
-    const url = 'http://localhost:3000/api/upload-cropped-image';
-    
-    fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ imageData, fileName })
-    })
-    .then(response => response.json())
-    .then(data => {
-      if (data.success && data.path) {
-        // Update sectionForm with the saved image path
+    const file = this.dataUrlToFile(imageData, `${fileName}.jpg`);
+    this.uploadMediaFile(file, `${fileName}.jpg`)
+      .then((url) => {
         this.sectionForm = {
           ...this.sectionForm,
-          imageUrl: data.path
+          imageUrl: url
         };
+        this.imageSourceOption = 'external-url';
         this.cdr.detectChanges();
         this.toaster.success('Cropped image saved successfully!');
-        console.log('Cropped image saved at:', data.path);
-      } else {
-        throw new Error(data.error || 'Upload failed');
-      }
-    })
-    .catch(error => {
-      console.error('Error uploading cropped image:', error);
-      this.toaster.error('Failed to save cropped image. Using auto-crop instead.');
-      // Keep coordinates but clear imageUrl for auto-crop
-      this.sectionForm = {
-        ...this.sectionForm,
-        imageUrl: ''
-      };
-      this.cdr.detectChanges();
-    });
+        console.log('Cropped image saved at:', url);
+      })
+      .catch((error) => {
+        console.error('Error uploading cropped image:', error);
+        this.toaster.error('Failed to save cropped image. Using auto-crop instead.');
+        this.sectionForm = {
+          ...this.sectionForm,
+          imageUrl: ''
+        };
+        this.imageSourceOption = 'auto-crop';
+        this.cdr.detectChanges();
+      });
   }
 
   onImageFileSelected(event: Event) {
@@ -571,40 +813,111 @@ export class AdminComponent implements OnInit {
 
   uploadImageFile(imageData: string, fileName: string) {
     console.log('Uploading image, filename:', fileName);
-    const url = 'http://localhost:3000/api/upload-image';
-    
-    fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ imageData, fileName })
-    })
-    .then(response => {
-      console.log('Upload response status:', response.status);
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-      return response.json();
-    })
-    .then(data => {
-      console.log('Upload response data:', data);
-      if (data.success && data.path) {
+    const file = this.dataUrlToFile(imageData, `${fileName}.jpg`);
+    this.uploadMediaFile(file, `${fileName}.jpg`)
+      .then((url) => {
         this.sectionForm = {
           ...this.sectionForm,
-          imageUrl: data.path
+          imageUrl: url
         };
         this.cdr.detectChanges();
         this.toaster.success('Image uploaded successfully!');
-        console.log('Image uploaded at:', data.path);
+        console.log('Image uploaded at:', url);
+      })
+      .catch((error) => {
+        console.error('Error uploading image:', error);
+        this.toaster.error('Failed to upload image: ' + error.message);
+      });
+  }
+
+  private dataUrlToFile(dataUrl: string, filename: string): File {
+    const arr = dataUrl.split(',');
+    const mimeMatch = arr[0].match(/:(.*?);/);
+    const mime = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+    const bstr = atob(arr[1]);
+    let n = bstr.length;
+    const u8arr = new Uint8Array(n);
+    while (n--) {
+      u8arr[n] = bstr.charCodeAt(n);
+    }
+    return new File([u8arr], filename, { type: mime });
+  }
+
+  private async uploadMediaFile(file: File, filename: string): Promise<string> {
+    const url = `${this.dataService.getApiBaseUrl()}/wp-json/wp/v2/media`;
+    const headers = this.authService.getAuthHeaders();
+    const desiredName = this.normalizeFilename(filename);
+    let finalName = desiredName;
+
+    const existing = await this.findExistingMedia(desiredName, headers);
+    if (existing) {
+      const overwrite = confirm(
+        `An image named "${desiredName}" already exists.\n\nClick OK to overwrite it, or Cancel to upload with a new name.`
+      );
+      if (overwrite) {
+        await this.deleteMedia(existing.id, headers);
+        finalName = desiredName;
       } else {
-        throw new Error(data.error || 'Upload failed');
+        finalName = this.appendTimestamp(desiredName);
       }
-    })
-    .catch(error => {
-      console.error('Error uploading image:', error);
-      this.toaster.error('Failed to upload image: ' + error.message);
+    }
+
+    const formData = new FormData();
+    formData.append('file', file, finalName);
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: formData
     });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(errorText || 'Upload failed');
+    }
+
+    const data = await response.json();
+    return data.source_url || data.guid?.rendered || '';
+  }
+
+  private normalizeFilename(filename: string): string {
+    const clean = filename.replace(/\s+/g, '_');
+    return clean.length ? clean : `image_${Date.now()}.jpg`;
+  }
+
+  private appendTimestamp(filename: string): string {
+    const parts = filename.split('.');
+    if (parts.length === 1) {
+      return `${filename}_${Date.now()}`;
+    }
+    const ext = parts.pop();
+    const base = parts.join('.');
+    return `${base}_${Date.now()}.${ext}`;
+  }
+
+  private async findExistingMedia(filename: string, headers: Record<string, string>): Promise<{ id: number } | null> {
+    const base = filename.replace(/\.[^/.]+$/, '').toLowerCase();
+    const searchUrl = `${this.dataService.getApiBaseUrl()}/wp-json/wp/v2/media?search=${encodeURIComponent(base)}&per_page=100`;
+    const response = await fetch(searchUrl, { headers });
+    if (!response.ok) return null;
+    const items = await response.json();
+    const match = Array.isArray(items)
+      ? items.find((item: any) => {
+          const title = (item.title?.rendered || '').toLowerCase();
+          const slug = (item.slug || '').toLowerCase();
+          return title === base || slug === base || `${slug}` === base;
+        })
+      : null;
+    return match ? { id: match.id } : null;
+  }
+
+  private async deleteMedia(id: number, headers: Record<string, string>): Promise<void> {
+    const deleteUrl = `${this.dataService.getApiBaseUrl()}/wp-json/wp/v2/media/${id}?force=true`;
+    const response = await fetch(deleteUrl, { method: 'DELETE', headers });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(errorText || 'Failed to delete existing media');
+    }
   }
 
   getCropStyle() {
@@ -667,12 +980,16 @@ export class AdminComponent implements OnInit {
       return;
     }
     
+    // Show immediate feedback
+    this.toaster.success('Saving data...');
+    
+    // Save asynchronously without blocking UI
     this.dataService.saveData(currentData).subscribe({
       next: (response) => {
         console.log('Save successful:', response);
         this.toaster.success('All data saved successfully!');
-        // Ensure local pages are in sync with current edition
-        this.loadCurrentEdition();
+        // NO RELOAD - data is already updated locally
+        // Just ensure selected page reference is current
         if (this.selectedPage) {
           this.selectedPage = this.pages.find(p => p.id === this.selectedPage?.id) || null;
         }
@@ -687,6 +1004,68 @@ export class AdminComponent implements OnInit {
   downloadJSON() {
     this.dataService.downloadJSON();
     this.toaster.success('JSON file downloaded!');
+  }
+
+  importBackup(event: Event) {
+    const input = event.target as HTMLInputElement;
+    if (!input.files || !input.files[0]) return;
+
+    const file = input.files[0];
+    // Reset so the same file can be re-selected if needed
+    input.value = '';
+
+    if (!file.name.endsWith('.json') && file.type !== 'application/json') {
+      this.toaster.error('Please select a valid .json backup file');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const raw = e.target?.result as string;
+        const parsed = JSON.parse(raw);
+
+        // Validate structure
+        if (typeof parsed !== 'object' || parsed === null) {
+          this.toaster.error('Invalid backup: not a JSON object');
+          return;
+        }
+        if (!Array.isArray(parsed.editions)) {
+          this.toaster.error('Invalid backup: missing "editions" array');
+          return;
+        }
+
+        if (!confirm(`This will OVERWRITE all current WordPress data with the backup from "${file.name}".\n\nAre you sure?`)) {
+          return;
+        }
+
+        // Normalize settings in case backup came from an older export
+        if (parsed.settings) {
+          if (!parsed.settings.logo) {
+            parsed.settings.logo = { url: '', alt: 'Digital Newspaper' };
+          }
+          if (!parsed.settings.socialLinks || Array.isArray(parsed.settings.socialLinks)) {
+            parsed.settings.socialLinks = {};
+          }
+        } else {
+          parsed.settings = { defaultDateMode: 'current', socialLinks: {}, logo: { url: '', alt: 'Digital Newspaper' } };
+        }
+
+        this.dataService.saveData(parsed).subscribe({
+          next: () => {
+            this.toaster.success('Backup imported successfully!');
+            this.loadData();
+          },
+          error: (err) => {
+            console.error('Import failed:', err);
+            this.toaster.error('Failed to import backup: ' + (err.message || 'Unknown error'));
+          }
+        });
+      } catch {
+        this.toaster.error('Failed to parse JSON file. Make sure it is a valid backup.');
+      }
+    };
+    reader.readAsText(file);
   }
 
   // Navigation
@@ -731,5 +1110,167 @@ export class AdminComponent implements OnInit {
 
   isEditingDisabled(): boolean {
     return !!this.pages.find(p => p.id === this.pageForm.id);
+  }
+
+  onFullImageFileSelected(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    if (input.files && input.files[0]) {
+      this.fullImageFile = input.files[0];
+      const fileName = this.fullImageFile.name || `page_full_${Date.now()}.jpg`;
+      this.uploadMediaFile(this.fullImageFile, fileName)
+        .then((url) => {
+          this.pageForm.fullImage = url;
+          this.previewLoading = true;
+          this.cdr.detectChanges();
+          this.toaster.success('Full image uploaded');
+        })
+        .catch((error) => {
+          console.error('Error uploading full image:', error);
+          this.toaster.error('Failed to upload full image');
+        });
+    }
+  }
+
+  onFullImageUrlChange(value: string) {
+    this.previewLoading = !!value;
+  }
+
+  onFullImagePreviewLoad() {
+    this.previewLoading = false;
+  }
+
+  onFullImagePreviewError() {
+    this.previewLoading = false;
+  }
+
+  onThumbnailFileSelected(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    if (input.files && input.files[0]) {
+      this.thumbnailFile = input.files[0];
+      const fileName = this.thumbnailFile.name || `page_thumb_${Date.now()}.jpg`;
+      this.uploadMediaFile(this.thumbnailFile, fileName)
+        .then((url) => {
+          this.pageForm.thumbnail = url;
+          this.cdr.detectChanges();
+          this.toaster.success('Thumbnail uploaded');
+        })
+        .catch((error) => {
+          console.error('Error uploading thumbnail:', error);
+          this.toaster.error('Failed to upload thumbnail');
+        });
+    }
+  }
+
+  // Global Settings Management
+  loadSettings(): void {
+    const settings = this.dataService.getSettings();
+    const addr = settings.address || {};
+    this.settingsForm = {
+      logo: settings.logo || { url: '', alt: 'Digital Newspaper' },
+      socialLinks: settings.socialLinks || {},
+      defaultDateMode: settings.defaultDateMode || 'current',
+      specificDate: settings.specificDate || '',
+      editor: settings.editor || '',
+      editorLabels: {
+        en: settings.editorLabels?.['en'] ?? settings.editor ?? '',
+        bn: settings.editorLabels?.['bn'] ?? ''
+      },
+      address: {
+        ...addr,
+        line1Labels: {
+          en: addr.line1Labels?.['en'] ?? addr.line1 ?? '',
+          bn: addr.line1Labels?.['bn'] ?? ''
+        },
+        line2Labels: {
+          en: addr.line2Labels?.['en'] ?? addr.line2 ?? '',
+          bn: addr.line2Labels?.['bn'] ?? ''
+        },
+        phoneLabels: {
+          en: addr.phoneLabels?.['en'] ?? addr.phone ?? '',
+          bn: addr.phoneLabels?.['bn'] ?? ''
+        }
+      },
+      language: settings.language || 'en',
+      showPagePagination: settings.showPagePagination !== false
+    };
+  }
+
+  saveSettings(): void {
+    // Strip empty labels so we don't bloat saved data
+    const editorLabels = this.settingsForm.editorLabels || {};
+    const cleanEditorLabels = { en: (editorLabels['en'] || '').trim(), bn: (editorLabels['bn'] || '').trim() };
+
+    const addr = this.settingsForm.address || {};
+    const line1Labels = addr.line1Labels || {};
+    const line2Labels = addr.line2Labels || {};
+    const phoneLabels = addr.phoneLabels || {};
+    const cleanLine1Labels = { en: (line1Labels['en'] || '').trim(), bn: (line1Labels['bn'] || '').trim() };
+    const cleanLine2Labels = { en: (line2Labels['en'] || '').trim(), bn: (line2Labels['bn'] || '').trim() };
+    const cleanPhoneLabels = { en: (phoneLabels['en'] || '').trim(), bn: (phoneLabels['bn'] || '').trim() };
+
+    // Ensure settings structure is complete
+    const completeSettings: GlobalSettings = {
+      logo: this.settingsForm.logo || { url: '', alt: 'Digital Newspaper' },
+      socialLinks: this.settingsForm.socialLinks || {},
+      defaultDateMode: this.settingsForm.defaultDateMode || 'current',
+      specificDate: this.settingsForm.specificDate || '',
+      // Keep base scalar field in sync with EN label for backward compat
+      editor: cleanEditorLabels.en || this.settingsForm.editor || '',
+      editorLabels: cleanEditorLabels,
+      address: {
+        ...addr,
+        // Sync base fields with EN labels for backward compat
+        line1: cleanLine1Labels.en || addr.line1 || '',
+        line1Labels: cleanLine1Labels,
+        line2: cleanLine2Labels.en || addr.line2 || '',
+        line2Labels: cleanLine2Labels,
+        phone: cleanPhoneLabels.en || addr.phone || '',
+        phoneLabels: cleanPhoneLabels
+      },
+      language: this.settingsForm.language || 'en',
+      showPagePagination: this.settingsForm.showPagePagination !== false
+    };
+    
+    // Update settings in the data service
+    this.dataService.updateSettings(completeSettings);
+    
+    // Get the updated data after settings change
+    const currentData = this.dataService.getData();
+    console.log('Saving settings:', completeSettings);
+    console.log('Complete data structure:', currentData);
+    
+    // Save to backend
+    this.dataService.saveData(currentData).subscribe({
+      next: () => {
+        console.log('Settings saved successfully');
+        this.toaster.success('Settings saved successfully!');
+        this.cdr.detectChanges();
+      },
+      error: (error) => {
+        console.error('Error saving settings:', error);
+        this.toaster.error('Failed to save settings');
+      }
+    });
+  }
+
+  onLogoFileSelected(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    if (input.files && input.files[0]) {
+      this.logoFile = input.files[0];
+      const ext = this.logoFile.name.split('.').pop()?.toLowerCase() || 'jpg';
+      const fileName = `logo_${Date.now()}.${ext}`;
+      this.uploadMediaFile(this.logoFile, fileName)
+        .then((url) => {
+          if (this.settingsForm.logo) {
+            this.settingsForm.logo.url = url;
+          }
+          this.cdr.detectChanges();
+          this.toaster.success('Logo uploaded');
+        })
+        .catch((error) => {
+          console.error('Error uploading logo:', error);
+          this.toaster.error('Failed to upload logo');
+        });
+    }
   }
 }

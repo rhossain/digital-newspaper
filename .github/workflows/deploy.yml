@@ -1,0 +1,86 @@
+name: Deploy to Hostinger
+
+on:
+  push:
+    branches:
+      - development
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout development branch
+        uses: actions/checkout@v4
+        with:
+          ref: development
+          fetch-depth: 0
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Build Angular app
+        run: npm run build -- --configuration production --base-href /
+      
+      - name: Configure Git
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+      
+      - name: Create/Switch to release branch
+        run: |
+          git fetch origin
+          git checkout -B release
+          git rm -rf .
+          git clean -fxd
+      
+      - name: Copy build files to release branch
+        run: |
+          cp -r dist/digital-newspaper/browser/* .
+          echo "diginews.rshossain.me" > CNAME
+          
+      - name: Create .htaccess for Angular routing
+        run: |
+          cat > .htaccess << 'EOF'
+          <IfModule mod_rewrite.c>
+            RewriteEngine On
+            RewriteBase /
+            RewriteRule ^index\.html$ - [L]
+            RewriteCond %{REQUEST_FILENAME} !-f
+            RewriteCond %{REQUEST_FILENAME} !-d
+            RewriteRule . /index.html [L]
+          </IfModule>
+          EOF
+      
+      - name: Commit build files
+        run: |
+          git add -A
+          git commit -m "Deploy: $(date +'%Y-%m-%d %H:%M:%S')" || echo "No changes to commit"
+      
+      - name: Push to release branch
+        run: git push origin release --force
+      
+      - name: Deploy to Hostinger via FTP
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ${{ secrets.FTP_SERVER }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          local-dir: ./
+          server-dir: /public_html/
+          exclude: |
+            **/.git*
+            **/.git*/**
+            **/node_modules/**
+      
+      - name: Return to development branch
+        if: always()
+        run: |
+          git checkout development
+          git push origin development
