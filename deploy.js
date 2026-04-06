@@ -36,6 +36,23 @@ const localConfigPath = path.resolve(process.cwd(), 'deploy.config.local.js');
 const baseConfigPath = path.resolve(process.cwd(), 'deploy.config.js');
 let fileConfig = {};
 
+// Auto-generate deploy.config.local.js if not present, and remove it after deployment
+let autoCreatedLocalConfig = false;
+if (!fs.existsSync(localConfigPath)) {
+  const localConfigContent = `// Local FTP/SFTP Deployment Configuration (ignored by git)
+module.exports = {
+  host: '217.21.91.251',
+  user: 'u594404148',
+  password: 'saRobin@007',
+  port: 21,
+  remoteRoot: '/public_html/diginews',
+  useSftp: false
+};
+`;
+  fs.writeFileSync(localConfigPath, localConfigContent, 'utf8');
+  autoCreatedLocalConfig = true;
+}
+
 if (fs.existsSync(localConfigPath)) {
   fileConfig = require(localConfigPath);
   log('Using deploy.config.local.js', colors.blue);
@@ -440,6 +457,15 @@ async function deploy() {
       try {
         fs.rmSync(tempDistDir, { recursive: true });
         log('✓ Cleaned up temporary files', colors.blue);
+      } catch (e) {
+        // Ignore cleanup errors
+      }
+    }
+    // Remove auto-generated local config
+    if (autoCreatedLocalConfig && fs.existsSync(localConfigPath)) {
+      try {
+        fs.unlinkSync(localConfigPath);
+        log('✓ Removed auto-generated deploy.config.local.js', colors.blue);
       } catch (e) {
         // Ignore cleanup errors
       }
