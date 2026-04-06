@@ -35,6 +35,11 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   modalImageTitle: string = '';
   modalLinkedSections: NewsSection[] = [];
   pendingSectionSlug: string | null = null;
+
+  // Mobile/tablet responsive state
+  isMobileView = false;
+  pendingMobileModal = false;
+  private resizeListener?: () => void;
   
   // Image loading states
   thumbnailsLoading: { [key: number]: boolean } = {};
@@ -129,10 +134,22 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     this.subscriptions.push(dataSubscription);
     
     this.loadNewspaperData();
+
+    // Detect mobile/tablet view and keep it updated on resize
+    this.updateIsMobileView();
+    this.resizeListener = () => this.updateIsMobileView();
+    window.addEventListener('resize', this.resizeListener);
   }
 
   ngOnDestroy() {
     this.subscriptions.forEach(sub => sub.unsubscribe());
+    if (this.resizeListener) {
+      window.removeEventListener('resize', this.resizeListener);
+    }
+  }
+
+  private updateIsMobileView() {
+    this.isMobileView = window.innerWidth <= 1024;
   }
 
   loadNewspaperData() {
@@ -469,6 +486,16 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     if (rightPanel) {
       rightPanel.scrollTop = 0;
     }
+
+    // For mobile/tablet: open image modal directly on section select
+    if (this.isMobileView) {
+      if (!this.sectionImageLoading && this.croppedSectionImage) {
+        // Image already ready (e.g. same URL re-selected)
+        setTimeout(() => this.openImageModal(), 0);
+      } else {
+        this.pendingMobileModal = true;
+      }
+    }
     
     // Update URL with section
     this.updateUrl();
@@ -476,12 +503,25 @@ export class NewspaperComponent implements OnInit, OnDestroy {
 
   onSectionImageLoad() {
     this.sectionImageLoading = false;
+    if (this.pendingMobileModal) {
+      this.pendingMobileModal = false;
+      this.openImageModal();
+    }
     this.cdr.detectChanges();
   }
 
   onSectionImageError() {
     this.sectionImageLoading = false;
     this.sectionImageError = true;
+    if (this.pendingMobileModal) {
+      this.pendingMobileModal = false;
+      if (this.selectedSection && this.currentPage) {
+        this.modalImage = null;
+        this.modalImageTitle = this.selectedSection.title;
+        this.modalLinkedSections = [...this.linkedSections];
+        this.showImageModal = true;
+      }
+    }
     this.cdr.detectChanges();
   }
 
@@ -499,6 +539,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     this.showImageModal = false;
     this.linkedSections = [];
     this.sectionImageLoading = false;
+    this.pendingMobileModal = false;
     
     // Update URL to remove section
     this.updateUrl();
@@ -719,12 +760,25 @@ export class NewspaperComponent implements OnInit, OnDestroy {
         this.croppedSectionImage = canvas.toDataURL('image/jpeg', 0.9);
         this.sectionImageLoading = false;
         this.cdr.detectChanges();
+        if (this.pendingMobileModal) {
+          this.pendingMobileModal = false;
+          setTimeout(() => this.openImageModal(), 0);
+        }
       } catch (error) {
         this.croppedSectionImage = null;
         this.sectionImageError = true;
         this.sectionImageLoading = false;
         this.cdr.detectChanges();
         console.error('Failed to crop section image due to canvas security restrictions:', error);
+        if (this.pendingMobileModal) {
+          this.pendingMobileModal = false;
+          if (this.selectedSection && this.currentPage) {
+            this.modalImage = null;
+            this.modalImageTitle = this.selectedSection.title;
+            this.modalLinkedSections = [...this.linkedSections];
+            this.showImageModal = true;
+          }
+        }
       }
     };
 
@@ -734,6 +788,15 @@ export class NewspaperComponent implements OnInit, OnDestroy {
       this.sectionImageLoading = false;
       this.cdr.detectChanges();
       console.error('Failed to load image for cropping:', srcUrl);
+      if (this.pendingMobileModal) {
+        this.pendingMobileModal = false;
+        if (this.selectedSection && this.currentPage) {
+          this.modalImage = null;
+          this.modalImageTitle = this.selectedSection.title;
+          this.modalLinkedSections = [...this.linkedSections];
+          this.showImageModal = true;
+        }
+      }
     };
 
     img.src = srcUrl;

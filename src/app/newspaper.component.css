@@ -1375,55 +1375,130 @@
   }
 }
 
-@media (max-width: 992px) {
-  .left-panel {
-    width: 150px;
+@media (max-width: 1024px) {
+  /* ── Two-row header ───────────────────────────────────────── */
+  .panel-header {
+    height: 100px;
   }
 
-  .right-panel {
-    width: 300px;
+  .main-layout {
+    margin-top: 100px;
+    height: calc(100vh - 100px);
+  }
+
+  /* Allow header children to wrap into two rows */
+  .header-inner {
+    flex-wrap: wrap;
+    padding: 0 16px;
+    /* align-content: stretch (default) distributes two rows equally → 50px each */
+  }
+
+  /* Row 1: Logo — full width, centered */
+  .header-center {
+    order: 1;
+    flex: 0 0 100%;
+    justify-content: center;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--color-border-ui);
+  }
+
+  .logo-image {
+    height: 38px;
+    max-width: 160px;
+  }
+
+  .logo-icon {
+    width: 30px;
+    height: 30px;
   }
 
   .newspaper-title {
-    font-size: 32px;
+    font-size: 20px;
+  }
+
+  /* Row 2: Date nav (left) | Social icons (right) */
+  .header-left {
+    order: 2;
+    flex: 1;
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 6px;
+  }
+
+  .header-right {
+    order: 3;
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 4px;
+  }
+
+  /* Date is already visible in the date-picker button — hide duplicate */
+  .header-right .newspaper-date {
+    display: none;
+  }
+
+  /* Hide "Jump to:" text label — keep the dropdown itself */
+  .dates-label {
+    display: none;
+  }
+
+  /* Compact date-nav buttons */
+  .date-nav-btn {
+    width: 28px;
+    height: 28px;
+  }
+
+  /* Compact social icons */
+  .social-icon {
+    width: 28px;
+    height: 28px;
+  }
+
+  .social-icon svg {
+    width: 15px;
+    height: 15px;
+  }
+
+  /* ── Panels & toolbar ─────────────────────────────────────── */
+  .right-panel {
+    display: none !important;
+  }
+
+  .left-panel {
+    display: none !important;
+  }
+
+  .panel-toggle-btn {
+    display: none !important;
+  }
+
+  /* Icon-only toolbar buttons — hide text labels */
+  .toolbar-right .toolbar-btn span {
+    display: none;
+  }
+
+  .toolbar-right .toolbar-btn {
+    padding: 5px 8px;
+    min-width: 0;
+  }
+}
+
+/* Small phones: hide the "Jump to" date dropdown — arrows are enough */
+@media (max-width: 480px) {
+  .available-dates {
+    display: none;
+  }
+
+  /* Tighter social icon gaps on very small screens */
+  .social-links {
+    gap: 4px;
   }
 }
 
 @media (max-width: 768px) {
   .newspaper-container {
     flex-direction: column;
-  }
-
-  .left-panel {
-    width: 100%;
-    height: auto;
-    border-right: none;
-    border-bottom: 1px solid var(--color-border);
-  }
-
-  .thumbnail-list {
-    display: flex;
-    overflow-x: auto;
-    padding: 10px;
-  }
-
-  .thumbnail-item {
-    min-width: 120px;
-    margin-right: 10px;
-    margin-bottom: 0;
-  }
-
-  .right-panel {
-    width: 100%;
-    position: fixed;
-    top: 0;
-    left: 0;
-    height: 100vh;
-    z-index: 1000;
-    transform: translateX(100%);
-  }
-
-  .right-panel.open {
-    transform: translateX(0);
   }
 }
