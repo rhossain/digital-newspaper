@@ -318,7 +318,7 @@ async function updateReleaseBranch() {
       try {
         const entries = fs.readdirSync('.');
         for (const entry of entries) {
-          if (entry === '.git' || entry === 'node_modules' || entry === '.deploy-backup') continue;
+          if (entry === '.git' || entry === '.gitignore') continue;
           const fullPath = path.join(process.cwd(), entry);
           fs.rmSync(fullPath, { recursive: true, force: true });
         }
@@ -334,6 +334,11 @@ async function updateReleaseBranch() {
         execSync('git rm -rf . 2>&1', { stdio: 'ignore' });
       } catch(e) { /* ignore errors */ }
     }
+    
+    // Create a .gitignore for the release branch to prevent sensitive/unneeded files
+    const releaseGitignore = 'node_modules/\n.deploy-backup/\n*.local.js\n.env*\n';
+    fs.writeFileSync('.gitignore', releaseGitignore);
+    log('✓ Release .gitignore created', colors.green);
     
     // Copy dist files using fs (no shell buffer limits)
     log('Copying build files...', colors.blue);
@@ -358,8 +363,12 @@ async function updateReleaseBranch() {
     };
     fs.writeFileSync('deployment-info.json', JSON.stringify(deployInfo, null, 2));
     
-    // Commit
+    // Commit — use git add with explicit paths to avoid accidentally staging
+    // node_modules or sensitive config files that may exist in the worktree
     execSync('git add -A', { stdio: 'ignore' });
+    // Explicitly un-stage anything that should never be in the release branch
+    try { execSync('git rm --cached -r node_modules 2>/dev/null || true', { stdio: 'ignore' }); } catch(_) {}
+    try { execSync('git rm --cached -r .deploy-backup 2>/dev/null || true', { stdio: 'ignore' }); } catch(_) {}
     
     try {
       const commitMsg = `Deploy: ${new Date().toISOString()} from ${currentBranch}`;
