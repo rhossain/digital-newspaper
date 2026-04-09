@@ -26,10 +26,7 @@
               {
                 "glob": "**/*",
                 "input": "src/assets",
-                "output": "assets",
-                "ignore": [
-                  "newspaper-data.json"
-                ]
+                "output": "assets"
               }
             ],
             "styles": [

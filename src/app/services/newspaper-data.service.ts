@@ -1,7 +1,7 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable, BehaviorSubject } from 'rxjs';
-import { tap, map, catchError } from 'rxjs/operators';
+import { tap, map, catchError, timeout } from 'rxjs/operators';
 import { AuthService } from './auth.service';
 import { WP_BASE_URL } from '../config';
 
@@ -136,6 +136,7 @@ export class NewspaperDataService {
   // Data loading with backwards compatibility (no caching)
   loadData(): Observable<NewspaperData> {
     return this.http.get<NewspaperData | { pages: NewspaperPage[] }>(this.apiUrl).pipe(
+      timeout(10000),
       catchError(() => this.http.get<NewspaperData | { pages: NewspaperPage[] }>(this.assetsUrl)),
       map((data): NewspaperData => {
         // Backwards compatibility: convert old format to new format
