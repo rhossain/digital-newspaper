@@ -33,7 +33,7 @@ jobs:
 
       - name: Create .htaccess for Angular routing
         run: |
-          cat > dist/digital-newspaper/browser/.htaccess << 'EOF'
+          cat > dist/digital-newspaper/.htaccess << 'EOF'
           <IfModule mod_rewrite.c>
             RewriteEngine On
             RewriteBase /
@@ -52,23 +52,20 @@ jobs:
       - name: Publish build to release branch
         run: |
           git fetch origin
-          # Create release branch from scratch (orphan = no history clutter)
+          # Work in a separate temp directory to avoid conflicts
+          DEPLOY_DIR=$(mktemp -d)
+          cp -r dist/digital-newspaper/. "$DEPLOY_DIR/"
+          
+          # Switch to orphan release branch (clean slate)
           git checkout --orphan release
-          git rm -rf --cached .
-          # Copy built files into the workspace root
-          cp -r dist/digital-newspaper/browser/. .
-          # Stage only the built files (ignore source/node_modules)
-          git add --force \
-            index.html \
-            .htaccess \
-            main*.js \
-            polyfills*.js \
-            styles*.css \
-            chunk-*.js \
-            assets/ \
-            media/ \
-            favicon.ico \
-            3rdpartylicenses.txt 2>/dev/null || true
+          git rm -rf . --quiet
+          
+          # Copy built files back into workspace
+          cp -r "$DEPLOY_DIR"/. .
+          rm -rf "$DEPLOY_DIR"
+          
+          # Commit and push everything in the workspace (only build files exist now)
+          git add -A
           git commit -m "Deploy: $(date +'%Y-%m-%d %H:%M:%S')"
           git push origin release --force
 
@@ -85,5 +82,5 @@ jobs:
             --exclude='*.ts' \
             --exclude='node_modules' \
             -e "ssh -p ${{ secrets.SSH_PORT }} -i ~/.ssh/id_rsa" \
-            dist/digital-newspaper/browser/ \
+            dist/digital-newspaper/ \
             ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }}:${{ secrets.REMOTE_PATH }}/
