@@ -8,43 +8,42 @@ on:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout development branch
         uses: actions/checkout@v4
         with:
           ref: development
           fetch-depth: 0
-      
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
-      
+
       - name: Install dependencies
         run: npm ci
-      
+
       - name: Build Angular app
         run: npm run build -- --configuration production --base-href /
-      
+
       - name: Configure Git
         run: |
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
-      
+
       - name: Create/Switch to release branch
         run: |
           git fetch origin
           git checkout -B release
           git rm -rf .
           git clean -fxd
-      
+
       - name: Copy build files to release branch
         run: |
           cp -r dist/digital-newspaper/browser/* .
-          echo "diginews.rshossain.me" > CNAME
-          
+
       - name: Create .htaccess for Angular routing
         run: |
           cat > .htaccess << 'EOF'
@@ -57,30 +56,25 @@ jobs:
             RewriteRule . /index.html [L]
           </IfModule>
           EOF
-      
-      - name: Commit build files
+
+      - name: Commit build files to release branch
         run: |
           git add -A
           git commit -m "Deploy: $(date +'%Y-%m-%d %H:%M:%S')" || echo "No changes to commit"
-      
-      - name: Push to release branch
+
+      - name: Push release branch to GitHub
         run: git push origin release --force
-      
-      - name: Deploy to Hostinger via FTP
-        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
-        with:
-          server: ${{ secrets.FTP_SERVER }}
-          username: ${{ secrets.FTP_USERNAME }}
-          password: ${{ secrets.FTP_PASSWORD }}
-          local-dir: ./
-          server-dir: /public_html/
-          exclude: |
-            **/.git*
-            **/.git*/**
-            **/node_modules/**
-      
-      - name: Return to development branch
-        if: always()
+
+      - name: Setup SSH key
         run: |
-          git checkout development
-          git push origin development
+          install -m 600 -D /dev/null ~/.ssh/id_rsa
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          ssh-keyscan -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Deploy release branch to Hostinger via SSH
+        run: |
+          rsync -avz --delete \
+            --exclude='.git' \
+            -e "ssh -p ${{ secrets.SSH_PORT }} -i ~/.ssh/id_rsa" \
+            ./ \
+            ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }}:${{ secrets.REMOTE_PATH }}/
