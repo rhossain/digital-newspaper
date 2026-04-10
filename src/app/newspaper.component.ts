@@ -38,6 +38,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
 
   // Mobile/tablet responsive state
   isMobileView = false;
+  mobileHeaderMenuOpen = false;
   pendingMobileModal = false;
   private resizeListener?: () => void;
   
@@ -150,6 +151,17 @@ export class NewspaperComponent implements OnInit, OnDestroy {
 
   private updateIsMobileView() {
     this.isMobileView = window.innerWidth <= 1024;
+    if (!this.isMobileView && this.mobileHeaderMenuOpen) {
+      this.mobileHeaderMenuOpen = false;
+    }
+  }
+
+  toggleMobileHeaderMenu() {
+    this.mobileHeaderMenuOpen = !this.mobileHeaderMenuOpen;
+  }
+
+  closeMobileHeaderMenu() {
+    this.mobileHeaderMenuOpen = false;
   }
 
   loadNewspaperData() {

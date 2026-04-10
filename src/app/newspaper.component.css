@@ -88,6 +88,88 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  position: relative;
+}
+
+.mobile-header-menu-btn {
+  display: none;
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 36px;
+  height: 36px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  border: 1px solid var(--color-border-ui);
+  background: var(--color-bg-muted);
+  color: var(--color-primary);
+  cursor: pointer;
+  transition: background-color 0.22s ease, border-color 0.22s ease, color 0.22s ease;
+}
+
+.mobile-menu-icon {
+  position: absolute;
+  transition: opacity 0.24s ease, transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+  transform-origin: center;
+  pointer-events: none;
+}
+
+.mobile-menu-open-icon {
+  opacity: 1;
+  transform: rotate(0deg) scale(1);
+}
+
+.mobile-menu-close-icon {
+  opacity: 0;
+  transform: rotate(-90deg) scale(0.75);
+}
+
+.mobile-header-menu-btn.open {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: var(--color-white);
+}
+
+.mobile-header-menu-btn.open .mobile-menu-open-icon {
+  opacity: 0;
+  transform: rotate(90deg) scale(0.75);
+}
+
+.mobile-header-menu-btn.open .mobile-menu-close-icon {
+  opacity: 1;
+  transform: rotate(0deg) scale(1);
+}
+
+.mobile-header-menu {
+  display: none;
+}
+
+.mobile-header-menu-backdrop {
+  display: none;
+}
+
+@keyframes mobileHeaderMenuSlideIn {
+  from {
+    opacity: 0;
+    transform: translateX(-24px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes mobileHeaderBackdropFadeIn {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
 }
 
 .date-navigator {
@@ -1376,89 +1458,156 @@
 }
 
 @media (max-width: 1024px) {
-  /* ── Two-row header ───────────────────────────────────────── */
   .panel-header {
-    height: 100px;
+    height: 60px;
   }
 
   .main-layout {
-    margin-top: 100px;
-    height: calc(100vh - 100px);
+    margin-top: 60px;
+    height: calc(100vh - 60px);
   }
 
-  /* Allow header children to wrap into two rows */
   .header-inner {
-    flex-wrap: wrap;
-    padding: 0 16px;
-    /* align-content: stretch (default) distributes two rows equally → 50px each */
+    padding: 0 14px;
   }
 
-  /* Row 1: Logo — full width, centered */
+  .header-left,
+  .header-right {
+    display: none;
+  }
+
   .header-center {
-    order: 1;
-    flex: 0 0 100%;
+    flex: 1;
     justify-content: center;
-    padding-bottom: 8px;
-    border-bottom: 1px solid var(--color-border-ui);
+  }
+
+  .mobile-header-menu-btn {
+    display: inline-flex;
   }
 
   .logo-image {
-    height: 38px;
-    max-width: 160px;
+    height: 44px;
+    max-width: 170px;
   }
 
   .logo-icon {
+    width: 32px;
+    height: 32px;
+  }
+
+  .newspaper-title {
+    font-size: 22px;
+  }
+
+  .mobile-header-menu-backdrop {
+    display: block;
+    position: fixed;
+    inset: 60px 0 0;
+    background: rgba(0, 0, 0, 0.2);
+    z-index: 1000;
+    animation: mobileHeaderBackdropFadeIn 0.22s ease-out;
+  }
+
+  .mobile-header-menu {
+    display: flex;
+    position: fixed;
+    top: 60px;
+    left: 0;
+    right: 0;
+    flex-direction: column;
+    gap: 14px;
+    padding: 14px;
+    background: var(--color-white);
+    border-top: 1px solid var(--color-border-ui);
+    border-bottom: 1px solid var(--color-border-ui);
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.12);
+    z-index: 1001;
+    width: 90%;
+    max-width: 350px;
+    height: 100%;
+    max-height: calc(100vh - 60px);
+    overflow-y: auto;
+    transform-origin: left center;
+    animation: mobileHeaderMenuSlideIn 0.26s cubic-bezier(0.22, 1, 0.36, 1);
+    will-change: transform, opacity;
+  }
+
+  .mobile-menu-block {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .mobile-menu-block.mobile-menu-socials {
+    margin-top: auto;
+  }
+
+  .mobile-menu-footer-block {
+    width: 100%;
+    padding-top: 10px;
+  }
+
+  .mobile-menu-footer-info {
+    width: 100%;
+    margin: 0;
+    border-radius: 12px;
+    border-top: 1px solid var(--color-border-ui);
+    box-shadow: none;
+    background: var(--color-bg-surface);
+  }
+
+  .mobile-menu-footer-info .footer-info-inner {
+    padding: 12px 14px;
+  }
+
+  .mobile-menu-footer-info .footer-info-item {
+    font-size: 12px;
+  }
+
+  .mobile-menu-footer-info .footer-contact-row {
+    gap: 6px 0;
+  }
+
+  .mobile-menu-block .header-right,
+  .mobile-menu-block .header-left {
+    display: flex;
+  }
+
+  .page-footer-info {
+    display: none;
+  }
+
+  .mobile-menu-block .page-footer-info {
+    display: block;
+  }
+
+  .mobile-menu-block .social-links {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .mobile-menu-block .newspaper-date {
+    margin-top: 2px;
+  }
+
+  .mobile-menu-block .dates-label {
+    display: inline;
+  }
+
+  .date-nav-btn {
     width: 30px;
     height: 30px;
   }
 
-  .newspaper-title {
-    font-size: 20px;
-  }
-
-  /* Row 2: Date nav (left) | Social icons (right) */
-  .header-left {
-    order: 2;
-    flex: 1;
-    flex-direction: row;
-    align-items: center;
-    justify-content: flex-start;
-    gap: 6px;
-  }
-
-  .header-right {
-    order: 3;
-    flex-direction: row;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 4px;
-  }
-
-  /* Date is already visible in the date-picker button — hide duplicate */
-  .header-right .newspaper-date {
-    display: none;
-  }
-
-  /* Hide "Jump to:" text label — keep the dropdown itself */
-  .dates-label {
-    display: none;
-  }
-
-  /* Compact date-nav buttons */
-  .date-nav-btn {
-    width: 28px;
-    height: 28px;
-  }
-
-  /* Compact social icons */
   .social-icon {
-    width: 28px;
-    height: 28px;
+    width: 30px;
+    height: 30px;
   }
 
   .social-icon svg {
-    width: 15px;
-    height: 15px;
+    width: 16px;
+    height: 16px;
   }
 
   /* ── Panels & toolbar ─────────────────────────────────────── */
@@ -1487,6 +1636,10 @@
 
 /* Small phones: hide the "Jump to" date dropdown — arrows are enough */
 @media (max-width: 480px) {
+  .mobile-header-menu {
+    padding: 12px;
+  }
+
   .available-dates {
     display: none;
   }
