@@ -197,3 +197,14 @@
 .dp-day:disabled {
   cursor: not-allowed;
 }
+
+@media (max-width: 1024px) {
+  .dp-host,
+  .dp-trigger {
+    width: 100%;
+  }
+
+  .dp-popup {
+    left: -22px;
+  }
+}
