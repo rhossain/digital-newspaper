@@ -31,19 +31,6 @@ jobs:
       - name: Build Angular app
         run: npm run build -- --configuration production --base-href /
 
-      - name: Create .htaccess for Angular routing
-        run: |
-          cat > dist/digital-newspaper/.htaccess << 'EOF'
-          <IfModule mod_rewrite.c>
-            RewriteEngine On
-            RewriteBase /
-            RewriteRule ^index\.html$ - [L]
-            RewriteCond %{REQUEST_FILENAME} !-f
-            RewriteCond %{REQUEST_FILENAME} !-d
-            RewriteRule . /index.html [L]
-          </IfModule>
-          EOF
-
       - name: Configure Git
         run: |
           git config user.name "GitHub Actions"
