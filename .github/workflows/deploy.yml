@@ -92,3 +92,10 @@ jobs:
             -e "ssh -p ${{ secrets.SSH_PORT }} -i ~/.ssh/id_rsa" \
             dist/digital-newspaper/ \
             ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }}:${{ secrets.REMOTE_PATH }}/
+
+      - name: Verify deployment
+        run: |
+          echo "=== Remote files after deploy ==="
+          ssh -p ${{ secrets.SSH_PORT }} -i ~/.ssh/id_rsa \
+            ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }} \
+            "ls -lah ${{ secrets.REMOTE_PATH }}/"
