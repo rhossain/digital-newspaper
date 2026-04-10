@@ -8,6 +8,8 @@ on:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout development branch
@@ -15,6 +17,7 @@ jobs:
         with:
           ref: development
           fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -28,25 +31,9 @@ jobs:
       - name: Build Angular app
         run: npm run build -- --configuration production --base-href /
 
-      - name: Configure Git
-        run: |
-          git config user.name "GitHub Actions"
-          git config user.email "actions@github.com"
-
-      - name: Create/Switch to release branch
-        run: |
-          git fetch origin
-          git checkout -B release
-          git rm -rf .
-          git clean -fxd
-
-      - name: Copy build files to release branch
-        run: |
-          cp -r dist/digital-newspaper/browser/* .
-
       - name: Create .htaccess for Angular routing
         run: |
-          cat > .htaccess << 'EOF'
+          cat > dist/digital-newspaper/browser/.htaccess << 'EOF'
           <IfModule mod_rewrite.c>
             RewriteEngine On
             RewriteBase /
@@ -57,13 +44,33 @@ jobs:
           </IfModule>
           EOF
 
-      - name: Commit build files to release branch
+      - name: Configure Git
         run: |
-          git add -A
-          git commit -m "Deploy: $(date +'%Y-%m-%d %H:%M:%S')" || echo "No changes to commit"
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
 
-      - name: Push release branch to GitHub
-        run: git push origin release --force
+      - name: Publish build to release branch
+        run: |
+          git fetch origin
+          # Create release branch from scratch (orphan = no history clutter)
+          git checkout --orphan release
+          git rm -rf --cached .
+          # Copy built files into the workspace root
+          cp -r dist/digital-newspaper/browser/. .
+          # Stage only the built files (ignore source/node_modules)
+          git add --force \
+            index.html \
+            .htaccess \
+            main*.js \
+            polyfills*.js \
+            styles*.css \
+            chunk-*.js \
+            assets/ \
+            media/ \
+            favicon.ico \
+            3rdpartylicenses.txt 2>/dev/null || true
+          git commit -m "Deploy: $(date +'%Y-%m-%d %H:%M:%S')"
+          git push origin release --force
 
       - name: Setup SSH key
         run: |
@@ -71,10 +78,12 @@ jobs:
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           ssh-keyscan -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
 
-      - name: Deploy release branch to Hostinger via SSH
+      - name: Deploy to Hostinger via SSH
         run: |
           rsync -avz --delete \
             --exclude='.git' \
+            --exclude='*.ts' \
+            --exclude='node_modules' \
             -e "ssh -p ${{ secrets.SSH_PORT }} -i ~/.ssh/id_rsa" \
-            ./ \
+            dist/digital-newspaper/browser/ \
             ${{ secrets.SSH_USERNAME }}@${{ secrets.SSH_HOST }}:${{ secrets.REMOTE_PATH }}/
