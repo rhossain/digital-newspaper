@@ -102,3 +102,10 @@
 .share-btn.copy:hover {
   background: var(--color-copy-hover);
 }
+
+@media (max-width: 1024px) {
+  .share-btn {
+    width: 24px;
+    height: 24px;
+  }
+}
