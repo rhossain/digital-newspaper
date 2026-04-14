@@ -104,6 +104,11 @@
 }
 
 @media (max-width: 1024px) {
+  .modal-share-header {
+    gap: 8px;
+    padding: 20px;
+  }
+
   .share-btn {
     width: 24px;
     height: 24px;
