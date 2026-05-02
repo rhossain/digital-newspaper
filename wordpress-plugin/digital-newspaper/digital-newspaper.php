@@ -258,6 +258,20 @@ class Digital_Newspaper_API {
       return new WP_REST_Response(['error' => 'Missing url'], 400);
     }
 
+    // Only allow proxying images from the same WordPress host or trusted domains
+    $parsed = wp_parse_url($url);
+    $home_host = wp_parse_url(home_url(), PHP_URL_HOST);
+    $allowed_hosts = apply_filters('dn_proxy_allowed_hosts', [$home_host]);
+    if (empty($parsed['host']) || !in_array($parsed['host'], $allowed_hosts, true)) {
+      return new WP_REST_Response(['error' => 'URL not allowed'], 403);
+    }
+
+    // Validate it resolves to an image path
+    $scheme = $parsed['scheme'] ?? '';
+    if (!in_array($scheme, ['http', 'https'], true)) {
+      return new WP_REST_Response(['error' => 'Invalid URL scheme'], 400);
+    }
+
     $response = wp_remote_get($url, [
       'timeout' => 20,
       'redirection' => 5,
@@ -282,6 +296,11 @@ class Digital_Newspaper_API {
 
     if (!$content_type) {
       $content_type = 'image/jpeg';
+    }
+
+    // Block non-image responses to prevent content-sniffing attacks
+    if (strpos($content_type, 'image/') !== 0) {
+      return new WP_REST_Response(['error' => 'Not an image'], 415);
     }
 
     return new WP_REST_Response($body, 200, [
