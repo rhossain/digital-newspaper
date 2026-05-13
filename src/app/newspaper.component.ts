@@ -9,12 +9,19 @@ import { TranslationService } from './i18n/translation.service';
 import { TranslatePipe } from './i18n/translate.pipe';
 import { LocaleDatePipe } from './i18n/locale-date.pipe';
 import { DatePickerComponent } from './components/date-picker/date-picker.component';
-import { Subscription } from 'rxjs';
+import { Subscription, timer } from 'rxjs';
+import { switchMap, take, pairwise, startWith, filter } from 'rxjs/operators';
+import { AccessControlService } from './services/access-control.service';
+import { SubscriptionService } from './services/subscription.service';
+import { SubscriptionWallComponent } from './subscription/subscription-wall/subscription-wall.component';
+import { SubscriptionStatusComponent } from './subscription/subscription-status/subscription-status.component';
+import { CLIENT_PACKAGE } from './config';
+import type { AccessMode } from './models/subscription.models';
 
 @Component({
   selector: 'app-newspaper',
   standalone: true,
-  imports: [CommonModule, FormsModule, ShareButtonsComponent, TranslatePipe, LocaleDatePipe, DatePickerComponent],
+  imports: [CommonModule, FormsModule, ShareButtonsComponent, TranslatePipe, LocaleDatePipe, DatePickerComponent, SubscriptionWallComponent, SubscriptionStatusComponent],
   templateUrl: './newspaper.component.html',
   styleUrls: ['./newspaper.component.css']
 })
@@ -67,6 +74,11 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   
   private subscriptions: Subscription[] = [];
 
+  // Subscription / paywall state
+  paywallActive = false;
+  paywallAccessMode: AccessMode = 'today_edition';
+  readonly isPublisherPackage = CLIENT_PACKAGE === 'publisher';
+
   constructor(
     private dataService: NewspaperDataService,
     private toaster: ToasterService,
@@ -74,7 +86,9 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     private router: Router,
     private route: ActivatedRoute,
     private translationService: TranslationService,
-    private location: Location
+    private location: Location,
+    private accessControl: AccessControlService,
+    private subscriptionService: SubscriptionService,
   ) {}
 
   /** Expose TranslationService to the template. */
@@ -100,10 +114,39 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     });
     this.subscriptions.push(routeSubscription);
 
-    // Subscribe to query parameters (edition number)
+    // Subscribe to query parameters (edition number + post-payment return)
     const querySubscription = this.route.queryParamMap.subscribe(params => {
       const editionParam = params.get('e');
       this.selectedEditionNumber = editionParam ? parseInt(editionParam, 10) : 1;
+
+      // Handle return from WooCommerce checkout: ?sub=pending triggers a status refresh.
+      // Never trust this param as proof of subscription — always re-fetch from the server.
+      if (params.get('sub') === 'pending') {
+        this.router.navigate([], {
+          queryParams: { sub: null },
+          queryParamsHandling: 'merge',
+          replaceUrl: true,
+        });
+        // Poll up to 3 times (2 s apart) — WC order processing can have a brief delay.
+        const MAX_ATTEMPTS = 3;
+        let attempt = 0;
+        const pollSub = timer(0, 2000).pipe(
+          take(MAX_ATTEMPTS),
+          switchMap(() => {
+            attempt++;
+            return this.subscriptionService.loadStatus();
+          })
+        ).subscribe({
+          next: (status) => {
+            if (status.hasActiveSubscription && this.paywallActive) {
+              this.onSubscriptionRefreshed();
+              pollSub.unsubscribe();
+            }
+          },
+          error: () => {},
+        });
+        this.subscriptions.push(pollSub);
+      }
     });
     this.subscriptions.push(querySubscription);
     
@@ -133,7 +176,44 @@ export class NewspaperComponent implements OnInit, OnDestroy {
       }
     });
     this.subscriptions.push(dataSubscription);
-    
+
+    // Reactively clear the paywall when subscription status becomes active
+    // (covers login from the wall, post-payment refresh, and cross-tab login).
+    // Uses pairwise so it only triggers on a genuine inactive→active transition,
+    // not when a subscribed user manually opens the wall and status is re-fetched.
+    const statusSubscription = this.subscriptionService.status$.pipe(
+      startWith(null),
+      pairwise(),
+    ).subscribe(([prev, curr]) => {
+      const wasActive = prev?.hasActiveSubscription === true;
+      const isNowActive = curr?.hasActiveSubscription === true;
+      if (!wasActive && isNowActive && this.paywallActive) {
+        this.paywallActive = false;
+        this.ensureAccessibleDate();
+        this.loadCurrentEdition();
+        // Defer detectChanges() to a microtask instead of running it synchronously.
+        //
+        // Why: setStatus() in auth.login()'s tap() operator calls status$.next()
+        // synchronously, which fires this pairwise subscriber mid-pipeline — before
+        // the tap's downstream next() callback (onLogin.next) has had a chance to run.
+        // A synchronous detectChanges() here destroys the wall component via *ngIf,
+        // which triggers ngOnDestroy → subs.unsubscribe() → sets isStopped=true on
+        // the login subscription → RxJS skips onLogin.next entirely → loginLoading
+        // stays true and the login form stays frozen on screen.
+        //
+        // By deferring to a microtask, the full pipeline (tap → next → onLogin.next)
+        // completes first. onLogin.next emits subscriptionRefreshed which calls
+        // detectChanges() via onSubscriptionRefreshed(), cleanly closing the wall.
+        // The deferred detectChanges() here then runs as a no-op.
+        Promise.resolve().then(() => this.cdr.detectChanges());
+      }
+    });
+    this.subscriptions.push(statusSubscription);
+
+    // Fetch subscription status on startup when the user is already logged in
+    // (e.g. page reload with a valid token in localStorage).
+    this.subscriptionService.loadStatus().subscribe({ error: () => {} });
+
     this.loadNewspaperData();
 
     // Detect mobile/tablet view and keep it updated on resize
@@ -184,13 +264,34 @@ export class NewspaperComponent implements OnInit, OnDestroy {
           this.dataService.setCurrentDate(defaultDate);
         }
         
-        // Single, authoritative loadCurrentEdition() call: always runs once
-        // here after the date is finalised, preventing the double-call race
-        // that left sectionImageLoading stuck at true for cached images.
-        this.loadCurrentEdition();
-        this.initialLoadComplete = true;
-        this.isLoading = false;
-        this.cdr.detectChanges();
+        // Single, authoritative loadCurrentEdition() call — deferred until
+        // subscription status is known so access-control checks never run
+        // against a null status (which would always deny archive access).
+        //
+        // When status is already in memory (sessionStorage cache or synchronous
+        // unauthenticated path), proceed immediately. Otherwise wait for the
+        // in-flight loadStatus() HTTP request to complete first.
+        const proceed = () => {
+          this.ensureAccessibleDate();
+          this.loadCurrentEdition();
+          this.initialLoadComplete = true;
+          this.isLoading = false;
+          this.cdr.detectChanges();
+        };
+
+        if (this.subscriptionService.getStatus() !== null) {
+          // Status already known — proceed immediately.
+          proceed();
+        } else {
+          // Status HTTP is still in-flight. Wait for it before calling
+          // loadCurrentEdition() so canAccessEdition/canAccessPage never
+          // evaluate against null status (null → false → spurious paywall).
+          const readySub = this.subscriptionService.status$.pipe(
+            filter((s): s is NonNullable<typeof s> => s !== null),
+            take(1),
+          ).subscribe(() => proceed());
+          this.subscriptions.push(readySub);
+        }
       },
       error: (error) => {
         console.error('Error loading newspaper data:', error);
@@ -233,15 +334,26 @@ export class NewspaperComponent implements OnInit, OnDestroy {
         this.thumbnailsLoading[page.id] = true;
       });
       if (this.pages.length > 0) {
-        // Navigate to section if pendingSectionSlug exists, otherwise select first page
-        if (this.pendingSectionSlug) {
-          const found = this.navigateToSection(this.pendingSectionSlug);
-          this.pendingSectionSlug = null; // Clear after use
-          if (!found) {
+        // Access control: guard at the edition level.
+        // Even when the edition is gated (e.g. archive in 'today_edition' mode), always
+        // display page 1 so the center panel is never blank. The paywall fires as an overlay.
+        if (!this.accessControl.canAccessEdition(edition)) {
+          this.paywallActive = true;
+          this.paywallAccessMode = this.accessControl.getEffectiveAccessMode();
+          // Still load page 1 so users see the content preview behind the paywall.
+          this.loadPageWithoutGating(this.pages[0]);
+        } else {
+          this.paywallActive = false;
+          // Navigate to section if pendingSectionSlug exists, otherwise select first page.
+          if (this.pendingSectionSlug) {
+            const found = this.navigateToSection(this.pendingSectionSlug);
+            this.pendingSectionSlug = null; // Clear after use
+            if (!found) {
+              this.selectPage(this.pages[0]);
+            }
+          } else {
             this.selectPage(this.pages[0]);
           }
-        } else {
-          this.selectPage(this.pages[0]);
         }
       } else {
         this.currentPage = null;
@@ -334,6 +446,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   }
 
   previousDay() {
+    if (this.archiveLocked) return;
     const date = new Date(this.selectedDate + 'T00:00:00');
     date.setDate(date.getDate() - 1);
     this.selectedDate = date.toISOString().split('T')[0];
@@ -365,6 +478,11 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   pageDropdownOpen = false;
   leftPanelVisible = true;
 
+  /** True when the user has no access to past dates (archive locked). */
+  get archiveLocked(): boolean {
+    return !this.accessControl.canAccessPastDates();
+  }
+
   get currentEdition(): NewspaperEdition | null {
     return this.editionsForDate.find(e => (e.edition || 1) === this.selectedEditionNumber) || this.editionsForDate[0] || null;
   }
@@ -387,7 +505,68 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   //   });
   // }
 
+  /** Proxy for template access to AccessControlService.isPageLocked(). */
+  isPageLocked(pageIndex: number): boolean {
+    return this.accessControl.isPageLocked(pageIndex);
+  }
+
+  /** Called by SubscriptionWallComponent when login or status-refresh succeeds. */
+  onSubscriptionRefreshed(): void {
+    this.paywallActive = false;
+    // If the edition currently on screen is locked (e.g. past date in
+    // today_edition mode), silently navigate to today's edition so the
+    // paywall doesn't immediately reopen after login/refresh.
+    this.ensureAccessibleDate();
+    this.loadCurrentEdition();
+    this.cdr.detectChanges();
+  }
+
+  /**
+   * When the currently-selected date's edition is not accessible, silently
+   * switch to today's date so that automatic loadCurrentEdition() calls
+   * (startup, post-login) never trigger the paywall automatically.
+   *
+   * User-initiated navigation (date picker, prev/next buttons) intentionally
+   * does NOT call this — locking past dates for those cases is correct behaviour.
+   */
+  private ensureAccessibleDate(): void {
+    const edition = this.dataService.getCurrentEdition(this.selectedEditionNumber);
+    if (!edition) return; // no edition → loadCurrentEdition() will show empty state
+    if (!this.accessControl.canAccessEdition(edition)) {
+      const today = this.dataService.getTodayDate();
+      if (this.selectedDate !== today) {
+        this.selectedDate = today;
+        this.dataService.setCurrentDate(today);
+      }
+    }
+  }
+
+  /** Called by SubscriptionStatusComponent when the user clicks the locked badge. */
+  onOpenPaywall(): void {
+    this.paywallActive = true;
+    this.paywallAccessMode = this.accessControl.getEffectiveAccessMode();
+    this.cdr.detectChanges();
+  }
+
+  /** Closes the paywall modal (backdrop click or close button). */
+  onClosePaywall(): void {
+    this.paywallActive = false;
+    this.cdr.detectChanges();
+  }
+
   selectPage(page: NewspaperPage, targetSectionId?: string) {
+    // Access control: guard at the page level (gates in both 'today_edition' and 'archive_access' modes).
+    if (!this.accessControl.canAccessPage(page, this.pages)) {
+      this.paywallActive = true;
+      this.paywallAccessMode = this.accessControl.getEffectiveAccessMode();
+      // Keep page 1 visible behind the paywall — do not blank the center panel.
+      if (!this.currentPage && this.pages.length > 0) {
+        this.loadPageWithoutGating(this.pages[0]);
+      }
+      this.cdr.detectChanges();
+      return;
+    }
+    this.paywallActive = false;
     this.currentPage = page;
     this.imageLoaded = false;
 
@@ -424,6 +603,23 @@ export class NewspaperComponent implements OnInit, OnDestroy {
       this.selectedSection = null;
       this.linkedSections = [];
     }
+  }
+
+  /**
+   * Loads a page into the center panel unconditionally — used to display page 1
+   * behind the paywall so the center panel is never blank for gated content.
+   */
+  private loadPageWithoutGating(page: NewspaperPage): void {
+    this.currentPage = page;
+    this.imageLoaded = false;
+    this.selectedSection = null;
+    this.linkedSections = [];
+    setTimeout(() => {
+      const img = this.mainImageRef?.nativeElement;
+      if (img && img.complete && img.naturalWidth > 0) {
+        this.onImageLoad();
+      }
+    }, 0);
   }
 
   onThumbnailLoad(pageId: number) {

@@ -4,7 +4,7 @@
     <div class="header-inner">
     <div class="header-left">
       <div class="date-navigator">
-        <button class="date-nav-btn" (click)="previousDay()" [title]="ts.t('header.previousDay')">
+        <button class="date-nav-btn" (click)="previousDay()" [disabled]="archiveLocked" [title]="ts.t('header.previousDay')">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="15 18 9 12 15 6"></polyline>
           </svg>
@@ -12,6 +12,7 @@
         <app-date-picker
           [value]="selectedDate"
           [max]="todayDate"
+          [min]="archiveLocked ? todayDate : ''"
           [availableDates]="availableDates"
           (valueChange)="onDatePickerChange($event)"
         ></app-date-picker>
@@ -21,7 +22,7 @@
           </svg>
         </button>
       </div>
-      <div class="available-dates" *ngIf="availableDates.length > 1">
+      <div class="available-dates" *ngIf="availableDates.length > 1 && !archiveLocked">
         <span class="dates-label">{{ 'header.jumpTo' | translate }}</span>
         <select [(ngModel)]="selectedDate" (change)="onDateChange()" class="dates-dropdown">
           <option *ngFor="let date of availableDates" [value]="date">
@@ -74,6 +75,7 @@
     
     <div class="header-right">
       <div class="social-links">
+        <app-subscription-status *ngIf="isPublisherPackage" (openPaywall)="onOpenPaywall()"></app-subscription-status>
         <a *ngIf="socialLinks.facebook" [href]="socialLinks.facebook" target="_blank" rel="noopener noreferrer" class="social-icon" title="Facebook">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
             <path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"></path>
@@ -124,7 +126,7 @@
     <div class="mobile-header-menu" *ngIf="isMobileView && mobileHeaderMenuOpen">
       <div class="mobile-menu-block">
         <div class="date-navigator">
-          <button class="date-nav-btn" (click)="previousDay()" [title]="ts.t('header.previousDay')">
+          <button class="date-nav-btn" (click)="previousDay()" [disabled]="archiveLocked" [title]="ts.t('header.previousDay')">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="15 18 9 12 15 6"></polyline>
             </svg>
@@ -132,6 +134,7 @@
           <app-date-picker
             [value]="selectedDate"
             [max]="todayDate"
+            [min]="archiveLocked ? todayDate : ''"
             [availableDates]="availableDates"
             (valueChange)="onDatePickerChange($event)"
           ></app-date-picker>
@@ -141,7 +144,7 @@
             </svg>
           </button>
         </div>
-        <div class="available-dates" *ngIf="availableDates.length > 1">
+        <div class="available-dates" *ngIf="availableDates.length > 1 && !archiveLocked">
           <span class="dates-label">{{ 'header.jumpTo' | translate }}</span>
           <select [(ngModel)]="selectedDate" (change)="onDateChange()" class="dates-dropdown">
             <option *ngFor="let date of availableDates" [value]="date">
@@ -239,7 +242,7 @@
 
       <div class="thumbnail-list" *ngIf="pages.length > 0">
         <div
-          *ngFor="let page of pages"
+          *ngFor="let page of pages; let i = index"
           class="thumbnail-item"
           [class.active]="currentPage?.id === page.id"
           (click)="selectPage(page)"
@@ -252,6 +255,14 @@
               (load)="onThumbnailLoad(page.id)"
               [style.opacity]="thumbnailsLoading[page.id] ? '0' : '1'"
             />
+            <!-- Lock overlay for paywalled pages -->
+            <div class="thumbnail-lock-overlay" *ngIf="isPageLocked(i)">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+                   stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+              </svg>
+            </div>
           </div>
           <span class="page-number">{{ ts.toLocaleDigits(page.id) }}</span>
         </div>
@@ -268,6 +279,7 @@
 
     <!-- Center Panel: Main Page View -->
     <div class="center-panel">
+
     <div class="empty-state" *ngIf="!currentPage && pages.length === 0">
       <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
         <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
@@ -697,4 +709,20 @@
     </div>
   </div>
   </div>
+</div>
+
+<!-- Subscription wall modal (publisher package only) -->
+<div class="paywall-modal-backdrop" *ngIf="paywallActive" (click)="onClosePaywall()"></div>
+<div class="paywall-modal" *ngIf="paywallActive">
+  <button type="button" class="paywall-modal__close" (click)="onClosePaywall()" aria-label="Close">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <line x1="18" y1="6" x2="6" y2="18"></line>
+      <line x1="6" y1="6" x2="18" y2="18"></line>
+    </svg>
+  </button>
+  <app-subscription-wall
+    [accessMode]="paywallAccessMode"
+    (subscriptionRefreshed)="onSubscriptionRefreshed()"
+  ></app-subscription-wall>
 </div>

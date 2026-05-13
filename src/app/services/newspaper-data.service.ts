@@ -4,6 +4,7 @@ import { Observable, BehaviorSubject } from 'rxjs';
 import { tap, map, catchError, timeout } from 'rxjs/operators';
 import { AuthService } from './auth.service';
 import { WP_BASE_URL } from '../config';
+import type { SubscriptionSettings } from '../models/subscription.models';
 
 export interface NewsSection {
   id: string;
@@ -71,6 +72,12 @@ export interface GlobalSettings {
   };
   language?: 'en' | 'bn';
   showPagePagination?: boolean;
+  /**
+   * Subscription configuration served from WordPress.
+   * When present, overrides compile-time defaults from config.ts.
+   * Only populated when CLIENT_PACKAGE is 'publisher'.
+   */
+  subscription?: SubscriptionSettings;
 }
 
 export interface NewspaperData {
@@ -111,8 +118,14 @@ export class NewspaperDataService {
 
   // Date helper methods
   getTodayDate(): string {
+    // Use LOCAL calendar date, not UTC, so editions published with the
+    // local newspaper date (e.g. Bangladesh UTC+6) are recognised as "today"
+    // even when UTC date has rolled over to the next day.
     const today = new Date();
-    return today.toISOString().split('T')[0]; // YYYY-MM-DD
+    const year  = today.getFullYear();
+    const month = String(today.getMonth() + 1).padStart(2, '0');
+    const day   = String(today.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
   }
 
   formatDisplayDate(dateStr: string): string {

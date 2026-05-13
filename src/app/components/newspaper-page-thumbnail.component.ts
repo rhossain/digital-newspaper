@@ -4,10 +4,8 @@ import { CommonModule } from '@angular/common';
 import { NewspaperPage } from '../services/newspaper-data.service';
 import { ImageCacheService } from '../services/image-cache.service';
 
-/**
- * Newspaper page thumbnail component
- * Optimized for caching and performance with OnPush change detection
- */
+// Newspaper page thumbnail component
+// Optimized for caching and performance with OnPush change detection
 @Component({
   selector: 'app-newspaper-page-thumbnail',
   standalone: true,

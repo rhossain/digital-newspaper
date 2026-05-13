@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy, ChangeDetectorRef } from '@angular/core';
+import { Component, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { ToasterService, ToastMessage } from '../services/toaster.service';
 import { Subscription } from 'rxjs';
@@ -15,15 +15,13 @@ export class ToasterComponent implements OnInit, OnDestroy {
   private subscription?: Subscription;
 
   constructor(
-    private toasterService: ToasterService,
-    private cdr: ChangeDetectorRef
+    private toasterService: ToasterService
   ) {}
 
   ngOnInit() {
     this.subscription = this.toasterService.toast$.subscribe(toast => {
       this.toasts.push(toast);
-      this.cdr.detectChanges();
-      
+
       if (toast.duration && toast.duration > 0) {
         setTimeout(() => {
           this.removeToast(toast.id);
@@ -40,7 +38,6 @@ export class ToasterComponent implements OnInit, OnDestroy {
 
   removeToast(id: number) {
     this.toasts = this.toasts.filter(toast => toast.id !== id);
-    this.cdr.detectChanges();
   }
 
   getIcon(type: string): string {

@@ -1,0 +1,288 @@
+<div class="paywall-card">
+
+    <!-- ── Header ──────────────────────────────────────────────────────────── -->
+    <div class="paywall-header">
+      <div class="paywall-icon">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+          <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+        </svg>
+      </div>
+      <div>
+        <h2 class="paywall-title">
+          <ng-container *ngIf="accessMode === 'today_edition'">{{ 'subscription.wall.titleTodayEdition' | translate }}</ng-container>
+          <ng-container *ngIf="accessMode === 'archive_access'">{{ 'subscription.wall.titleArchiveAccess' | translate }}</ng-container>
+        </h2>
+        <p class="paywall-subtitle">{{ 'subscription.wall.subtitle' | translate }}</p>
+      </div>
+    </div>
+
+    <!-- ── LOADING ──────────────────────────────────────────────────────────── -->
+    <ng-container *ngIf="view === 'loading'">
+      <div class="state-center">
+        <span class="spinner spinner-lg"></span>
+      </div>
+    </ng-container>
+
+    <!-- ── LOGIN VIEW ───────────────────────────────────────────────────────── -->
+    <ng-container *ngIf="view === 'login'">
+
+      <!-- Tab switcher -->
+      <div class="auth-tabs">
+        <button type="button" class="auth-tab" [class.auth-tab--active]="authMode === 'login'" (click)="switchAuthMode('login')">
+          {{ 'subscription.wall.tabLogin' | translate }}
+        </button>
+        <button type="button" class="auth-tab" [class.auth-tab--active]="authMode === 'register'" (click)="switchAuthMode('register')">
+          {{ 'subscription.wall.tabRegister' | translate }}
+        </button>
+      </div>
+
+      <!-- ── Login form ──────────────────────────────────────────────────── -->
+      <ng-container *ngIf="authMode === 'login'">
+
+        <!-- How it works: 3-step guide for new visitors -->
+        <div class="how-it-works">
+          <p class="how-title">{{ 'subscription.wall.howItWorks' | translate }}</p>
+          <ol class="steps">
+            <li class="step">
+              <span class="step-num">1</span>
+              <span class="step-text">{{ 'subscription.wall.step1Text' | translate }}</span>
+            </li>
+            <li class="step-arrow">›</li>
+            <li class="step">
+              <span class="step-num">2</span>
+              <span class="step-text">{{ 'subscription.wall.step2Text' | translate }}</span>
+            </li>
+            <li class="step-arrow">›</li>
+            <li class="step">
+              <span class="step-num">3</span>
+              <span class="step-text">{{ 'subscription.wall.step3Text' | translate }}</span>
+            </li>
+          </ol>
+        </div>
+
+        <form class="login-form" (ngSubmit)="onLogin()" autocomplete="on">
+          <div class="form-field">
+            <label for="sw-username">{{ 'subscription.wall.username' | translate }}</label>
+            <input
+              id="sw-username"
+              type="text"
+              [(ngModel)]="username"
+              name="username"
+              autocomplete="username"
+              [placeholder]="ts.t('subscription.wall.usernamePlaceholder')"
+              required
+            />
+          </div>
+          <div class="form-field">
+            <label for="sw-password">
+              <span>{{ 'subscription.wall.password' | translate }}</span>
+              <a *ngIf="loginUrl" [href]="loginUrl + '?action=lostpassword'" target="_blank" rel="noopener" class="forgot-link">
+                {{ 'subscription.wall.forgotPassword' | translate }}
+              </a>
+            </label>
+            <input
+              id="sw-password"
+              type="password"
+              [(ngModel)]="password"
+              name="password"
+              autocomplete="current-password"
+              [placeholder]="ts.t('subscription.wall.passwordPlaceholder')"
+              required
+            />
+          </div>
+
+          <p class="error-msg" *ngIf="loginError">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12" y2="16"/></svg>
+            {{ loginError }}
+          </p>
+
+          <button type="submit" class="btn btn-primary" [disabled]="loginLoading">
+            <span class="spinner" *ngIf="loginLoading"></span>
+            {{ loginLoading ? ('subscription.wall.loggingIn' | translate) : ('subscription.wall.loginBtn' | translate) }}
+          </button>
+        </form>
+
+      </ng-container>
+
+      <!-- ── Register form ───────────────────────────────────────────────── -->
+      <ng-container *ngIf="authMode === 'register'">
+
+        <form class="login-form" (ngSubmit)="onRegister()" autocomplete="on">
+          <div class="form-field">
+            <label for="sw-reg-email">{{ 'subscription.wall.email' | translate }}</label>
+            <input
+              id="sw-reg-email"
+              type="email"
+              [(ngModel)]="regEmail"
+              name="regEmail"
+              autocomplete="email"
+              [placeholder]="ts.t('subscription.wall.emailPlaceholder')"
+              required
+            />
+          </div>
+          <div class="form-field">
+            <label for="sw-reg-username">{{ 'subscription.wall.username' | translate }}</label>
+            <input
+              id="sw-reg-username"
+              type="text"
+              [(ngModel)]="regUsername"
+              name="regUsername"
+              autocomplete="username"
+              [placeholder]="ts.t('subscription.wall.usernamePlaceholder')"
+              required
+            />
+          </div>
+          <div class="form-field">
+            <label for="sw-reg-password">{{ 'subscription.wall.password' | translate }}</label>
+            <input
+              id="sw-reg-password"
+              type="password"
+              [(ngModel)]="regPassword"
+              name="regPassword"
+              autocomplete="new-password"
+              [placeholder]="ts.t('subscription.wall.passwordPlaceholder')"
+              required
+            />
+          </div>
+          <div class="form-field">
+            <label for="sw-reg-confirm">{{ 'subscription.wall.confirmPassword' | translate }}</label>
+            <input
+              id="sw-reg-confirm"
+              type="password"
+              [(ngModel)]="regConfirmPassword"
+              name="regConfirmPassword"
+              autocomplete="new-password"
+              [placeholder]="ts.t('subscription.wall.confirmPasswordPlaceholder')"
+              required
+            />
+          </div>
+
+          <p class="error-msg" *ngIf="registerError">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12" y2="16"/></svg>
+            {{ registerError }}
+          </p>
+
+          <button type="submit" class="btn btn-primary" [disabled]="registerLoading">
+            <span class="spinner" *ngIf="registerLoading"></span>
+            {{ registerLoading ? ('subscription.wall.registering' | translate) : ('subscription.wall.registerBtn' | translate) }}
+          </button>
+        </form>
+
+      </ng-container>
+
+    </ng-container>
+
+    <!-- ── PLANS VIEW ───────────────────────────────────────────────────────── -->
+    <ng-container *ngIf="view === 'plans'">
+
+      <!-- Logged-in user chip -->
+      <div class="user-chip" *ngIf="currentUsername">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+        <span>{{ 'subscription.wall.loggedInAs' | translate }} <strong>{{ currentUsername }}</strong></span>
+        <span class="chip-divider">·</span>
+        <button type="button" class="link-btn" (click)="onLogout()">{{ 'subscription.wall.logout' | translate }}</button>
+      </div>
+
+      <!-- ── Plan picker (always shown; active plan highlighted, others disabled when subscribed) ─── -->
+      <ng-container>
+
+        <!-- Section heading -->
+        <p class="choose-plan-label">{{ 'subscription.wall.choosePlan' | translate }}</p>
+
+        <!-- Loading -->
+        <div class="state-center" *ngIf="plansLoading">
+          <span class="spinner spinner-lg"></span>
+          <p class="muted-text">{{ 'subscription.wall.loadingPlans' | translate }}</p>
+        </div>
+
+        <!-- Fetch error -->
+        <div class="plans-error" *ngIf="!plansLoading && plansError">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+               stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12" y2="16"/>
+          </svg>
+          <p>{{ (plansErrorType === 'timeout' ? 'subscription.loginErrorTimeout' : 'subscription.wall.plansLoadError') | translate }}</p>
+          <button type="button" class="btn btn-outline" (click)="retryLoadPlans()">
+            {{ 'subscription.wall.retryPlans' | translate }}
+          </button>
+        </div>
+
+        <!-- Plan cards -->
+        <div class="plans-grid" *ngIf="!plansLoading && !plansError && plans.length > 0">
+          <div
+            *ngFor="let plan of plans"
+            class="plan-card"
+            [class.plan-card--featured]="isBestValue(plan)"
+            [class.plan-card--selected]="isActivePlan(plan)"
+          >
+            <div class="plan-badge" *ngIf="isBestValue(plan) && !isActivePlan(plan)">{{ 'subscription.wall.bestValue' | translate }}</div>
+
+            <p class="plan-duration-label">{{ planDurationLabel(plan) }}</p>
+
+            <div class="plan-price-block">
+              <span class="plan-currency">{{ plan.currency }}</span>
+              <span class="plan-price">{{ plan.price }}</span>
+            </div>
+            <p class="plan-period">{{ planPeriodLabel(plan) }}</p>
+
+            <p class="plan-name">{{ plan.name }}</p>
+
+            <!-- Not subscribed: normal clickable button -->
+            <button type="button" class="btn btn-plan"
+              *ngIf="!currentStatus?.hasActiveSubscription"
+              (click)="onSelectPlan(plan)">
+              {{ 'subscription.wall.selectPlan' | translate }} →
+            </button>
+
+            <!-- Subscribed — active plan: green label, no button -->
+            <div class="plan-subscribed-label" *ngIf="currentStatus?.hasActiveSubscription && isActivePlan(plan)">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"
+                   stroke-linecap="round" stroke-linejoin="round">
+                <path d="M20 6L9 17l-5-5"></path>
+              </svg>
+              {{ 'subscription.status.subscribed' | translate }}
+              <span class="plan-subscribed-until" *ngIf="activeUntilDisplay">&nbsp;· {{ activeUntilDisplay }}</span>
+            </div>
+
+            <!-- Subscribed — other plans: disabled select button -->
+            <button type="button" class="btn btn-plan"
+              *ngIf="currentStatus?.hasActiveSubscription && !isActivePlan(plan)"
+              disabled>
+              {{ 'subscription.wall.selectPlan' | translate }} →
+            </button>
+          </div>
+        </div>
+
+        <p class="error-msg" *ngIf="checkoutError">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12" y2="16"/></svg>
+          {{ checkoutError }}
+        </p>
+
+        <p class="muted-text" *ngIf="!plansLoading && !plansError && plans.length === 0">
+          {{ 'subscription.wall.noPlans' | translate }}
+        </p>
+
+        <!-- Already paid row -->
+        <div class="refresh-row" *ngIf="!currentStatus?.hasActiveSubscription">
+          <span class="refresh-hint">{{ 'subscription.wall.alreadyPaid' | translate }}</span>
+          <button type="button" class="btn btn-ghost" (click)="onRefreshSubscription()" [disabled]="refreshLoading">
+            <span class="spinner" *ngIf="refreshLoading"></span>
+            {{ refreshLoading ? ('subscription.wall.checking' | translate) : ('subscription.wall.refreshBtn' | translate) }}
+          </button>
+        </div>
+
+      </ng-container>
+
+    </ng-container>
+
+    <!-- ── REDIRECTING ──────────────────────────────────────────────────────── -->
+    <ng-container *ngIf="view === 'redirecting'">
+      <div class="state-center">
+        <span class="spinner spinner-lg"></span>
+        <p class="muted-text">{{ 'subscription.wall.redirecting' | translate }}</p>
+      </div>
+    </ng-container>
+
+</div>

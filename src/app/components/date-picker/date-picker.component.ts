@@ -26,6 +26,7 @@ interface CalendarDay {
 export class DatePickerComponent implements OnChanges {
   @Input() value: string = '';
   @Input() max: string = '';
+  @Input() min: string = ''; // when set, dates before this are disabled
   @Input() availableDates: string[] = [];
   @Output() valueChange = new EventEmitter<string>();
 
@@ -67,9 +68,19 @@ export class DatePickerComponent implements OnChanges {
   }
 
   prevMonth() {
+    if (this.isPrevMonthDisabled()) return;
     if (this.viewMonth === 0) { this.viewMonth = 11; this.viewYear--; }
     else { this.viewMonth--; }
     this.buildCalendar();
+  }
+
+  isPrevMonthDisabled(): boolean {
+    if (!this.min) return false;
+    const minDate = new Date(this.min + 'T00:00:00');
+    return (
+      this.viewYear < minDate.getFullYear() ||
+      (this.viewYear === minDate.getFullYear() && this.viewMonth <= minDate.getMonth())
+    );
   }
 
   nextMonth() {
@@ -106,6 +117,7 @@ export class DatePickerComponent implements OnChanges {
 
     const todayStr = new Date().toISOString().split('T')[0];
     const maxStr = this.max || todayStr;
+    const minStr = this.min || '';
     const availableSet = new Set(this.availableDates);
 
     // Weekday index of the 1st of the view month (0 = Sunday)
@@ -131,7 +143,7 @@ export class DatePickerComponent implements OnChanges {
         dateStr, day: d, inMonth: true,
         isSelected: dateStr === this.value,
         isToday: dateStr === todayStr,
-        isDisabled: dateStr > maxStr,
+        isDisabled: dateStr > maxStr || (minStr !== '' && dateStr < minStr),
         isAvailable: availableSet.has(dateStr)
       });
     }

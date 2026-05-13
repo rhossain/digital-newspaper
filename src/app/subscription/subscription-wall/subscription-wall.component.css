@@ -1,0 +1,592 @@
+/* ── Overlay (removed — modal is handled by the parent newspaper component) ── */
+
+/* ── Host ────────────────────────────────────────────────────────────────── */
+:host {
+  display: block;
+  width: 100%;
+}
+
+/* ── Card ────────────────────────────────────────────────────────────────── */
+.paywall-card {
+  background: var(--color-white);
+  border: 1px solid var(--color-border-ui);
+  border-radius: 16px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.13);
+  padding: 28px 28px 24px;
+  width: 100%;
+  font-family: 'Georgia', 'Times New Roman', serif;
+}
+
+/* ── Header row ──────────────────────────────────────────────────────────── */
+.paywall-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin-bottom: 20px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--color-border-ui);
+}
+
+.paywall-icon {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  background: var(--color-primary-light);
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-primary);
+}
+
+.paywall-title {
+  margin: 0 0 4px;
+  font-size: 17px;
+  font-weight: bold;
+  color: var(--color-text-dark);
+  line-height: 1.3;
+}
+
+.paywall-subtitle {
+  margin: 0;
+  font-size: 13px;
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+
+/* ── Auth tab switcher ───────────────────────────────────────────────────── */
+.auth-tabs {
+  display: flex;
+  border-bottom: 2px solid var(--color-border-ui);
+  margin-bottom: 18px;
+}
+
+.auth-tab {
+  flex: 1;
+  padding: 10px 8px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  font-family: sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.auth-tab--active {
+  color: var(--color-primary);
+  border-bottom-color: var(--color-primary);
+}
+
+.auth-tab:hover:not(.auth-tab--active) {
+  color: var(--color-text-medium);
+}
+
+/* ── How it works ────────────────────────────────────────────────────────── */
+.how-it-works {
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border-ui);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-bottom: 18px;
+}
+
+.how-title {
+  margin: 0 0 10px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.9px;
+  color: var(--color-text-muted);
+  font-family: sans-serif;
+}
+
+.steps {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex-wrap: wrap;
+}
+
+.step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.step-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  background: var(--color-primary);
+  color: white;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 700;
+  font-family: sans-serif;
+  flex-shrink: 0;
+}
+
+.step-text {
+  font-size: 12px;
+  color: var(--color-text-medium);
+  font-family: sans-serif;
+}
+
+.step-arrow {
+  color: var(--color-text-muted);
+  font-size: 18px;
+  line-height: 1;
+  list-style: none;
+}
+
+/* ── Login form ──────────────────────────────────────────────────────────── */
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.form-field label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-text-medium);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  font-family: sans-serif;
+}
+
+.forgot-link {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--color-primary);
+  text-decoration: none;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.forgot-link:hover { text-decoration: underline; }
+
+.form-field input {
+  padding: 10px 13px;
+  border: 1.5px solid var(--color-border-ui);
+  border-radius: 8px;
+  font-size: 14px;
+  font-family: sans-serif;
+  color: var(--color-text-dark);
+  background: var(--color-white);
+  transition: border-color 0.18s, box-shadow 0.18s;
+  outline: none;
+}
+
+.form-field input:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgba(25, 118, 210, 0.12);
+}
+
+/* ── Register row ────────────────────────────────────────────────────────── */
+.register-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--color-border-ui);
+  flex-wrap: wrap;
+}
+
+.register-hint {
+  font-size: 13px;
+  color: var(--color-text-muted);
+}
+
+/* ── User chip ───────────────────────────────────────────────────────────── */
+.user-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--color-primary-light);
+  color: var(--color-primary-dark);
+  border-radius: 20px;
+  padding: 5px 12px;
+  font-size: 12px;
+  font-family: sans-serif;
+  margin-bottom: 16px;
+}
+
+.user-chip svg { opacity: 0.6; flex-shrink: 0; }
+
+.chip-divider { opacity: 0.4; }
+
+.link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 12px;
+  color: var(--color-primary);
+  cursor: pointer;
+  text-decoration: underline;
+  font-family: sans-serif;
+}
+
+/* ── Choose plan label ───────────────────────────────────────────────────── */
+.choose-plan-label {
+  margin: 0 0 12px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+  color: var(--color-text-muted);
+  font-family: sans-serif;
+}
+
+/* ── Plan cards ──────────────────────────────────────────────────────────── */
+.plans-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.plan-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 20px 10px 14px;
+  border: 2px solid var(--color-border-ui);
+  border-radius: 12px;
+  background: var(--color-bg-surface);
+  text-align: center;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.plan-card--featured {
+  border-color: var(--color-primary);
+  background: var(--color-primary-light);
+  box-shadow: 0 4px 16px rgba(25, 118, 210, 0.14);
+}
+
+.plan-badge {
+  position: absolute;
+  top: -11px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--color-primary);
+  color: white;
+  font-size: 10px;
+  font-weight: 700;
+  font-family: sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 2px 10px;
+  border-radius: 20px;
+  white-space: nowrap;
+}
+
+.plan-duration-label {
+  margin: 4px 0 6px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--color-text-muted);
+  font-family: sans-serif;
+}
+
+.plan-price-block {
+  display: flex;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.plan-currency {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-medium);
+  margin-top: 5px;
+  font-family: sans-serif;
+}
+
+.plan-price {
+  font-size: 30px;
+  font-weight: bold;
+  color: var(--color-primary);
+  line-height: 1;
+}
+
+.plan-period {
+  margin: 1px 0 6px;
+  font-size: 11px;
+  color: var(--color-text-muted);
+  font-family: sans-serif;
+}
+
+.plan-name {
+  margin: 0 0 10px;
+  font-size: 11px;
+  color: var(--color-text-muted);
+  font-family: sans-serif;
+}
+
+/* ── Refresh row ─────────────────────────────────────────────────────────── */
+.refresh-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-border-ui);
+  flex-wrap: wrap;
+}
+
+.refresh-hint {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  font-family: sans-serif;
+}
+
+/* ── State center ────────────────────────────────────────────────────────── */
+.state-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 28px 0;
+}
+
+/* ── Active subscription notice ──────────────────────────────────────────── */
+.active-sub-notice {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  background: #f0faf4;
+  border: 1px solid #a5d6b7;
+  border-radius: 12px;
+  padding: 18px 16px;
+  margin-bottom: 16px;
+}
+
+.active-sub-icon {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  background: #d4edda;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #2e7d32;
+}
+
+.active-sub-body {
+  flex: 1;
+}
+
+.active-sub-title {
+  margin: 0 0 6px;
+  font-size: 14px;
+  font-weight: 700;
+  color: #1b5e20;
+  font-family: sans-serif;
+}
+
+.active-sub-detail {
+  margin: 0 0 4px;
+  font-size: 13px;
+  color: #2e7d32;
+  font-family: sans-serif;
+}
+
+.active-sub-hint {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: #388e3c;
+  font-family: sans-serif;
+  font-style: italic;
+}
+
+/* ── Plans fetch error ───────────────────────────────────────────────────── */
+.plans-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 24px 0;
+  text-align: center;
+  color: var(--color-danger, #d32f2f);
+}
+
+.plans-error p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--color-text-medium);
+  font-family: sans-serif;
+}
+
+.muted-text {
+  font-size: 13px;
+  color: var(--color-text-muted);
+  margin: 0;
+  font-family: sans-serif;
+}
+
+/* ── Buttons ─────────────────────────────────────────────────────────────── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 10px 18px;
+  border-radius: 8px;
+  border: none;
+  font-size: 13px;
+  font-weight: 700;
+  font-family: sans-serif;
+  cursor: pointer;
+  transition: background 0.18s, opacity 0.18s, border-color 0.18s, color 0.18s;
+  text-decoration: none;
+}
+
+.btn:disabled { opacity: 0.55; cursor: not-allowed; }
+
+.btn-primary {
+  width: 100%;
+  background: var(--color-primary);
+  color: white;
+  margin-top: 4px;
+  font-size: 14px;
+  padding: 11px 18px;
+}
+.btn-primary:not(:disabled):hover { background: var(--color-primary-dark); }
+
+.btn-outline {
+  background: transparent;
+  color: var(--color-primary);
+  border: 1.5px solid var(--color-primary);
+  padding: 8px 14px;
+}
+.btn-outline:hover { background: var(--color-primary-light); }
+
+.btn-plan {
+  width: 100%;
+  background: var(--color-primary);
+  color: white;
+  padding: 8px 10px;
+  font-size: 12px;
+  border-radius: 7px;
+  margin-top: 2px;
+}
+.plan-card--featured .btn-plan { background: var(--color-primary-dark); }
+.btn-plan:not(:disabled):hover { opacity: 0.88; }
+
+/* Subscribed plan card — green selected ring, same layout as featured */
+.plan-card--selected {
+  border-color: var(--color-success, #10b981);
+  background: var(--color-success-bg, #ecfdf5);
+  box-shadow: 0 4px 16px rgba(16, 185, 129, 0.18);
+}
+
+/* Subscribed label replacing the button on the active plan card */
+.plan-subscribed-label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  width: 100%;
+  padding: 8px 10px;
+  margin-top: 2px;
+  border-radius: 7px;
+  background: var(--color-success, #10b981);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  font-family: sans-serif;
+  user-select: none;
+  flex-wrap: wrap;
+}
+
+.plan-subscribed-until {
+  font-weight: 400;
+  opacity: 0.9;
+}
+
+/* Disabled select button on non-active plans */
+.btn-plan:disabled:not(.btn-plan--subscribed) {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--color-primary);
+  border: 1px solid var(--color-border-ui);
+  padding: 6px 12px;
+  font-size: 12px;
+}
+.btn-ghost:not(:disabled):hover {
+  background: var(--color-primary-light);
+  border-color: var(--color-primary);
+}
+
+/* ── Spinner ─────────────────────────────────────────────────────────────── */
+.spinner {
+  display: inline-block;
+  width: 15px;
+  height: 15px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  opacity: 0.75;
+}
+
+.spinner-lg {
+  width: 30px;
+  height: 30px;
+  border-width: 3px;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Error ───────────────────────────────────────────────────────────────── */
+.error-msg {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--color-danger);
+  font-family: sans-serif;
+}
+
+/* ── Mobile ──────────────────────────────────────────────────────────────── */
+@media (max-width: 500px) {
+  .paywall-overlay { padding: 12px; align-items: flex-start; }
+  .paywall-card { padding: 20px 16px 18px; border-radius: 12px; }
+  .paywall-header { flex-direction: row; gap: 10px; }
+  .steps { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .step-arrow { display: none; }
+  .plans-grid { grid-template-columns: 1fr; }
+  .register-row, .refresh-row { flex-direction: column; align-items: flex-start; }
+  .btn-outline { width: 100%; justify-content: center; }
+}

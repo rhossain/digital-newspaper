@@ -523,7 +523,14 @@
         </button>
       </div>
 
-      <div class="settings-content">
+      <!-- Settings sub-tabs -->
+      <div class="settings-sub-tabs">
+        <button class="settings-sub-tab" [class.active]="activeSettingsTab === 'general'" (click)="switchSettingsTab('general')">General</button>
+        <button class="settings-sub-tab" [class.active]="activeSettingsTab === 'subscription'" (click)="switchSettingsTab('subscription')" *ngIf="isPublisherPackage">🔒 Subscription</button>
+        <button class="settings-sub-tab" [class.active]="activeSettingsTab === 'subscribers'" (click)="switchSettingsTab('subscribers')" *ngIf="isPublisherPackage">👥 Subscribers</button>
+      </div>
+
+      <div class="settings-content" *ngIf="activeSettingsTab === 'general'">
         <!-- Language Settings -->
         <div class="settings-section">
           <h3>Language / ভাষা</h3>
@@ -722,6 +729,202 @@
           </div>
         </div>
       </div>
+
+      <!-- ── Subscription Settings Tab ──────────────────────────── -->
+      <div class="settings-content" *ngIf="activeSettingsTab === 'subscription' && isPublisherPackage">
+
+        <div class="settings-section">
+          <h3>🔒 Subscription Access Control</h3>
+          <div class="hint-text">
+            <p>Requires WooCommerce + BanglaPress plugin. Tag WooCommerce products with <code>dn-subscription-plan</code> and set the <code>_dn_duration_days</code> custom field on each product.</p>
+          </div>
+
+          <div class="form-group">
+            <label>Access Mode</label>
+            <p class="hint-text" *ngIf="!isLicensedPublisher" style="color:#c0392b">
+              ⚠️ A valid Publisher license is required to enable subscription enforcement. Install a license key in the WordPress admin to unlock these options.
+            </p>
+            <div class="input-mode-options">
+              <label class="radio-option">
+                <input type="radio" name="subCombinedMode" value="free" [(ngModel)]="subscriptionSettingsForm.combinedMode" />
+                <span><strong>Free – Full access</strong> — All pages and archived editions are accessible to everyone</span>
+              </label>
+              <label class="radio-option" [class.disabled]="!isLicensedPublisher">
+                <input type="radio" name="subCombinedMode" value="today_edition" [(ngModel)]="subscriptionSettingsForm.combinedMode" [disabled]="!isLicensedPublisher" />
+                <span><strong>Today's Edition</strong> — Today's first page is free; subscribing (Daily / Monthly / Yearly) unlocks all pages of today's newspaper. Archive is not available in this mode.</span>
+              </label>
+              <label class="radio-option" [class.disabled]="!isLicensedPublisher">
+                <input type="radio" name="subCombinedMode" value="archive_access" [(ngModel)]="subscriptionSettingsForm.combinedMode" [disabled]="!isLicensedPublisher" />
+                <span><strong>Full Archive</strong> — Today's first page is free; subscribing unlocks all pages of today's edition <em>and</em> all past editions (archive).</span>
+              </label>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="sub-currency">Currency Code</label>
+            <input id="sub-currency" type="text" [(ngModel)]="subscriptionSettingsForm.currency" class="form-control" placeholder="BDT" style="max-width:120px" />
+            <p class="hint-text">ISO 4217 code shown in the plan list (e.g. BDT, USD).</p>
+          </div>
+
+          <div class="form-group">
+            <label for="sub-login-url">Login / My Account URL</label>
+            <input id="sub-login-url" type="url" [(ngModel)]="subscriptionSettingsForm.loginUrl" class="form-control" placeholder="https://your-wordpress.com/my-account/" />
+            <p class="hint-text">Shown in the paywall when the visitor is not logged in.</p>
+          </div>
+
+          <div class="form-actions">
+            <button class="btn btn-success" (click)="saveSubscriptionSettings()" [disabled]="subscriptionSettingsSaving">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+                <polyline points="17 21 17 13 7 13 7 21"></polyline>
+                <polyline points="7 3 7 8 15 8"></polyline>
+              </svg>
+              {{ subscriptionSettingsSaving ? 'Saving…' : 'Save Subscription Settings' }}
+            </button>
+          </div>
+        </div>
+
+        <!-- Subscription plans CRUD -->
+        <div class="settings-section">
+          <h3>📋 Subscription Plans</h3>
+          <p class="hint-text">Define the plans shown in the paywall. Set <strong>Duration (days)</strong>: 1 = day pass, 7–31 = monthly, &gt;31 = annual. Leave <strong>Checkout URL</strong> blank if using WooCommerce (it's built automatically).</p>
+
+          <div *ngIf="subscriptionPlansLoading" class="hint-text" style="padding:12px 0">Loading plans…</div>
+
+          <div *ngIf="!subscriptionPlansLoading">
+            <table class="sub-plans-table" style="width:100%;table-layout:fixed">
+              <colgroup>
+                <col style="width:15%" />
+                <col style="width:8%" />
+                <col style="width:7%" />
+                <col style="width:7%" />
+                <col style="width:14%" />
+                <col style="width:16%" />
+                <col style="width:27%" />
+                <col style="width:6%" />
+              </colgroup>
+              <thead>
+                <tr>
+                  <th>Name *</th>
+                  <th>Price</th>
+                  <th>Currency</th>
+                  <th>Days *</th>
+                  <th>Description</th>
+                  <th>Access Mode</th>
+                  <th>Checkout URL</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr *ngFor="let plan of subscriptionPlans; let i = index" class="plan-edit-row">
+                  <td><input type="text" [(ngModel)]="plan.name" class="form-control form-control-sm" placeholder="Monthly" /></td>
+                  <td><input type="text" [(ngModel)]="plan.price" class="form-control form-control-sm" placeholder="299" /></td>
+                  <td><input type="text" [(ngModel)]="plan.currency" class="form-control form-control-sm" placeholder="BDT" /></td>
+                  <td><input type="number" min="1" [(ngModel)]="plan.durationDays" class="form-control form-control-sm" /></td>
+                  <td><input type="text" [(ngModel)]="plan.description" class="form-control form-control-sm" placeholder="Optional" /></td>
+                  <td>
+                    <select [(ngModel)]="plan.accessMode" class="form-control form-control-sm" title="Which access mode shows this plan">
+                      <option value="both">Both modes</option>
+                      <option value="today_edition">Today's Edition</option>
+                      <option value="archive_access">Full Archive</option>
+                    </select>
+                  </td>
+                  <td><input type="url" [(ngModel)]="plan.checkoutUrl" class="form-control form-control-sm" placeholder="https://…?add-to-cart=ID" /></td>
+                  <td style="text-align:center">
+                    <button class="btn btn-sm btn-danger" (click)="removePlan(i)" title="Remove plan">✕</button>
+                  </td>
+                </tr>
+                <tr *ngIf="subscriptionPlans.length === 0">
+                  <td colspan="8" style="text-align:center;color:#888;padding:16px 0">No plans yet. Click "Add Plan" below.</td>
+                </tr>
+              </tbody>
+            </table>
+
+            <div class="form-actions" style="gap:8px;margin-top:12px">
+              <button class="btn btn-secondary" type="button" (click)="addPlan()">＋ Add Plan</button>
+              <button class="btn btn-success" type="button" (click)="savePlans()" [disabled]="subscriptionPlansSaving">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                  <polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>
+                </svg>
+                {{ subscriptionPlansSaving ? 'Saving…' : 'Save Plans' }}
+              </button>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- ── Subscribers tab ──────────────────────────────────────────────── -->
+      <div class="settings-content" *ngIf="activeSettingsTab === 'subscribers' && isPublisherPackage">
+        <div class="settings-section">
+          <div class="section-header-row">
+            <h3>👥 Subscribers</h3>
+            <button class="btn btn-secondary btn-sm" type="button" (click)="loadSubscriptionOrders()" [disabled]="subscriptionOrdersLoading">
+              {{ subscriptionOrdersLoading ? 'Loading…' : '↻ Refresh' }}
+            </button>
+          </div>
+
+          <div *ngIf="subscriptionOrdersLoading" class="hint-text" style="padding:12px 0">Loading subscribers…</div>
+          <div *ngIf="subscriptionOrdersError && !subscriptionOrdersLoading" class="hint-text" style="color:#c0392b;padding:12px 0">
+            Failed to load subscribers. <a href="#" (click)="$event.preventDefault(); loadSubscriptionOrders()">Retry</a>
+          </div>
+
+          <div *ngIf="!subscriptionOrdersLoading && !subscriptionOrdersError">
+            <p class="hint-text" *ngIf="subscriptionOrders.length === 0">No subscription orders found.</p>
+
+            <div *ngIf="subscriptionOrders.length > 0">
+              <!-- Summary counts -->
+              <div class="sub-summary-row">
+                <span class="sub-badge sub-badge--active">✅ Active: {{ activeSubscriberCount }}</span>
+                <span class="sub-badge sub-badge--expired">⛔ Expired: {{ expiredSubscriberCount }}</span>
+                <span class="sub-badge">Total: {{ subscriptionOrders.length }}</span>
+              </div>
+
+              <table class="sub-plans-table subscribers-table" style="width:100%">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>User</th>
+                    <th>Email</th>
+                    <th>Plan</th>
+                    <th>Expires</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr *ngFor="let o of subscriptionOrders; let i = index" [class.row--active]="o.active" [class.row--expired]="!o.active">
+                    <td class="col-num">{{ i + 1 }}</td>
+                    <td>
+                      <strong>{{ o.name || o.username }}</strong>
+                      <span class="sub-username" *ngIf="o.name && o.name !== o.username">&#64;{{ o.username }}</span>
+                    </td>
+                    <td class="col-email">{{ o.email }}</td>
+                    <td>{{ o.plan }}</td>
+                    <td>{{ o.expiresAt }}</td>
+                    <td>
+                      <span class="status-chip" [class.status-chip--active]="o.active" [class.status-chip--expired]="!o.active">
+                        {{ o.active ? 'Active' : 'Expired' }}
+                      </span>
+                    </td>
+                    <td class="col-actions">
+                      <button
+                        *ngIf="o.active"
+                        class="btn btn-sm revoke-btn"
+                        (click)="revokeSubscription(o)"
+                        [disabled]="deletingOrderUserId === o.userId">
+                        {{ deletingOrderUserId === o.userId ? 'Revoking…' : 'Revoke' }}
+                      </button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
     </div>
   </div>
 </div>

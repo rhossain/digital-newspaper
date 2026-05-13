@@ -4,8 +4,11 @@ import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { NewspaperDataService, NewspaperPage, NewsSection, GlobalSettings, NewspaperEdition } from '../services/newspaper-data.service';
 import { AuthService } from '../services/auth.service';
+import { SubscriptionService } from '../services/subscription.service';
 import { ToasterService } from '../services/toaster.service';
 import { TranslationService } from '../i18n/translation.service';
+import { CLIENT_PACKAGE } from '../config';
+import type { SubscriptionSettings, SubscriptionPlan, SubscriptionOrder } from '../models/subscription.models';
 
 @Component({
   selector: 'app-admin',
@@ -85,6 +88,32 @@ export class AdminComponent implements OnInit {
   logoInputMode: 'url' | 'file' = 'url';
   logoFile: File | null = null;
 
+  // Subscription settings (admin tab)
+  /** True when the Angular app was compiled for a Publisher client — controls tab visibility. */
+  readonly isPublisherPackage = CLIENT_PACKAGE === 'publisher';
+  /** True when the server confirms a valid Publisher license is installed — controls option locks. */
+  isLicensedPublisher = false;
+  activeSettingsTab: 'general' | 'subscription' | 'subscribers' = 'general';
+  subscriptionSettingsForm: {
+    combinedMode: string;
+    currency: string;
+    loginUrl: string;
+  } = {
+    combinedMode: 'free',
+    currency: 'BDT',
+    loginUrl: '',
+  };
+  subscriptionPlans: SubscriptionPlan[] = [];
+  subscriptionPlansLoading = false;
+  subscriptionPlansSaving = false;
+  subscriptionSettingsSaving = false;
+
+  // Subscribers list
+  subscriptionOrders: SubscriptionOrder[] = [];
+  subscriptionOrdersLoading = false;
+  subscriptionOrdersError = false;
+  deletingOrderUserId: number | null = null;
+
   sectionForm: Partial<NewsSection> = {
     id: '',
     title: '',
@@ -118,7 +147,8 @@ export class AdminComponent implements OnInit {
     private cdr: ChangeDetectorRef,
     private toaster: ToasterService,
     private authService: AuthService,
-    private translationService: TranslationService
+    private translationService: TranslationService,
+    private subscriptionService: SubscriptionService,
   ) {}
 
   ngOnInit() {
@@ -145,7 +175,15 @@ export class AdminComponent implements OnInit {
       return;
     }
     this.authService.verifyToken().subscribe({
-      next: () => this.loadData(),
+      next: (isAdmin) => {
+        if (!isAdmin) {
+          this.authService.logout();
+          this.authError = 'Access denied. This panel is restricted to editors and administrators.';
+          this.toaster.error(this.authError);
+          return;
+        }
+        this.loadData();
+      },
       error: () => {
         this.authService.logout();
         this.authError = 'Session expired. Please login again.';
@@ -158,8 +196,15 @@ export class AdminComponent implements OnInit {
     this.authError = '';
     this.isAuthenticating = true;
     this.authService.login(this.authForm.username, this.authForm.password).subscribe({
-      next: () => {
+      next: (response) => {
         this.isAuthenticating = false;
+        if (!response?.user?.isAdmin) {
+          // Logged in successfully but user is not an editor/admin — deny access.
+          this.authService.logout();
+          this.authError = 'Access denied. This panel is restricted to editors and administrators.';
+          this.toaster.error(this.authError);
+          return;
+        }
         this.loadData();
       },
       error: (err) => {
@@ -1193,6 +1238,171 @@ export class AdminComponent implements OnInit {
       language: settings.language || 'en',
       showPagePagination: settings.showPagePagination !== false
     };
+    // Also load subscription settings from their dedicated endpoint.
+    this.loadSubscriptionSettings();
+  }
+
+  loadSubscriptionSettings(): void {
+    // Load from the already-fetched GlobalSettings subscription block.
+    const settings = this.dataService.getSettings();
+    const sub = settings.subscription;
+    if (sub) {
+      // Derive combinedMode from server response (may come as combinedMode directly,
+      // or from the legacy enabled + accessMode fields).
+      let combinedMode: string = (sub as any)['combinedMode'] ?? '';
+      if (!combinedMode) {
+        if (!sub.enabled) {
+          combinedMode = 'free';
+        } else if ((sub.accessMode as string) === 'today_only' || sub.accessMode === 'today_edition') {
+          combinedMode = 'today_edition';
+        } else {
+          combinedMode = 'archive_access';
+        }
+      }
+      // Migrate legacy mode names.
+      if (combinedMode === 'both' || combinedMode === 'today_only') { combinedMode = 'today_edition'; }
+      if (combinedMode === 'first_page_free') { combinedMode = 'archive_access'; }
+      this.subscriptionSettingsForm = {
+        combinedMode,
+        currency: sub.currency ?? 'BDT',
+        loginUrl: sub.loginUrl ?? '',
+      };
+      // Determine runtime license status.
+      const serverPkg = (sub as any)['package'];
+      this.isLicensedPublisher = serverPkg === 'publisher';
+      // When no Publisher license, lock to free mode.
+      if (serverPkg !== 'publisher') {
+        this.subscriptionSettingsForm.combinedMode = 'free';
+      }
+    }
+    // Fetch plans fresh from server (bypass in-memory cache so admin sees saved state).
+    if (this.isPublisherPackage) {
+      this.subscriptionPlansLoading = true;
+      this.subscriptionService.loadPlansForAdmin().subscribe({
+        next: (plans) => {
+          this.subscriptionPlans = plans.map(p => ({ ...p }));
+          this.subscriptionPlansLoading = false;
+          this.cdr.detectChanges();
+        },
+        error: () => {
+          this.subscriptionPlansLoading = false;
+          this.cdr.detectChanges();
+        },
+      });
+    }
+  }
+
+  addPlan(): void {
+    this.subscriptionPlans = [
+      ...this.subscriptionPlans,
+      { id: 0, name: '', slug: '', price: '', currency: 'BDT', durationDays: 30, description: '', checkoutUrl: '', accessMode: 'both' as const },
+    ];
+    this.cdr.detectChanges();
+  }
+
+  removePlan(index: number): void {
+    this.subscriptionPlans = this.subscriptionPlans.filter((_, i) => i !== index);
+    this.cdr.detectChanges();
+  }
+
+  loadSubscriptionOrders(): void {
+    this.subscriptionOrdersLoading = true;
+    this.subscriptionOrdersError = false;
+    this.cdr.detectChanges();
+    this.subscriptionService.loadOrders().subscribe({
+      next: (orders) => {
+        this.subscriptionOrders = orders;
+        this.subscriptionOrdersLoading = false;
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.subscriptionOrdersLoading = false;
+        this.subscriptionOrdersError = true;
+        this.cdr.detectChanges();
+      },
+    });
+  }
+
+  revokeSubscription(order: SubscriptionOrder): void {
+    if (!confirm(`Revoke subscription for ${order.name || order.username}? This will immediately remove their access.`)) return;
+    this.deletingOrderUserId = order.userId;
+    this.cdr.detectChanges();
+    this.subscriptionService.deleteSubscription(order.userId).subscribe({
+      next: () => {
+        this.subscriptionOrders = this.subscriptionOrders.filter(o => o.userId !== order.userId);
+        this.deletingOrderUserId = null;
+        this.toaster.success(`Subscription revoked for ${order.name || order.username}.`);
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.deletingOrderUserId = null;
+        this.toaster.error('Failed to revoke subscription. Please try again.');
+        this.cdr.detectChanges();
+      },
+    });
+  }
+
+  get activeSubscriberCount(): number {
+    return this.subscriptionOrders.filter(o => o.active).length;
+  }
+
+  get expiredSubscriberCount(): number {
+    return this.subscriptionOrders.filter(o => !o.active).length;
+  }
+
+  switchSettingsTab(tab: 'general' | 'subscription' | 'subscribers'): void {
+    this.activeSettingsTab = tab;
+    if (tab === 'subscribers' && this.subscriptionOrders.length === 0 && !this.subscriptionOrdersLoading) {
+      this.loadSubscriptionOrders();
+    }
+    this.cdr.detectChanges();
+  }
+
+  savePlans(): void {
+    if (this.subscriptionPlansSaving) return;
+    this.subscriptionPlansSaving = true;
+    this.cdr.detectChanges();
+    const plans = this.subscriptionPlans
+      .filter(p => p.name.trim())
+      .map((p, i) => ({ ...p, id: p.id || i + 1 }));
+    this.subscriptionService.savePlans(plans).subscribe({
+      next: (saved) => {
+        this.subscriptionPlans = saved.map(p => ({ ...p }));
+        // Bust the in-memory cache so the paywall refetches.
+        this.subscriptionService.clearPlansCache();
+        this.subscriptionPlansSaving = false;
+        this.toaster.success('Subscription plans saved!');
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.subscriptionPlansSaving = false;
+        this.toaster.error('Failed to save plans');
+        this.cdr.detectChanges();
+      },
+    });
+  }
+
+  saveSubscriptionSettings(): void {
+    if (this.subscriptionSettingsSaving) return;
+    this.subscriptionSettingsSaving = true;
+    // Save via the dedicated /subscription/settings endpoint so it goes through
+    // sanitize_subscription_settings() on the PHP side and is stored in dn_subscription_settings.
+    this.subscriptionService.saveAccessSettings(this.subscriptionSettingsForm).subscribe({
+      next: () => {
+        this.subscriptionSettingsSaving = false;
+        this.toaster.success('Subscription settings saved!');
+        // Reload data from server so access-control service reads the fresh settings.
+        this.dataService.loadData().subscribe({
+          next: () => this.loadSubscriptionSettings(),
+        });
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.subscriptionSettingsSaving = false;
+        this.toaster.error('Failed to save subscription settings');
+        this.cdr.detectChanges();
+      },
+    });
   }
 
   saveSettings(): void {

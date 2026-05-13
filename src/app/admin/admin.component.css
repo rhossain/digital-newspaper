@@ -668,6 +668,16 @@
   color: var(--color-text-medium);
 }
 
+.radio-option.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.radio-option.disabled:hover {
+  border-color: var(--color-border-ui);
+  background-color: transparent;
+}
+
 .form-control {
   width: 100%;
   padding: 0.75rem;
@@ -1270,6 +1280,157 @@ small {
   display: flex;
   flex-direction: column;
   gap: 2.5rem;
+}
+
+/* Settings sub-tabs (General / Subscription) */
+.settings-sub-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 2rem;
+  border-bottom: 2px solid var(--color-border-ui);
+  padding-bottom: 0;
+}
+
+.settings-sub-tab {
+  padding: 8px 20px;
+  background: none;
+  border: none;
+  border-bottom: 3px solid transparent;
+  margin-bottom: -2px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  transition: color 0.18s ease, border-color 0.18s ease;
+}
+
+.settings-sub-tab:hover {
+  color: var(--color-primary);
+}
+
+.settings-sub-tab.active {
+  color: var(--color-primary);
+  border-bottom-color: var(--color-primary);
+}
+
+/* Subscription plans editable table */
+.sub-plans-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  margin-top: 12px;
+}
+
+.sub-plans-table th,
+.sub-plans-table td {
+  padding: 6px 8px;
+  text-align: left;
+  border-bottom: 1px solid var(--color-border-ui);
+  vertical-align: middle;
+}
+
+.sub-plans-table th {
+  background: var(--color-bg-surface);
+  font-weight: 600;
+  color: var(--color-text-medium);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 8px;
+}
+
+.sub-plans-table tr:last-child td {
+  border-bottom: none;
+}
+
+/* ── Subscribers table ─────────────────────────────────────────── */
+.section-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1.25rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--color-border-ui);
+}
+.section-header-row h3 {
+  margin: 0;
+  border: none;
+  padding: 0;
+}
+
+.sub-summary-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.sub-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  background: #f0f0f0;
+  color: #444;
+}
+.sub-badge--active { background: #d4edda; color: #1b5e20; }
+.sub-badge--expired { background: #fde8e8; color: #b71c1c; }
+
+.subscribers-table { border-collapse: collapse; font-size: 13px; }
+.subscribers-table th { background: #f5f5f5; font-weight: 600; white-space: nowrap; }
+.subscribers-table td, .subscribers-table th {
+  padding: 10px 12px;
+  border-bottom: 1px solid #eee;
+  text-align: left;
+}
+.subscribers-table .col-num { width: 36px; color: #888; text-align: center; }
+.subscribers-table .col-email { color: #555; font-size: 12px; }
+.subscribers-table .col-actions { width: 80px; text-align: center; }
+.sub-username { color: #888; font-size: 12px; display: block; }
+.row--active { background: #fafffe; }
+.row--expired { background: #fffafa; opacity: 0.8; }
+
+.revoke-btn {
+  background: #fff0f0;
+  color: #c0392b;
+  border: 1px solid #e8b4b0;
+  padding: 3px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+.revoke-btn:hover:not(:disabled) { background: #c0392b; color: #fff; border-color: #c0392b; }
+.revoke-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+
+.status-chip {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+}
+.status-chip--active { background: #d4edda; color: #1b5e20; }
+.status-chip--expired { background: #fde8e8; color: #b71c1c; }
+
+.plan-edit-row input.form-control-sm {
+  padding: 5px 8px;
+  font-size: 13px;
+  height: 32px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.form-actions {
+  margin-top: 1.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--color-border-ui);
 }
 
 .settings-section {
