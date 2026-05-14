@@ -45,6 +45,10 @@ class Digital_Newspaper_API {
     add_filter('rest_pre_serve_request', [$this, 'add_cors_headers'], 10, 4);
     // Write subscription expiry to user meta when a WooCommerce order completes.
     add_action('woocommerce_order_status_completed', [$this, 'on_order_completed']);
+    // Auto-complete orders containing a DN subscription plan so the subscription
+    // activates immediately after payment without requiring admin confirmation.
+    add_filter('woocommerce_payment_complete_order_status', [$this, 'auto_complete_subscription_order_status'], 10, 2);
+    add_action('woocommerce_order_status_processing', [$this, 'maybe_auto_complete_subscription_order'], 10, 1);
     // Redirect back to the Angular app after the WooCommerce order-received page.
     add_action('woocommerce_thankyou', [$this, 'on_order_thankyou'], 5, 1);
     // Clean-cart checkout page: empties cart, adds only the requested plan, redirects to WC checkout.
@@ -1672,6 +1676,88 @@ class Digital_Newspaper_API {
     }
     return $hosts;
   }
+
+  // ---------------------------------------------------------------------------
+  // Auto-complete helpers
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Returns true if the given WooCommerce order contains at least one DN
+   * subscription plan item, identified either via the stored plans list
+   * (checkoutUrl ?dn_buy=ID) or the 'dn-subscription-plan' product tag.
+   */
+  private function order_has_subscription_plan(\WC_Order $order): bool {
+    $stored_plans     = $this->get_stored_plans();
+    $plan_product_ids = [];
+    foreach ($stored_plans as $plan) {
+      if (!empty($plan['checkoutUrl'])) {
+        $parsed = wp_parse_url($plan['checkoutUrl']);
+        if (!empty($parsed['query'])) {
+          parse_str($parsed['query'], $qvars);
+          $wc_id = isset($qvars['dn_buy']) ? (int) $qvars['dn_buy'] : 0;
+          if ($wc_id) {
+            $plan_product_ids[] = $wc_id;
+          }
+        }
+      }
+    }
+
+    foreach ($order->get_items() as $item) {
+      /** @var WC_Order_Item_Product $item */
+      $product_id = $item->get_product_id();
+      if (in_array($product_id, $plan_product_ids, true)) {
+        return true;
+      }
+      if (has_term(self::SUBSCRIPTION_PLAN_TAG, 'product_tag', $product_id)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Filter: woocommerce_payment_complete_order_status
+   * For orders that contain a DN subscription plan, return 'completed' instead
+   * of the default 'processing'. This fires immediately after payment is
+   * confirmed by the gateway (Stripe, PayPal, etc.) so the subscription
+   * activates without any manual admin action.
+   */
+  public function auto_complete_subscription_order_status(string $status, int $order_id): string {
+    if (!function_exists('wc_get_order')) {
+      return $status;
+    }
+    $order = wc_get_order($order_id);
+    if ($order && $this->order_has_subscription_plan($order)) {
+      return 'completed';
+    }
+    return $status;
+  }
+
+  /**
+   * Hook: woocommerce_order_status_processing
+   * Fallback for payment gateways that set the order to 'processing' without
+   * going through payment_complete() (e.g. some offline/redirect gateways).
+   * If the processing order contains a DN subscription plan, immediately
+   * promote it to 'completed' so on_order_completed() activates the subscription.
+   *
+   * Note: 'on-hold' orders (BACS, cheque) are intentionally left alone because
+   * payment has not yet been confirmed for those.
+   */
+  public function maybe_auto_complete_subscription_order(int $order_id): void {
+    if (!function_exists('wc_get_order')) {
+      return;
+    }
+    $order = wc_get_order($order_id);
+    if ($order && $this->order_has_subscription_plan($order)) {
+      $order->update_status(
+        'completed',
+        __('Auto-completed: digital subscription plan — no physical fulfilment required.', 'digital-newspaper')
+      );
+    }
+  }
+
+  // ---------------------------------------------------------------------------
 
   /**
    * Hook: woocommerce_order_status_completed
