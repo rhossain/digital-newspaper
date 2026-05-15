@@ -98,6 +98,9 @@ export const EN = {
       noAccountHint: "Don't have an account yet?",
       createAccount: 'Create a Free Account',
       forgotPassword: 'Forgot password?',
+      // Plan groups
+      groupTodayEdition: "Today's Edition",
+      groupFullArchive: 'Full Archive',
       // Plans
       loadingPlans: 'Loading plans…',
       plansLoadError: 'Could not load subscription plans. Please check your connection.',

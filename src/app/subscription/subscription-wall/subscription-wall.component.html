@@ -209,58 +209,109 @@
           </button>
         </div>
 
-        <!-- Plan cards -->
-        <div class="plans-grid" *ngIf="!plansLoading && !plansError && plans.length > 0">
-          <div
-            *ngFor="let plan of plans"
-            class="plan-card"
-            [class.plan-card--featured]="isBestValue(plan)"
-            [class.plan-card--selected]="isActivePlan(plan)"
-          >
-            <div class="plan-badge" *ngIf="isBestValue(plan) && !isActivePlan(plan)">{{ 'subscription.wall.bestValue' | translate }}</div>
+        <!-- Plan groups -->
+        <ng-container *ngIf="!plansLoading && !plansError && plans.length > 0">
 
-            <p class="plan-duration-label">{{ planDurationLabel(plan) }}</p>
+          <!-- Group: Today's Edition -->
+          <div class="plan-group" *ngIf="planGroupToday.length > 0">
+            <p class="plan-group-label">{{ 'subscription.wall.groupTodayEdition' | translate }}</p>
+            <div class="plans-grid">
+              <div
+                *ngFor="let plan of planGroupToday"
+                class="plan-card"
+                [class.plan-card--featured]="isBestValueInGroup(plan, planGroupToday)"
+                [class.plan-card--selected]="isActivePlan(plan)"
+              >
+                <div class="plan-badge" *ngIf="isBestValueInGroup(plan, planGroupToday) && !isActivePlan(plan)">{{ 'subscription.wall.bestValue' | translate }}</div>
 
-            <div class="plan-price-block">
-              <span class="plan-currency">{{ plan.currency }}</span>
-              <span class="plan-price">{{ plan.price }}</span>
+                <p class="plan-duration-label">{{ planDurationLabel(plan) }}</p>
+
+                <div class="plan-price-block">
+                  <span class="plan-currency">{{ plan.currency }}</span>
+                  <span class="plan-price">{{ plan.price }}</span>
+                </div>
+                <p class="plan-period">{{ planPeriodLabel(plan) }}</p>
+
+                <p class="plan-name">{{ plan.name }}</p>
+
+                <button type="button" class="btn btn-plan"
+                  *ngIf="!currentStatus?.hasActiveSubscription"
+                  (click)="onSelectPlan(plan)">
+                  {{ 'subscription.wall.selectPlan' | translate }} →
+                </button>
+
+                <div class="plan-subscribed-label" *ngIf="currentStatus?.hasActiveSubscription && isActivePlan(plan)">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"
+                       stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M20 6L9 17l-5-5"></path>
+                  </svg>
+                  {{ 'subscription.status.subscribed' | translate }}
+                  <span class="plan-subscribed-until" *ngIf="activeUntilDisplay">&nbsp;· {{ activeUntilDisplay }}</span>
+                </div>
+
+                <button type="button" class="btn btn-plan"
+                  *ngIf="currentStatus?.hasActiveSubscription && !isActivePlan(plan)"
+                  disabled>
+                  {{ 'subscription.wall.selectPlan' | translate }} →
+                </button>
+              </div>
             </div>
-            <p class="plan-period">{{ planPeriodLabel(plan) }}</p>
-
-            <p class="plan-name">{{ plan.name }}</p>
-
-            <!-- Not subscribed: normal clickable button -->
-            <button type="button" class="btn btn-plan"
-              *ngIf="!currentStatus?.hasActiveSubscription"
-              (click)="onSelectPlan(plan)">
-              {{ 'subscription.wall.selectPlan' | translate }} →
-            </button>
-
-            <!-- Subscribed — active plan: green label, no button -->
-            <div class="plan-subscribed-label" *ngIf="currentStatus?.hasActiveSubscription && isActivePlan(plan)">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"
-                   stroke-linecap="round" stroke-linejoin="round">
-                <path d="M20 6L9 17l-5-5"></path>
-              </svg>
-              {{ 'subscription.status.subscribed' | translate }}
-              <span class="plan-subscribed-until" *ngIf="activeUntilDisplay">&nbsp;· {{ activeUntilDisplay }}</span>
-            </div>
-
-            <!-- Subscribed — other plans: disabled select button -->
-            <button type="button" class="btn btn-plan"
-              *ngIf="currentStatus?.hasActiveSubscription && !isActivePlan(plan)"
-              disabled>
-              {{ 'subscription.wall.selectPlan' | translate }} →
-            </button>
           </div>
-        </div>
+
+          <!-- Group: Full Archive — only shown when site is in archive_access mode -->
+          <div class="plan-group" *ngIf="planGroupArchive.length > 0 && accessMode === 'archive_access'">
+            <p class="plan-group-label">{{ 'subscription.wall.groupFullArchive' | translate }}</p>
+            <div class="plans-grid">
+              <div
+                *ngFor="let plan of planGroupArchive"
+                class="plan-card"
+                [class.plan-card--featured]="isBestValueInGroup(plan, planGroupArchive)"
+                [class.plan-card--selected]="isActivePlan(plan)"
+              >
+                <div class="plan-badge" *ngIf="isBestValueInGroup(plan, planGroupArchive) && !isActivePlan(plan)">{{ 'subscription.wall.bestValue' | translate }}</div>
+
+                <p class="plan-duration-label">{{ planDurationLabel(plan) }}</p>
+
+                <div class="plan-price-block">
+                  <span class="plan-currency">{{ plan.currency }}</span>
+                  <span class="plan-price">{{ plan.price }}</span>
+                </div>
+                <p class="plan-period">{{ planPeriodLabel(plan) }}</p>
+
+                <p class="plan-name">{{ plan.name }}</p>
+
+                <button type="button" class="btn btn-plan"
+                  *ngIf="!currentStatus?.hasActiveSubscription"
+                  (click)="onSelectPlan(plan)">
+                  {{ 'subscription.wall.selectPlan' | translate }} →
+                </button>
+
+                <div class="plan-subscribed-label" *ngIf="currentStatus?.hasActiveSubscription && isActivePlan(plan)">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"
+                       stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M20 6L9 17l-5-5"></path>
+                  </svg>
+                  {{ 'subscription.status.subscribed' | translate }}
+                  <span class="plan-subscribed-until" *ngIf="activeUntilDisplay">&nbsp;· {{ activeUntilDisplay }}</span>
+                </div>
+
+                <button type="button" class="btn btn-plan"
+                  *ngIf="currentStatus?.hasActiveSubscription && !isActivePlan(plan)"
+                  disabled>
+                  {{ 'subscription.wall.selectPlan' | translate }} →
+                </button>
+              </div>
+            </div>
+          </div>
+
+        </ng-container>
 
         <p class="error-msg" *ngIf="checkoutError">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12" y2="16"/></svg>
           {{ checkoutError }}
         </p>
 
-        <p class="muted-text" *ngIf="!plansLoading && !plansError && plans.length === 0">
+        <p class="muted-text" *ngIf="!plansLoading && !plansError && planGroupToday.length === 0 && planGroupArchive.length === 0">
           {{ 'subscription.wall.noPlans' | translate }}
         </p>
 

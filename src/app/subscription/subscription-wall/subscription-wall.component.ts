@@ -169,6 +169,22 @@ export class SubscriptionWallComponent implements OnInit, OnDestroy {
     return plan.durationDays === Math.max(...this.plans.map(p => p.durationDays));
   }
 
+  /** Returns true for the plan with the most days within a given group. */
+  isBestValueInGroup(plan: SubscriptionPlan, group: SubscriptionPlan[]): boolean {
+    if (group.length < 2) return false;
+    return plan.durationDays === Math.max(...group.map(p => p.durationDays));
+  }
+
+  /** Plans for the "Today's Edition" group (today_edition, both, or no mode). */
+  get planGroupToday(): SubscriptionPlan[] {
+    return this.plans.filter(p => !p.accessMode || p.accessMode === 'both' || p.accessMode === 'today_edition');
+  }
+
+  /** Plans for the "Full Archive" group. */
+  get planGroupArchive(): SubscriptionPlan[] {
+    return this.plans.filter(p => p.accessMode === 'archive_access');
+  }
+
   /** Log the current user out and return to the login view. */
   onLogout(): void {
     this.auth.logout();
@@ -236,7 +252,7 @@ export class SubscriptionWallComponent implements OnInit, OnDestroy {
       next: (plans) => {
         // Only show plans that apply to the current access mode.
         // Plans with no accessMode or accessMode === 'both' are always shown.
-        this.plans = SubscriptionService.filterForMode(plans, this.accessMode);
+        this.plans = plans;
         this.plansLoading = false;
         this.cdr.markForCheck();
       },

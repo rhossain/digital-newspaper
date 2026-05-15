@@ -257,6 +257,31 @@
   font-family: sans-serif;
 }
 
+/* ── Plan groups ─────────────────────────────────────────────────────────── */
+.plan-group {
+  margin-bottom: 20px;
+}
+
+.plan-group-label {
+  margin: 0 0 10px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+  color: var(--color-primary);
+  font-family: sans-serif;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.plan-group-label::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--color-border-ui);
+}
+
 /* ── Plan cards ──────────────────────────────────────────────────────────── */
 .plans-grid {
   display: grid;

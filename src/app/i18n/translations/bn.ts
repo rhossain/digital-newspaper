@@ -98,6 +98,9 @@ export const BN = {
       noAccountHint: 'এখনো অ্যাকাউন্ট নেই?',
       createAccount: 'বিনামূল্যে অ্যাকাউন্ট তৈরি করুন',
       forgotPassword: 'পাসওয়ার্ড ভুলে গেছেন?',
+      // Plan groups
+      groupTodayEdition: 'আজকের সংস্করণ',
+      groupFullArchive: 'সম্পূর্ণ আর্কাইভ',
       // Plans
       loadingPlans: 'প্ল্যান লোড হচ্ছে…',
       plansLoadError: 'সাবস্ক্রিপশন প্ল্যান লোড হয়নি। সংযোগ পরীক্ষা করুন।',

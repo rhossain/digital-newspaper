@@ -417,6 +417,7 @@ class Digital_Newspaper_API {
               <th style="width:90px">Price</th>
               <th style="width:70px">Currency</th>
               <th style="width:90px">Days</th>
+              <th style="width:140px">Group</th>
               <th>Description</th>
               <th>Checkout URL</th>
               <th style="width:36px"></th>
@@ -424,14 +425,21 @@ class Digital_Newspaper_API {
           </thead>
           <tbody id="dn-plans-body">
             <?php if (empty($stored_plans)): ?>
-            <tr id="dn-no-plans-row"><td colspan="8" style="color:#888;padding:16px 8px">No plans yet. Click "Add Plan" to create one.</td></tr>
+            <tr id="dn-no-plans-row"><td colspan="9" style="color:#888;padding:16px 8px">No plans yet. Click "Add Plan" to create one.</td></tr>
             <?php else: foreach ($stored_plans as $idx => $plan): ?>
+            <?php $am = esc_attr($plan['accessMode'] ?? 'today_edition'); ?>
             <tr class="dn-plan-row" data-idx="<?php echo $idx; ?>">
               <td style="color:#888;font-size:12px"><?php echo $idx + 1; ?></td>
               <td><input type="text" class="regular-text" name="dn_plan_name[]" value="<?php echo esc_attr($plan['name']); ?>" placeholder="Monthly" required /></td>
               <td><input type="text" style="width:80px" name="dn_plan_price[]" value="<?php echo esc_attr($plan['price']); ?>" placeholder="299" /></td>
               <td><input type="text" style="width:60px" name="dn_plan_currency[]" value="<?php echo esc_attr($plan['currency']); ?>" placeholder="BDT" /></td>
               <td><input type="number" min="1" style="width:70px" name="dn_plan_days[]" value="<?php echo esc_attr($plan['durationDays']); ?>" placeholder="30" /></td>
+              <td>
+                <select name="dn_plan_access_mode[]" style="width:130px">
+                  <option value="today_edition"<?php echo $am === 'today_edition' ? ' selected' : ''; ?>>Today\'s Edition</option>
+                  <option value="archive_access"<?php echo $am === 'archive_access' ? ' selected' : ''; ?>>Full Archive</option>
+                </select>
+              </td>
               <td><input type="text" class="regular-text" name="dn_plan_desc[]" value="<?php echo esc_attr($plan['description'] ?? ''); ?>" placeholder="Optional short description" /></td>
               <td><input type="url" class="regular-text" name="dn_plan_url[]" value="<?php echo esc_attr($plan['checkoutUrl'] ?? ''); ?>" placeholder="https://wp.example.com/?dn_buy=ID" /></td>
               <td><button type="button" class="button dn-remove-plan" title="Remove">✕</button></td>
@@ -455,6 +463,10 @@ class Digital_Newspaper_API {
             '<td><input type="text" style="width:80px" name="dn_plan_price[]" placeholder="299" /></td>' +
             '<td><input type="text" style="width:60px" name="dn_plan_currency[]" placeholder="BDT" /></td>' +
             '<td><input type="number" min="1" style="width:70px" name="dn_plan_days[]" placeholder="30" /></td>' +
+            '<td><select name="dn_plan_access_mode[]" style="width:130px">' +
+              '<option value="today_edition">Today\'s Edition</option>' +
+              '<option value="archive_access">Full Archive</option>' +
+            '</select></td>' +
             '<td><input type="text" class="regular-text" name="dn_plan_desc[]" placeholder="Optional short description" /></td>' +
             '<td><input type="url" class="regular-text" name="dn_plan_url[]" placeholder="https://…/?dn_buy=ID" /></td>' +
             '<td><button type="button" class="button dn-remove-plan" title="Remove">✕</button></td>' +
@@ -477,7 +489,7 @@ class Digital_Newspaper_API {
           $(this).closest('tr').remove();
           reindex();
           if ($('#dn-plans-body .dn-plan-row').length === 0) {
-            $('#dn-plans-body').append('<tr id="dn-no-plans-row"><td colspan="8" style="color:#888;padding:16px 8px">No plans yet. Click "Add Plan" to create one.</td></tr>');
+            $('#dn-plans-body').append('<tr id="dn-no-plans-row"><td colspan="9" style="color:#888;padding:16px 8px">No plans yet. Click "Add Plan" to create one.</td></tr>');
           }
         });
 
@@ -492,6 +504,7 @@ class Digital_Newspaper_API {
               price:        $(row).find('[name="dn_plan_price[]"]').val().trim() || '0',
               currency:     $(row).find('[name="dn_plan_currency[]"]').val().trim() || 'BDT',
               durationDays: parseInt($(row).find('[name="dn_plan_days[]"]').val(), 10) || 30,
+              accessMode:   $(row).find('[name="dn_plan_access_mode[]"]').val() || 'today_edition',
               description:  $(row).find('[name="dn_plan_desc[]"]').val().trim(),
               checkoutUrl:  $(row).find('[name="dn_plan_url[]"]').val().trim(),
             });
@@ -1261,6 +1274,9 @@ class Digital_Newspaper_API {
       // simple sequential fallback for manually-created plans.
       $id = isset($p['id']) && (int) $p['id'] > 0 ? (int) $p['id'] : ($i + 1);
 
+      $raw_mode   = sanitize_text_field($p['accessMode'] ?? 'today_edition');
+      $access_mode = in_array($raw_mode, ['today_edition', 'archive_access'], true) ? $raw_mode : 'today_edition';
+
       $plans[] = [
         'id'           => $id,
         'name'         => $name,
@@ -1268,6 +1284,7 @@ class Digital_Newspaper_API {
         'price'        => sanitize_text_field((string) ($p['price'] ?? '0')),
         'currency'     => sanitize_text_field($p['currency'] ?? 'BDT'),
         'durationDays' => max(1, (int) ($p['durationDays'] ?? 30)),
+        'accessMode'   => $access_mode,
         'description'  => sanitize_text_field($p['description'] ?? ''),
         'checkoutUrl'  => esc_url_raw($p['checkoutUrl'] ?? ''),
       ];
@@ -2090,6 +2107,12 @@ class Digital_Newspaper_API {
   }
 
   public function auth_required(WP_REST_Request $request) {
+    // Accept WordPress cookie-based auth (admin panel AJAX calls).
+    // WP REST API already validated the nonce via X-WP-Nonce before this runs.
+    if (is_user_logged_in() && current_user_can('edit_posts')) {
+      return true;
+    }
+
     $token = $this->get_bearer_token($request);
     if (!$token) {
       return new WP_Error('dn_unauthorized', 'Missing token', ['status' => 401]);
