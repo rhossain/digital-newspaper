@@ -24,6 +24,9 @@ class Digital_Newspaper_API {
 
   // Subscription constants
   const OPTION_SUBSCRIPTION_SETTINGS = 'dn_subscription_settings';
+
+  // Checkout appearance constants
+  const OPTION_CHECKOUT_APPEARANCE = 'dn_checkout_appearance';
   /** WooCommerce product tag that marks a product as a subscription plan. */
   const SUBSCRIPTION_PLAN_TAG = 'dn-subscription-plan';
   /** User meta key storing the ISO date when the user's subscription expires. */
@@ -33,6 +36,12 @@ class Digital_Newspaper_API {
 
   /** User meta key storing the slug of the plan that last activated the subscription. */
   const SUBSCRIPTION_META_PLAN_SLUG = '_dn_subscription_plan_slug';
+
+  /** Runtime cache for the merged checkout appearance settings (populated lazily). */
+  private ?array $checkout_ap = null;
+
+  /** Prevents double-injection of the branded header (block vs classic checkout). */
+  private bool $header_injected = false;
 
   public function __construct() {
     // Ensure the HMAC secret is ready before anything else needs it.
@@ -63,6 +72,20 @@ class Digital_Newspaper_API {
     add_action('woocommerce_thankyou', [$this, 'show_return_to_app_button'], 10, 1);
     // Block non-editor users from accessing the WordPress admin dashboard.
     add_action('admin_init', [$this, 'block_nonadmin_wp_access']);
+    // Inject Angular-matching CSS on checkout and order-received pages.
+    add_action('wp_enqueue_scripts', [$this, 'enqueue_checkout_styles']);
+    // Inject branded header via wp_body_open (fires right after <body> for ALL
+    // themes including FSE). This avoids modifying WooCommerce block content,
+    // which would otherwise prevent the React checkout from initialising.
+    add_action('wp_body_open', [$this, 'inject_header_via_body_open'], 5);
+    // Fallback: classic shortcode-based checkout (non-FSE themes only).
+    add_action('woocommerce_before_checkout_form', [$this, 'inject_checkout_header'], 5);
+    // Fallback: classic order-received page (non-FSE themes only).
+    add_action('woocommerce_before_thankyou', [$this, 'inject_thankyou_header'], 5);
+    // Suppress the FSE core/site-title block on checkout pages.
+    // NOTE: we no longer prepend content inside WooCommerce block output here
+    // because that prevented the React checkout from initialising.
+    add_filter('render_block', [$this, 'filter_checkout_blocks'], 10, 2);
   }
 
   public function handle_cors_preflight(): void {
@@ -144,6 +167,14 @@ class Digital_Newspaper_API {
       'sanitize_callback' => [$this, 'sanitize_and_store_license_key'],
       'default'           => '',
     ]);
+
+    // Checkout appearance uses its own group so saving it never touches the
+    // other options (origins, license key, etc.) via options.php null-wipe.
+    register_setting('digital_newspaper_checkout_settings', self::OPTION_CHECKOUT_APPEARANCE, [
+      'type'              => 'array',
+      'sanitize_callback' => [$this, 'sanitize_checkout_appearance'],
+      'default'           => self::default_checkout_appearance(),
+    ]);
   }
 
   public function sanitize_subscription_settings($value): array {
@@ -196,6 +227,95 @@ class Digital_Newspaper_API {
       'currency'     => 'BDT',
       'loginUrl'     => '',
     ];
+  }
+
+  /**
+   * Returns the Angular app base URL.
+   * Derived automatically from the Allowed Origins list (first entry), which
+   * is always the Angular app. loginUrl is a legacy fallback, home_url() is
+   * the absolute last resort.
+   */
+  private function get_angular_app_url(): string {
+    // Primary: first CORS-allowed origin is always the Angular app.
+    $origins = $this->get_allowed_origins();
+    if (!empty($origins)) {
+      return rtrim($origins[0], '/') . '/';
+    }
+    // Legacy: loginUrl field (strip path, keep scheme+host).
+    $settings = (array) get_option(self::OPTION_SUBSCRIPTION_SETTINGS, []);
+    if (!empty($settings['loginUrl'])) {
+      $parsed = wp_parse_url($settings['loginUrl']);
+      if (!empty($parsed['host'])) {
+        return ($parsed['scheme'] ?? 'https') . '://' . $parsed['host'] . '/';
+      }
+    }
+    return home_url('/');
+  }
+
+  // ---------------------------------------------------------------------------
+  // Checkout appearance – default, cache, sanitize
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Returns the merged checkout appearance settings, cached for the lifetime
+   * of the request so multiple hooks never duplicate the database read.
+   */
+  private function get_checkout_appearance(): array {
+    if ($this->checkout_ap === null) {
+      $this->checkout_ap = array_merge(
+        self::default_checkout_appearance(),
+        (array) get_option(self::OPTION_CHECKOUT_APPEARANCE, [])
+      );
+    }
+    return $this->checkout_ap;
+  }
+
+  public static function default_checkout_appearance(): array {
+    return [
+      'logoUrl'           => '',
+      'siteTitle'         => '',
+      'checkoutHeading'   => 'Secure Checkout',
+      'thankyouHeading'   => 'Subscription Activated!',
+      'thankyouMessage'   => 'Thank you for subscribing. You can now access your digital newspaper.',
+      'returnBtnLabel'    => 'Return to Digital Newspaper',
+      'primaryColor'      => '#1976d2',
+      'primaryDarkColor'  => '#1565c0',
+      'customCss'         => '',
+    ];
+  }
+
+  public function sanitize_checkout_appearance($value): array {
+    $defaults = self::default_checkout_appearance();
+    if (!is_array($value)) {
+      return $defaults;
+    }
+    return [
+      'logoUrl'           => esc_url_raw($value['logoUrl']          ?? $defaults['logoUrl']),
+      'siteTitle'         => sanitize_text_field($value['siteTitle']         ?? $defaults['siteTitle']),
+      'checkoutHeading'   => sanitize_text_field($value['checkoutHeading']   ?? $defaults['checkoutHeading']),
+      'thankyouHeading'   => sanitize_text_field($value['thankyouHeading']   ?? $defaults['thankyouHeading']),
+      'thankyouMessage'   => sanitize_textarea_field($value['thankyouMessage'] ?? $defaults['thankyouMessage']),
+      'returnBtnLabel'    => sanitize_text_field($value['returnBtnLabel']    ?? $defaults['returnBtnLabel']),
+      'primaryColor'      => sanitize_hex_color($value['primaryColor']      ?? $defaults['primaryColor']) ?: $defaults['primaryColor'],
+      'primaryDarkColor'  => sanitize_hex_color($value['primaryDarkColor']  ?? $defaults['primaryDarkColor']) ?: $defaults['primaryDarkColor'],
+      'customCss'         => self::sanitize_custom_css($value['customCss'] ?? ''),
+    ];
+  }
+
+  /**
+   * Sanitizes admin-supplied custom CSS.
+   * - Strips all HTML tags (prevents </style> injection).
+   * - Removes @import rules (prevents CSS-based data exfiltration).
+   * - Removes javascript: occurrences (defence against CSS expression() in IE).
+   */
+  private static function sanitize_custom_css(string $css): string {
+    // Strip any HTML markup first.
+    $css = wp_strip_all_tags($css);
+    // Remove @import statements (exfiltration via external stylesheet).
+    $css = preg_replace('/@import\b[^;]*;?/i', '', $css);
+    // Remove javascript: URI references used in legacy CSS expression() attacks.
+    $css = preg_replace('/javascript\s*:/i', '', $css);
+    return $css;
   }
 
   public function render_settings_page(): void {
@@ -391,7 +511,7 @@ class Digital_Newspaper_API {
             <th scope="row"><label for="dn_sub_login_url">Login / My Account URL</label></th>
             <td>
               <input id="dn_sub_login_url" type="url" name="<?php echo esc_attr($sub_opt); ?>[loginUrl]" value="<?php echo $sub_login_url; ?>" class="large-text" />
-              <p class="description">Shown in the paywall when the visitor is not logged in.</p>
+              <p class="description">Shown in the paywall when the visitor is not logged in. The Angular app return URL is derived automatically from the first entry in <strong>Allowed Origins</strong> above — no separate field needed.</p>
             </td>
           </tr>
         </table>
@@ -535,6 +655,139 @@ class Digital_Newspaper_API {
       })(jQuery);
       </script>
     </div>
+
+    <?php
+    // ── Checkout Appearance ──────────────────────────────────────────────────
+    $ca_opt = self::OPTION_CHECKOUT_APPEARANCE;
+    $ca     = array_merge(
+      self::default_checkout_appearance(),
+      (array) get_option($ca_opt, [])
+    );
+    ?>
+    <hr />
+    <h2>🎨 Checkout Appearance</h2>
+    <p class="description">Control the look and feel of the WooCommerce checkout and order-received pages so they match the Angular frontend app.</p>
+
+    <form method="post" action="options.php">
+      <?php settings_fields('digital_newspaper_checkout_settings'); ?>
+
+      <table class="form-table" role="presentation">
+
+        <tr>
+          <th scope="row"><label for="dn_ca_logo_url">Logo URL</label></th>
+          <td>
+            <input id="dn_ca_logo_url" type="url" class="large-text"
+                   name="<?php echo esc_attr($ca_opt); ?>[logoUrl]"
+                   value="<?php echo esc_attr($ca['logoUrl']); ?>"
+                   placeholder="https://example.com/logo.png" />
+            <p class="description">Full URL of your publication logo. Leave blank to use the SVG newspaper icon.</p>
+          </td>
+        </tr>
+
+        <tr>
+          <th scope="row"><label for="dn_ca_site_title">Site Title Override</label></th>
+          <td>
+            <input id="dn_ca_site_title" type="text" class="regular-text"
+                   name="<?php echo esc_attr($ca_opt); ?>[siteTitle]"
+                   value="<?php echo esc_attr($ca['siteTitle']); ?>"
+                   placeholder="<?php echo esc_attr(get_bloginfo('name')); ?>" />
+            <p class="description">Shown in the header on checkout pages. Defaults to your WordPress site name.</p>
+          </td>
+        </tr>
+
+        <tr>
+          <th scope="row"><label for="dn_ca_checkout_heading">Checkout Page Sub-heading</label></th>
+          <td>
+            <input id="dn_ca_checkout_heading" type="text" class="regular-text"
+                   name="<?php echo esc_attr($ca_opt); ?>[checkoutHeading]"
+                   value="<?php echo esc_attr($ca['checkoutHeading']); ?>" />
+            <p class="description">Displayed below the site title in the checkout header bar.</p>
+          </td>
+        </tr>
+
+        <tr>
+          <th scope="row"><label for="dn_ca_thankyou_heading">Order Confirmed Sub-heading</label></th>
+          <td>
+            <input id="dn_ca_thankyou_heading" type="text" class="regular-text"
+                   name="<?php echo esc_attr($ca_opt); ?>[thankyouHeading]"
+                   value="<?php echo esc_attr($ca['thankyouHeading']); ?>" />
+            <p class="description">Displayed below the site title in the header on the order-received page.</p>
+          </td>
+        </tr>
+
+        <tr>
+          <th scope="row"><label for="dn_ca_thankyou_msg">Thank-you Message</label></th>
+          <td>
+            <textarea id="dn_ca_thankyou_msg" class="large-text" rows="3"
+                      name="<?php echo esc_attr($ca_opt); ?>[thankyouMessage]"><?php echo esc_textarea($ca['thankyouMessage']); ?></textarea>
+            <p class="description">Green success message shown at the top of the order-received page. Leave blank to hide it.</p>
+          </td>
+        </tr>
+
+        <tr>
+          <th scope="row"><label for="dn_ca_return_btn">Return Button Label</label></th>
+          <td>
+            <input id="dn_ca_return_btn" type="text" class="regular-text"
+                   name="<?php echo esc_attr($ca_opt); ?>[returnBtnLabel]"
+                   value="<?php echo esc_attr($ca['returnBtnLabel']); ?>" />
+            <p class="description">Text on the "return to app" button on the order-received page.</p>
+          </td>
+        </tr>
+
+        <tr>
+          <th scope="row"><label for="dn_ca_primary">Primary Color</label></th>
+          <td>
+            <input id="dn_ca_primary" type="color"
+                   name="<?php echo esc_attr($ca_opt); ?>[primaryColor]"
+                   value="<?php echo esc_attr($ca['primaryColor']); ?>" />
+            <span style="margin-left:8px;font-family:monospace;font-size:13px" id="dn-ca-primary-val"><?php echo esc_html($ca['primaryColor']); ?></span>
+            <p class="description">Main brand color — matches <code>--color-primary</code> in the Angular app (default <code>#1976d2</code>).</p>
+          </td>
+        </tr>
+
+        <tr>
+          <th scope="row"><label for="dn_ca_primary_dark">Primary Dark Color</label></th>
+          <td>
+            <input id="dn_ca_primary_dark" type="color"
+                   name="<?php echo esc_attr($ca_opt); ?>[primaryDarkColor]"
+                   value="<?php echo esc_attr($ca['primaryDarkColor']); ?>" />
+            <span style="margin-left:8px;font-family:monospace;font-size:13px" id="dn-ca-primary-dark-val"><?php echo esc_html($ca['primaryDarkColor']); ?></span>
+            <p class="description">Hover / dark shade — matches <code>--color-primary-dark</code> in the Angular app (default <code>#1565c0</code>).</p>
+          </td>
+        </tr>
+
+        <tr>
+          <th scope="row"><label for="dn_ca_custom_css">Custom CSS</label></th>
+          <td>
+            <textarea id="dn_ca_custom_css" class="large-text code" rows="8"
+                      name="<?php echo esc_attr($ca_opt); ?>[customCss]"
+                      placeholder="/* Additional CSS injected only on checkout and order-received pages */"><?php echo esc_textarea($ca['customCss']); ?></textarea>
+            <p class="description">Extra CSS appended after the base Angular-matching styles. Useful for fine-tuning specific elements.</p>
+          </td>
+        </tr>
+
+      </table>
+
+      <script>
+      (function(){
+        var pairs = [
+          ['dn_ca_primary', 'dn-ca-primary-val'],
+          ['dn_ca_primary_dark', 'dn-ca-primary-dark-val'],
+        ];
+        pairs.forEach(function(p) {
+          var input = document.getElementById(p[0]);
+          var span  = document.getElementById(p[1]);
+          if (input && span) {
+            input.addEventListener('input', function() { span.textContent = input.value; });
+          }
+        });
+      })();
+      </script>
+
+      <?php submit_button('Save Checkout Appearance'); ?>
+    </form>
+
+    </div>
     <?php
   }
 
@@ -660,7 +913,9 @@ class Digital_Newspaper_API {
    * Validates, decodes and caches the payload to OPTION_LICENSE_DATA.
    * Adds an admin notice on error.
    */
-  public function sanitize_and_store_license_key(string $value): string {
+  public function sanitize_and_store_license_key($value): string {
+    // WordPress may pass null when the field is empty; normalise to string.
+    $value = (string) ($value ?? '');
     // Strip all whitespace so pasted keys with line-wrapping are accepted.
     $value = preg_replace('/\s+/', '', $value);
     if ($value === '') {
@@ -1053,9 +1308,7 @@ class Digital_Newspaper_API {
       return;
     }
     if (!user_can(get_current_user_id(), 'edit_posts')) {
-      $settings  = (array) get_option(self::OPTION_SUBSCRIPTION_SETTINGS, []);
-      $app_url   = !empty($settings['loginUrl']) ? $settings['loginUrl'] : home_url('/');
-      wp_safe_redirect($app_url);
+      wp_safe_redirect($this->get_angular_app_url());
       exit;
     }
   }
@@ -1098,6 +1351,10 @@ class Digital_Newspaper_API {
 
     if (!$username || !$email || !$password) {
       return new WP_REST_Response(['error' => 'All fields are required.'], 400);
+    }
+
+    if (mb_strlen($username) < 3) {
+      return new WP_REST_Response(['error' => 'Username must be at least 3 characters.'], 400);
     }
 
     if (!is_email($email)) {
@@ -1191,14 +1448,20 @@ class Digital_Newspaper_API {
       $content_type = 'image/jpeg';
     }
 
-    // Block non-image responses to prevent content-sniffing attacks
+    // Block non-image responses to prevent content-sniffing attacks.
     if (strpos($content_type, 'image/') !== 0) {
       return new WP_REST_Response(['error' => 'Not an image'], 415);
     }
 
+    // Reject images over 20 MB to prevent memory exhaustion.
+    $max_bytes = 20 * 1024 * 1024;
+    if (strlen($body) > $max_bytes) {
+      return new WP_REST_Response(['error' => 'Image too large'], 413);
+    }
+
     return new WP_REST_Response($body, 200, [
-      'Content-Type' => $content_type,
-      'Cache-Control' => 'public, max-age=86400'
+      'Content-Type'  => $content_type,
+      'Cache-Control' => 'public, max-age=86400',
     ]);
   }
 
@@ -1379,6 +1642,496 @@ class Digital_Newspaper_API {
     return rest_ensure_response(['checkoutUrl' => esc_url_raw($checkout_url)]);
   }
 
+  // ---------------------------------------------------------------------------
+  // Checkout & order-received page — look and feel
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Filter: render_block (priority 10)
+   * Returns an empty string for the FSE core/site-title block on checkout and
+   * order-received pages. This prevents the theme's site-title block from
+   * duplicating or overriding our .dn-checkout-header, regardless of where the
+   * block appears in the page template.
+   * We use PHP (not CSS display:none) to avoid accidentally hiding our own
+   * injected header when the theme nests content inside the same container.
+   */
+  /**
+   * Builds and returns the branded .dn-checkout-header HTML string.
+   *
+   * Shared by the classic-checkout action hooks AND the render_block filter
+   * (block-based checkout) so the markup is never duplicated in code. Every
+   * value is individually escaped before being concatenated.
+   *
+   * @param string $heading_key Key in checkout appearance for the page sub-heading.
+   */
+  private function build_dn_header_html(string $heading_key): string {
+    $ap        = $this->get_checkout_appearance();
+    $logo_url  = esc_url($ap['logoUrl']);
+    $alt_text  = esc_attr($ap['siteTitle'] ?: get_bloginfo('name'));
+    $heading   = esc_html($ap[$heading_key] ?? '');
+    $svg_color = esc_attr($ap['primaryColor']);
+
+    $html = '<div class="dn-checkout-header">';
+    if ($logo_url) {
+      // Logo image replaces the text site-title entirely.
+      $html .= '<img class="dn-logo" src="' . $logo_url . '" alt="' . $alt_text . '" />';
+    } else {
+      // No logo configured: show SVG newspaper icon + text site-title as fallback.
+      $html .= '<svg width="40" height="40" viewBox="0 0 24 24" fill="none"'
+             . ' stroke="' . $svg_color . '" stroke-width="2"'
+             . ' stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">';
+      $html .= '<path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2Zm0 0a2 2 0 0 1-2-2v-9c0-1.1.9-2 2-2h2"/>';
+      $html .= '<path d="M18 14h-8"/><path d="M15 18h-5"/><path d="M10 6h8v4h-8V6Z"/>';
+      $html .= '</svg>';
+    }
+    $html .= '<div class="dn-header-text">';
+    if (!$logo_url) {
+      // Text title is only shown when there is no logo image.
+      $html .= '<p class="dn-site-title">' . esc_html($ap['siteTitle'] ?: get_bloginfo('name')) . '</p>';
+    }
+    $html .= '<p class="dn-page-title">' . $heading . '</p>';
+    $html .= '</div></div>';
+
+    return $html;
+  }
+
+  /**
+   * Builds and returns the full order-received page header HTML:
+   * the branded header bar plus the optional thank-you message block.
+   */
+  private function build_dn_thankyou_header_html(): string {
+    $ap      = $this->get_checkout_appearance();
+    $message = esc_html($ap['thankyouMessage']);
+
+    $html = $this->build_dn_header_html('thankyouHeading');
+    if ($message) {
+      $html .= '<div class="dn-thankyou-message">' . nl2br($message) . '</div>';
+    }
+    return $html;
+  }
+
+  /**
+   * Filter: render_block (priority 10)
+   *
+   * Handles two responsibilities on WooCommerce checkout / order-received pages:
+   *
+   * 1. Suppresses the FSE core/site-title block so the WordPress site name in
+   *    the theme header does not appear above our branded .dn-checkout-header.
+   *
+   * 2. Prepends our branded header before the WooCommerce block-based checkout
+   *    (woocommerce/checkout) and order-confirmation (woocommerce/order-confirmation)
+   *    blocks. FSE themes render these blocks instead of firing the classic
+   *    woocommerce_before_checkout_form / woocommerce_before_thankyou hooks,
+   *    so inject_checkout_header() / inject_thankyou_header() never run there.
+   *
+   * The classic hooks are kept for shortcode-based checkout (non-FSE themes).
+   * The two paths are mutually exclusive, but $header_injected guards against
+   * any edge-case double-injection.
+   */
+  public function filter_checkout_blocks(string $block_content, array $block): string {
+    if (!function_exists('is_checkout') || !is_checkout()) {
+      return $block_content;
+    }
+
+    $block_name = $block['blockName'] ?? '';
+
+    // Suppress the FSE theme's site-title block on checkout pages so the
+    // WordPress site name doesn't appear above our branded dn-checkout-header.
+    // Header injection is now done via wp_body_open, not here, so that we never
+    // modify WooCommerce block output (which would break React hydration).
+    if ($block_name === 'core/site-title') {
+      return '';
+    }
+
+    return $block_content;
+  }
+
+  /**
+   * Hook: wp_enqueue_scripts
+   * Injects the Angular-matching CSS on the WooCommerce checkout and
+   * order-received pages only. Also appends any admin-configured custom CSS.
+   */
+  public function enqueue_checkout_styles(): void {
+    if (!is_checkout()) {
+      return;
+    }
+
+    $ap           = $this->get_checkout_appearance();
+    $primary      = esc_attr($ap['primaryColor']);
+    $primary_dark = esc_attr($ap['primaryDarkColor']);
+    $custom_css   = $ap['customCss'];
+
+    $css = "
+/* ── DN: Angular-matching checkout theme ── */
+body.woocommerce-checkout,
+body.woocommerce-order-received {
+  background-color: #f5f5f5 !important;
+  font-family: 'Georgia', 'Times New Roman', serif !important;
+  color: #333333;
+}
+
+/* ── Hide FSE theme header on checkout so only dn-checkout-header shows ── */
+/* wp_body_open injects our header before these template parts render.       */
+body.woocommerce-checkout header.wp-block-template-part,
+body.woocommerce-order-received header.wp-block-template-part,
+body.woocommerce-checkout .wp-block-template-part[class*='header'],
+body.woocommerce-order-received .wp-block-template-part[class*='header'] {
+  display: none !important;
+}
+
+/* ── Page wrapper ── */
+.woocommerce-checkout .woocommerce,
+.woocommerce-order-received .woocommerce {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 24px 16px;
+}
+
+/* ── Page heading (h1 / entry-title) ── */
+/* FSE core/site-title block is suppressed via render_block PHP filter instead
+   of CSS, to avoid accidentally hiding our own .dn-checkout-header. */
+.woocommerce-checkout .entry-title,
+.woocommerce-order-received .entry-title,
+.woocommerce-checkout .wp-block-post-title,
+.woocommerce-order-received .wp-block-post-title {
+  display: none !important; /* replaced by dn-checkout-header */
+}
+
+/* ── DN injected header ── */
+.dn-checkout-header {
+  background: #ffffff;
+  border-bottom: 3px solid {$primary};
+  box-shadow: 0 2px 8px rgba(0,0,0,.06);
+  padding: 0 24px;
+  margin: 0 0 28px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 72px;
+  border-radius: 0;
+}
+.dn-checkout-header img.dn-logo {
+  height: 48px;
+  width: auto;
+  max-width: 180px;
+  object-fit: contain;
+}
+.dn-checkout-header .dn-header-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.dn-checkout-header .dn-site-title {
+  font-size: 22px;
+  font-weight: bold;
+  color: {$primary};
+  margin: 0;
+  line-height: 1;
+  letter-spacing: .5px;
+}
+.dn-checkout-header .dn-page-title {
+  font-size: 13px;
+  color: #6b7280;
+  margin: 0;
+  font-weight: normal;
+}
+
+/* ── WooCommerce columns ── */
+.woocommerce-checkout #customer_details,
+.woocommerce-checkout #order_review_heading,
+.woocommerce-checkout #order_review {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 16px;
+  box-shadow: 0 4px 20px rgba(0,0,0,.07);
+  padding: 24px 28px;
+}
+.woocommerce-checkout #order_review_heading {
+  padding: 16px 28px 0;
+  box-shadow: none;
+  border-bottom: none;
+  border-radius: 16px 16px 0 0;
+  font-size: 15px;
+  font-weight: bold;
+  color: #1f2937;
+}
+.woocommerce-checkout #order_review {
+  border-radius: 0 0 16px 16px;
+  padding-top: 12px;
+}
+
+/* ── Form labels ── */
+.woocommerce-checkout label,
+.woocommerce-checkout .woocommerce-form-login label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #374151;
+  font-family: sans-serif;
+}
+
+/* ── Text inputs & selects ── */
+.woocommerce-checkout input[type=text],
+.woocommerce-checkout input[type=email],
+.woocommerce-checkout input[type=tel],
+.woocommerce-checkout input[type=password],
+.woocommerce-checkout select,
+.woocommerce-checkout textarea {
+  border: 1px solid #e0e0e0 !important;
+  border-radius: 8px !important;
+  padding: 10px 14px !important;
+  font-family: sans-serif !important;
+  font-size: 14px !important;
+  color: #1f2937 !important;
+  background: #f9fafb !important;
+  transition: border-color .18s ease, box-shadow .18s ease !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+}
+.woocommerce-checkout input[type=text]:focus,
+.woocommerce-checkout input[type=email]:focus,
+.woocommerce-checkout input[type=tel]:focus,
+.woocommerce-checkout input[type=password]:focus,
+.woocommerce-checkout select:focus,
+.woocommerce-checkout textarea:focus {
+  border-color: {$primary} !important;
+  box-shadow: 0 0 0 3px rgba(25,118,210,.15) !important;
+  outline: none !important;
+  background: #ffffff !important;
+}
+
+/* ── Place Order button ── */
+#place_order,
+.woocommerce-checkout .wc-proceed-to-checkout .checkout-button {
+  background-color: {$primary} !important;
+  color: #ffffff !important;
+  border: none !important;
+  border-radius: 8px !important;
+  padding: .85em 2.2em !important;
+  font-size: 1rem !important;
+  font-family: sans-serif !important;
+  font-weight: 600 !important;
+  cursor: pointer !important;
+  transition: background-color .2s ease, transform .15s ease !important;
+  letter-spacing: .3px !important;
+}
+#place_order:hover,
+.woocommerce-checkout .wc-proceed-to-checkout .checkout-button:hover {
+  background-color: {$primary_dark} !important;
+  transform: translateY(-1px) !important;
+}
+#place_order:active {
+  transform: translateY(0) !important;
+}
+
+/* ── Order review table ── */
+.woocommerce-checkout-review-order-table th,
+.woocommerce-checkout-review-order-table td {
+  font-family: sans-serif;
+  font-size: 14px;
+  border-color: #e5e7eb !important;
+}
+.woocommerce-checkout-review-order-table tfoot .order-total td,
+.woocommerce-checkout-review-order-table tfoot .order-total th {
+  color: {$primary};
+  font-weight: bold;
+}
+
+/* ── Payment box ── */
+#payment {
+  background: #f9fafb !important;
+  border: 1px solid #e5e7eb !important;
+  border-radius: 12px !important;
+}
+#payment .payment_methods li {
+  border-color: #e5e7eb !important;
+}
+#payment .payment_methods li label {
+  font-family: sans-serif;
+  font-size: 14px;
+  color: #374151;
+}
+
+/* ── Notices & errors ── */
+.woocommerce-error,
+.woocommerce-message,
+.woocommerce-info {
+  border-left-color: {$primary} !important;
+  border-radius: 8px !important;
+  font-family: sans-serif !important;
+  font-size: 14px !important;
+}
+.woocommerce-error { border-left-color: #ef4444 !important; }
+
+/* ── Order received / thank-you page ── */
+.woocommerce-order-received .woocommerce-thankyou-order-received {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 16px;
+  box-shadow: 0 4px 20px rgba(0,0,0,.07);
+  padding: 28px;
+  font-family: sans-serif;
+  font-size: 16px;
+  color: #1f2937;
+}
+.woocommerce-order-received ul.woocommerce-order-overview {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 20px 24px;
+  font-family: sans-serif;
+  font-size: 14px;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 32px;
+  margin: 0 0 28px;
+}
+.woocommerce-order-received ul.woocommerce-order-overview li {
+  border: none !important;
+  padding: 0;
+  margin: 0;
+  color: #6b7280;
+}
+.woocommerce-order-received ul.woocommerce-order-overview li strong {
+  color: #1f2937;
+  display: block;
+}
+.woocommerce-order-received .woocommerce-order-details,
+.woocommerce-order-received .woocommerce-customer-details {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 20px 24px;
+  font-family: sans-serif;
+  font-size: 14px;
+  margin-bottom: 24px;
+}
+.woocommerce-order-received h2 {
+  font-size: 16px;
+  font-weight: bold;
+  color: #1f2937;
+  border-bottom: 1px solid #e5e7eb;
+  padding-bottom: 10px;
+  margin-bottom: 16px;
+  font-family: sans-serif;
+}
+
+/* ── DN Return button on thank-you page ── */
+.dn-return-btn {
+  display: inline-block;
+  background-color: {$primary};
+  color: #ffffff !important;
+  border: none;
+  border-radius: 8px;
+  padding: .85em 2.2em;
+  font-size: 1rem;
+  font-family: sans-serif;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color .2s ease, transform .15s ease;
+  letter-spacing: .3px;
+}
+.dn-return-btn:hover {
+  background-color: {$primary_dark};
+  color: #ffffff !important;
+  text-decoration: none;
+  transform: translateY(-1px);
+}
+
+/* ── DN thank-you message ── */
+.dn-thankyou-message {
+  background: #f0fdf4;
+  border: 1px solid #10b981;
+  border-radius: 10px;
+  padding: 14px 20px;
+  margin: 16px 0 28px;
+  font-family: sans-serif;
+  font-size: 14px;
+  color: #1f2937;
+}
+
+/* ── Responsive ── */
+@media (max-width: 768px) {
+  .dn-checkout-header {
+    height: 60px;
+    padding: 0 16px;
+  }
+  .dn-checkout-header .dn-site-title { font-size: 18px; }
+  .dn-checkout-header img.dn-logo { height: 38px; }
+  .woocommerce-checkout #customer_details,
+  .woocommerce-checkout #order_review {
+    padding: 16px;
+  }
+}
+";
+
+    // Append admin-configured custom CSS.
+    // Defense-in-depth: strip any attempt to break out of the <style> block,
+    // even though wp_strip_all_tags() is already applied at save time.
+    if ($custom_css) {
+      $safe_custom_css = str_ireplace('</style', '< /style', $custom_css);
+      $css .= "\n/* ── DN: Custom CSS ── */\n" . $safe_custom_css;
+    }
+
+    wp_register_style('dn-checkout-styles', false);
+    wp_enqueue_style('dn-checkout-styles');
+    wp_add_inline_style('dn-checkout-styles', $css);
+  }
+
+  /**
+   * Hook: wp_body_open (priority 5)
+   * Primary injection point for FSE / block-based themes: fires right after the
+   * <body> tag opens, before any template-part or block is rendered. This means
+   * we never touch WooCommerce block output, so React can hydrate without issues.
+   *
+   * The classic fallbacks (woocommerce_before_checkout_form /
+   * woocommerce_before_thankyou) run only when this hook has NOT yet fired
+   * (guarded by $header_injected).
+   */
+  public function inject_header_via_body_open(): void {
+    if (!function_exists('is_checkout') || !is_checkout()) {
+      return;
+    }
+    if ($this->header_injected) {
+      return;
+    }
+    $this->header_injected = true;
+    if (function_exists('is_wc_endpoint_url') && is_wc_endpoint_url('order-received')) {
+      echo $this->build_dn_thankyou_header_html(); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+    } else {
+      echo $this->build_dn_header_html('checkoutHeading'); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+    }
+  }
+
+  /**
+   * Hook: woocommerce_before_checkout_form (priority 5)
+   * Classic shortcode-based checkout fallback (non-FSE themes).
+   * In FSE themes, inject_header_via_body_open() fires first and sets
+   * $header_injected, so this becomes a no-op.
+   */
+  public function inject_checkout_header(): void {
+    if ($this->header_injected) {
+      return;
+    }
+    $this->header_injected = true;
+    echo $this->build_dn_header_html('checkoutHeading'); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+  }
+
+  /**
+   * Hook: woocommerce_before_thankyou (priority 5)
+   * Classic shortcode-based order-received fallback (non-FSE themes).
+   * In FSE themes, inject_header_via_body_open() fires first and sets
+   * $header_injected, so this becomes a no-op.
+   */
+  public function inject_thankyou_header(int $order_id): void {
+    if ($this->header_injected) {
+      return;
+    }
+    $this->header_injected = true;
+    echo $this->build_dn_thankyou_header_html(); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+  }
+
   /**
    * Filter: woocommerce_checkout_fields
    * Removes shipping and non-essential billing fields from the WooCommerce
@@ -1415,8 +2168,10 @@ class Digital_Newspaper_API {
    * blocked by the browser.
    */
   public function show_return_to_app_button(int $order_id): void {
-    $settings = (array) get_option(self::OPTION_SUBSCRIPTION_SETTINGS, []);
-    $app_url  = !empty($settings['loginUrl']) ? $settings['loginUrl'] : home_url('/');
+    $app_url = $this->get_angular_app_url();
+
+    $ap        = $this->get_checkout_appearance();
+    $btn_label = $ap['returnBtnLabel'];
 
     // Determine which items are in this order so we can build a targeted return URL.
     $return_url = $app_url;
@@ -1443,8 +2198,8 @@ class Digital_Newspaper_API {
     $return_url = add_query_arg('sub', 'pending', $return_url);
 
     echo '<div style="margin-top:28px;text-align:center">';
-    echo '<a href="' . esc_url($return_url) . '" class="button button-primary wc-forward" style="font-size:1rem;padding:.75em 2em">';
-    echo esc_html__('Return to Digital Newspaper', 'digital-newspaper');
+    echo '<a href="' . esc_url($return_url) . '" class="dn-return-btn wc-forward">';
+    echo esc_html($btn_label);
     echo '</a>';
     echo '</div>';
   }
@@ -1499,15 +2254,18 @@ class Digital_Newspaper_API {
       return;
     }
 
-    delete_transient($transient_key);
-
     // Re-validate the URL against allowed origins before redirecting.
+    // IMPORTANT: only delete the transient after the origin check passes so
+    // that show_return_to_app_button() can still read it if validation fails.
     $parsed      = wp_parse_url($return_url);
     $return_host = ($parsed['scheme'] ?? '') . '://' . ($parsed['host'] ?? '');
     $allowed     = $this->get_allowed_origins();
     if ($allowed && !in_array($return_host, $allowed, true)) {
       return;
     }
+
+    // Consume transient only on successful validation + redirect.
+    delete_transient($transient_key);
 
     // allowed_redirect_hosts filter adds the Angular app origins, so
     // wp_safe_redirect will accept the URL.
