@@ -4,7 +4,7 @@
   margin: 0 auto;
   height: 100vh;
   background-color: var(--color-bg-app);
-  font-family: 'Georgia', 'Times New Roman', serif;
+  font-family: 'Google Sans', sans-serif;
 }
 
 /* Fixed Header Styles */
@@ -881,7 +881,7 @@
   max-width: 90%;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-family: 'Arial', sans-serif;
+  font-family: 'Google Sans', sans-serif;
 }
 
 .clickable-section:hover .section-label {
@@ -1346,7 +1346,7 @@
 }
 
 .article-body {
-  font-family: 'Georgia', 'Times New Roman', serif;
+  font-family: 'Google Sans', sans-serif;
   line-height: 1.8;
   color: var(--color-text-base);
 }
@@ -1421,7 +1421,7 @@
 
 .placeholder-content p {
   font-size: 16px;
-  font-family: 'Arial', sans-serif;
+  font-family: 'Google Sans', sans-serif;
 }
 
 /* Scrollbar Styles */
