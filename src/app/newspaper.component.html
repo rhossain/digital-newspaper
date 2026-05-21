@@ -486,6 +486,21 @@
         <span>&times;</span>
       </button>
 
+      <div class="read-article-section" *ngIf="selectedSection.content && selectedSection.showCaption !== false">
+        <button 
+          class="read-article-button"
+          (click)="openContentModal()"
+        >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+              <polyline points="14 2 14 8 20 8"></polyline>
+              <line x1="16" y1="13" x2="8" y2="13"></line>
+              <line x1="16" y1="17" x2="8" y2="17"></line>
+            </svg>
+            <span>{{ 'viewer.readArticle' | translate }}</span>
+          </button>
+      </div>
+
       <!-- Full Section Image -->
       <div class="section-image-container" *ngIf="currentPage">
         <div class="section-item">
@@ -573,20 +588,6 @@
         </div>
       </div>
 
-      <div class="read-article-section" *ngIf="selectedSection.content && selectedSection.showCaption !== false">
-        <button 
-          class="read-article-button"
-          (click)="openContentModal()"
-        >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-              <polyline points="14 2 14 8 20 8"></polyline>
-              <line x1="16" y1="13" x2="8" y2="13"></line>
-              <line x1="16" y1="17" x2="8" y2="17"></line>
-            </svg>
-            <span>{{ 'viewer.readArticle' | translate }}</span>
-          </button>
-      </div>
     </div>
 
     <div *ngIf="!selectedSection" class="placeholder">
@@ -621,11 +622,6 @@
       <div class="modal-images-container">
         <!-- Main/Selected Image -->
         <div class="modal-image-item" *ngIf="modalImage">
-          <img 
-            [src]="modalImage" 
-            [alt]="modalImageTitle"
-            class="modal-full-image"
-          />
           <div class="modal-image-actions">
             <button class="modal-img-action-btn" (click)="printImage(modalImage!, modalImageTitle)">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -644,16 +640,16 @@
               {{ 'viewer.download' | translate }}
             </button>
           </div>
+          <img 
+            [src]="modalImage" 
+            [alt]="modalImageTitle"
+            class="modal-full-image"
+          />
           <!-- <div class="modal-image-label" *ngIf="modalImageTitle">{{ modalImageTitle }}</div> -->
         </div>
         
         <!-- Linked Section Images -->
         <div class="modal-image-item" *ngFor="let linkedSection of modalLinkedSections">
-          <img 
-            [src]="getCroppedImageForSection(linkedSection)!" 
-            [alt]="linkedSection.title"
-            class="modal-full-image"
-          />
           <div class="modal-image-actions">
             <button class="modal-img-action-btn" (click)="printImage(getCroppedImageForSection(linkedSection)!, linkedSection.title)">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -672,6 +668,11 @@
               {{ 'viewer.download' | translate }}
             </button>
           </div>
+          <img 
+            [src]="getCroppedImageForSection(linkedSection)!" 
+            [alt]="linkedSection.title"
+            class="modal-full-image"
+          />
           <!-- <div class="modal-image-label">{{ linkedSection.title }}</div> -->
         </div>
       </div>
@@ -694,6 +695,16 @@
       </app-share-buttons>
       
       <div class="modal-body" *ngIf="selectedSection">
+        <div class="modal-image-actions">
+          <button class="modal-img-action-btn" (click)="printContent(selectedSection.content!, selectedSection.title)">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="6 9 6 2 18 2 18 9"></polyline>
+              <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
+              <rect x="6" y="14" width="12" height="8"></rect>
+            </svg>
+            {{ 'viewer.print' | translate }}
+          </button>
+        </div>
         <div class="article-body" [innerHTML]="selectedSection.content"></div>
       </div>
     </div>

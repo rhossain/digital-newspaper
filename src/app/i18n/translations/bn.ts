@@ -17,7 +17,7 @@ export const BN = {
     previewUnavailable: 'ছবির অনুমতির সমস্যায় প্রিভিউ দেখা যাচ্ছে না।',
     page: 'পৃষ্ঠা',
     clickToRead: '👆 সংবাদটি পড়তে যেকোনো অংশে ক্লিক করুন',
-    readArticle: 'আর্টিকেল পড়ুন',
+    readArticle: 'টেক্সট ভার্শন',
     selectSection: 'আর্টিকেল পড়তে একটি অংশ নির্বাচন করুন',
     clickToViewFull: 'পূর্ণ আকারে দেখতে ক্লিক করুন',
     goToSection: 'এই অংশে যান',

@@ -1,11 +1,12 @@
 /* Modal share header */
 .modal-share-header {
   display: flex;
-  justify-content: space-between;
+  flex-direction: column;
+  justify-content: center;
   align-items: center;
   padding: 20px 40px 20px 24px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(255, 255, 255, 0.95);
+  background: #ffffff;
   backdrop-filter: blur(10px);
   border-radius: 12px 12px 0 0;
 }
@@ -13,11 +14,12 @@
 .modal-logo {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 12px;
 }
 
 .logo-img {
-  height: 32px;
+  height: 40px;
   width: auto;
   object-fit: contain;
   flex-shrink: 0;
@@ -37,12 +39,14 @@
 
 .modal-share-buttons {
   display: flex;
+  justify-content: center;
   gap: 12px;
+  padding-top: 8px;
 }
 
 .share-btn {
-  width: 44px;
-  height: 44px;
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
   border: none;
   cursor: pointer;

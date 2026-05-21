@@ -610,6 +610,23 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     this.modalLinkedSections = [];
   }
 
+  printContent(content: string, title: string): void {
+    const win = window.open('', '_blank');
+    if (!win) return;
+    win.document.write('<!DOCTYPE html><html><head><title></title><style>body{margin:20px;font-family:serif;font-size:16px;line-height:1.7;color:#000;}h1{font-size:22px;margin-bottom:16px;}@media print{body{margin:10mm;}}</style></head><body><h1></h1><article></article></body></html>');
+    win.document.close();
+    const titleEl = win.document.querySelector('title');
+    if (titleEl) titleEl.textContent = title;
+    const h1El = win.document.querySelector('h1');
+    if (h1El) h1El.textContent = title;
+    const articleEl = win.document.querySelector('article');
+    if (articleEl) {
+      articleEl.innerHTML = content;
+      win.print();
+      win.close();
+    }
+  }
+
   printImage(imageUrl: string, title: string): void {
     const win = window.open('', '_blank');
     if (!win) return;

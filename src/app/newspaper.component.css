@@ -906,7 +906,7 @@
 
 /* Right Panel Styles */
 .right-panel {
-  width: 400px;
+  flex: 1;
   background: linear-gradient(to bottom, var(--color-white), var(--color-bg-page));
   border-left: 1px solid var(--color-border);
   overflow: hidden;
@@ -1100,6 +1100,7 @@
   transition: all 0.3s ease;
   white-space: nowrap;
   width: 100%;
+  max-width: 300px;
   justify-content: center;
 }
 
@@ -1211,10 +1212,9 @@
 
 .modal-image-item {
   width: 100%;
-  max-width: 900px;
+  max-width: 1200px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
 }
 
 .modal-full-image {
@@ -1222,14 +1222,14 @@
   height: auto;
   display: block;
   border-radius: 0px 0px 8px 8px;
-  box-shadow: 0 10px 60px rgba(0, 0, 0, 0.5);
 }
 
 .modal-image-actions {
   display: flex;
   gap: 10px;
-  justify-content: center;
-  margin-top: 12px;
+  margin-top: 0;
+  padding: 0 16px;
+  background: #ffffff;
 }
 
 .modal-img-action-btn {
@@ -1238,20 +1238,21 @@
   gap: 6px;
   padding: 6px 16px;
   border-radius: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.3);
+  border: 1px solid var(--color-border-ui, #ddd);
   cursor: pointer;
   font-size: 14px;
   font-weight: 500;
   line-height: 22px;
-  background: rgba(255, 255, 255, 0.12);
-  color: white;
+  background: var(--color-bg-surface, #f5f5f5);
+  color: var(--color-text-dark, #222);
   backdrop-filter: blur(10px);
   transition: background 0.2s ease, transform 0.15s ease;
 }
 
 .modal-img-action-btn:hover {
-  background: rgba(255, 255, 255, 0.25);
-  transform: translateY(-1px);
+  background: var(--color-primary-light, #e8f0fe);
+  color: var(--color-primary, #1a73e8);
+  border-color: var(--color-primary, #1a73e8);
 }
 
 .modal-img-action-btn:active {
@@ -1317,12 +1318,20 @@
 }
 
 .modal-content .modal-body {
-  padding: 20px 40px;
+  padding: 0 20px 20px;
+}
+
+.modal-content .modal-body .modal-image-actions {
+  margin-top: 0;
+  margin-bottom: 20px;
+  padding-left: 0;
+  padding-right: 0;
+  justify-content: flex-start;
 }
 
 .close-button {
   position: absolute;
-  top: 15px;
+  top: 75px;
   right: 15px;
   background-color: var(--color-danger);
   color: var(--color-white);
@@ -1453,7 +1462,7 @@
 /* Responsive Design */
 @media (max-width: 1200px) {
   .right-panel {
-    width: 350px;
+    flex: 1;
   }
 }
 

@@ -17,7 +17,7 @@ export const EN = {
     previewUnavailable: 'Preview unavailable due to image permissions.',
     page: 'Page',
     clickToRead: '👆 Click on any section in the newspaper to read the full article',
-    readArticle: 'Read Article',
+    readArticle: 'Text Version',
     selectSection: 'Select a section to read the article',
     clickToViewFull: 'Click to view full size',
     goToSection: 'Go to this section',
