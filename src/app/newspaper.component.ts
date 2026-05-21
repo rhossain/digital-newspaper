@@ -621,10 +621,19 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     if (h1El) h1El.textContent = title;
     const articleEl = win.document.querySelector('article');
     if (articleEl) {
-      articleEl.innerHTML = content;
+      articleEl.innerHTML = this.normalizeContent(content);
       win.print();
       win.close();
     }
+  }
+
+  /** Replace &nbsp; entities and Unicode non-breaking spaces with regular spaces
+   *  so text wraps naturally in the article viewer and print window. */
+  normalizeContent(content: string | undefined | null): string {
+    if (!content) return '';
+    return content
+      .replace(/&nbsp;/g, ' ')
+      .replace(/\u00a0/g, ' ');
   }
 
   printImage(imageUrl: string, title: string): void {

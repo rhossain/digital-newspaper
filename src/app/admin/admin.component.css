@@ -1405,3 +1405,5 @@ small {
   color: var(--color-hint-text);
   font-size: 0.875rem;
 }
+
+/* Quill Rich Text Editor styles are in global styles.css */

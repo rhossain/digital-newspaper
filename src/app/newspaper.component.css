@@ -1354,36 +1354,9 @@
   transform: scale(1.1);
 }
 
-.article-body {
-  font-family: 'Google Sans', sans-serif;
-  line-height: 1.8;
-  color: var(--color-text-base);
-}
-
-.article-body h2 {
-  margin: 0 0 15px 0;
-  font-size: 28px;
-  color: var(--color-primary);
-  border-bottom: 3px solid var(--color-primary);
-  padding-bottom: 10px;
-}
-
-.article-body p {
-  margin: 15px 0;
-  font-size: 16px;
-  text-align: justify;
-}
-
-.article-body strong {
-  color: #555;
-  font-style: italic;
-}
-
-.article-body em {
-  color: var(--color-primary);
-  font-style: normal;
-  font-weight: bold;
-}
+/* .article-body child rules are in global styles.css
+   (innerHTML-injected elements don't receive Angular's _ngcontent attribute,
+   so descendant selectors in component styles never match them) */
 
 .article-footer {
   margin-top: 30px;

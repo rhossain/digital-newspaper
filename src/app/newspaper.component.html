@@ -705,7 +705,7 @@
             {{ 'viewer.print' | translate }}
           </button>
         </div>
-        <div class="article-body" [innerHTML]="selectedSection.content"></div>
+        <div class="article-body" [innerHTML]="normalizeContent(selectedSection.content)"></div>
       </div>
     </div>
   </div>

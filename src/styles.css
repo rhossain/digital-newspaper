@@ -108,3 +108,100 @@ app-root {
   background-color: var(--color-white);
   box-shadow: 0 0 20px rgba(0, 0, 0, 0.1);
 }
+
+/* ============================================================
+   Article body – global styles for [innerHTML]-rendered content
+   ============================================================ */
+.article-body {
+  font-family: 'Google Sans', sans-serif;
+  line-height: 1.8;
+  color: var(--color-text-base);
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+.article-body h1,
+.article-body h2,
+.article-body h3,
+.article-body h4,
+.article-body h5,
+.article-body h6 {
+  margin: 0;
+  color: var(--color-primary);
+}
+
+.article-body p {
+  margin: 0 0 8px 0;
+  font-size: 16px;
+}
+
+/* Collapse empty Quill paragraphs (contain only a <br>) */
+.article-body p:has(> br:only-child) {
+  margin: 0;
+  line-height: 0;
+}
+
+.article-body strong {
+  color: #555;
+  font-style: italic;
+}
+
+.article-body em {
+  color: var(--color-primary);
+  font-style: normal;
+  font-weight: bold;
+}
+
+/* ============================================================
+   Quill Rich Text Editor – global overrides (admin section form)
+   ============================================================ */
+.quill-content-editor {
+  display: block;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.quill-content-editor .ql-toolbar.ql-snow {
+  border: 2px solid var(--color-border-ui, #d1d5db);
+  border-bottom: 1px solid var(--color-border-ui, #d1d5db);
+  border-radius: 6px 6px 0 0;
+  background: var(--color-bg-muted, #f8f9fa);
+  font-family: inherit;
+  padding: 6px 8px;
+}
+
+.quill-content-editor .ql-container.ql-snow {
+  border: 2px solid var(--color-border-ui, #d1d5db);
+  border-top: none;
+  border-radius: 0 0 6px 6px;
+  font-family: inherit;
+  font-size: 0.9rem;
+}
+
+.quill-content-editor .ql-editor {
+  min-height: 200px;
+  padding: 0.75rem;
+  line-height: 1.6;
+  color: var(--color-text, #212121);
+}
+
+.quill-content-editor .ql-editor.ql-blank::before {
+  color: var(--color-text-muted, #9e9e9e);
+  font-style: normal;
+  font-size: 0.875rem;
+}
+
+.quill-content-editor.ng-invalid .ql-container.ql-snow,
+.quill-content-editor.ng-invalid .ql-toolbar.ql-snow {
+  border-color: #d32f2f;
+}
+
+.quill-content-editor:focus-within .ql-toolbar.ql-snow {
+  border-color: var(--color-primary, #1976d2);
+  box-shadow: 0 0 0 3px rgba(25, 118, 210, 0.1);
+}
+
+.quill-content-editor:focus-within .ql-container.ql-snow {
+  border-color: var(--color-primary, #1976d2);
+  box-shadow: 0 0 0 3px rgba(25, 118, 210, 0.1);
+}

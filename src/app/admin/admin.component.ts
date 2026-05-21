@@ -2,6 +2,7 @@ import { Component, OnInit, ViewChild, ElementRef, ChangeDetectorRef } from '@an
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
+import { QuillModule } from 'ngx-quill';
 import { NewspaperDataService, NewspaperPage, NewsSection, GlobalSettings, NewspaperEdition } from '../services/newspaper-data.service';
 import { AuthService } from '../services/auth.service';
 import { ToasterService } from '../services/toaster.service';
@@ -10,7 +11,7 @@ import { TranslationService } from '../i18n/translation.service';
 @Component({
   selector: 'app-admin',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, QuillModule],
   templateUrl: './admin.component.html',
   styleUrls: ['./admin.component.css']
 })
@@ -102,6 +103,20 @@ export class AdminComponent implements OnInit {
   
   // Image source option
   imageSourceOption: 'auto-crop' | 'external-url' | 'upload' = 'auto-crop';
+
+  // Quill rich text editor configuration
+  quillModules = {
+    toolbar: [
+      ['bold', 'italic', 'underline', 'strike'],
+      [{ 'header': [1, 2, 3, 4, false] }],
+      [{ 'list': 'ordered' }, { 'list': 'bullet' }],
+      [{ 'indent': '-1' }, { 'indent': '+1' }],
+      [{ 'align': [] }],
+      ['blockquote'],
+      ['link'],
+      ['clean']
+    ]
+  };
   
   // Image Cropper
   cropperImageLoaded = false;
