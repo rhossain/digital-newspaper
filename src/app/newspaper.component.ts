@@ -639,10 +639,8 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   printImage(imageUrl: string, title: string): void {
     const win = window.open('', '_blank');
     if (!win) return;
-    // Write a minimal skeleton with no user content to avoid XSS
     win.document.write('<!DOCTYPE html><html><head><title></title><style>body{margin:0;display:flex;justify-content:center;align-items:flex-start;background:white;}img{max-width:100%;height:auto;display:block;}@media print{body{margin:0;}}</style></head><body><img/></body></html>');
     win.document.close();
-    // Set values via DOM APIs (safe — no HTML interpretation)
     const titleEl = win.document.querySelector('title');
     if (titleEl) titleEl.textContent = title;
     const imgEl = win.document.querySelector('img') as HTMLImageElement | null;
@@ -653,10 +651,80 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     }
   }
 
+  printAllModalImages(): void {
+    const images: { src: string; alt: string }[] = [];
+    if (this.modalImage) {
+      images.push({ src: this.modalImage, alt: this.modalImageTitle });
+    }
+    for (const linked of this.modalLinkedSections) {
+      const src = this.getCroppedImageForSection(linked);
+      if (src) images.push({ src, alt: linked.title });
+    }
+    if (images.length === 0) return;
+
+    const win = window.open('', '_blank');
+    if (!win) return;
+
+    // Write a minimal skeleton — no user content injected as HTML
+    win.document.write('<!DOCTYPE html><html><head><title></title><style>body{margin:0;background:white;font-family:sans-serif;}.print-header{display:flex;align-items:center;gap:12px;padding:16px 20px;border-bottom:1px solid #ccc;}.logo-img{height:40px;width:auto;object-fit:contain;}.logo-text{font-size:18px;font-weight:600;}.images-container{padding:20px;display:flex;flex-direction:column;gap:30px;align-items:center;}.print-image{width:100%;max-width:900px;height:auto;display:block;}@media print{body{margin:0;}}</style></head><body><div class="print-header"></div><div class="images-container"></div></body></html>');
+    win.document.close();
+
+    // Build header via DOM APIs (safe)
+    const header = win.document.querySelector('.print-header')!;
+    const logo = this.settings?.logo;
+    if (logo?.url) {
+      const logoImg = win.document.createElement('img');
+      logoImg.className = 'logo-img';
+      logoImg.alt = logo.alt || 'Logo';
+      logoImg.src = logo.url;
+      header.appendChild(logoImg);
+    } else {
+      const logoText = win.document.createElement('span');
+      logoText.className = 'logo-text';
+      logoText.textContent = logo?.alt || 'Digital Newspaper';
+      header.appendChild(logoText);
+    }
+
+    // Add all images; print once all are loaded
+    const container = win.document.querySelector('.images-container')!;
+    let loadedCount = 0;
+    const checkPrint = () => {
+      loadedCount++;
+      if (loadedCount >= images.length) { win.print(); win.close(); }
+    };
+    for (const img of images) {
+      const el = win.document.createElement('img');
+      el.className = 'print-image';
+      el.alt = img.alt;
+      el.onload = checkPrint;
+      el.onerror = checkPrint;
+      el.src = img.src;
+      container.appendChild(el);
+    }
+  }
+
   async downloadImage(imageUrl: string, title: string): Promise<void> {
-    try {
-      const response = await fetch(imageUrl);
-      const blob = await response.blob();
+    const tryFetch = async (url: string): Promise<Blob | null> => {
+      try {
+        const resp = await fetch(url);
+        if (!resp.ok) return null;
+        return await resp.blob();
+      } catch {
+        return null;
+      }
+    };
+
+    // Try direct fetch; fall back to proxy for cross-origin images
+    let blob = await tryFetch(imageUrl);
+    if (!blob) {
+      const isExternal = imageUrl.startsWith('http://') || imageUrl.startsWith('https://');
+      if (isExternal) {
+        const proxyUrl = `${this.dataService.getApiBaseUrl()}/wp-json/digital-newspaper/v1/proxy?url=${encodeURIComponent(imageUrl)}`;
+        blob = await tryFetch(proxyUrl);
+      }
+    }
+
+    if (blob) {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -666,8 +734,26 @@ export class NewspaperComponent implements OnInit, OnDestroy {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-    } catch {
+    } else {
       window.open(imageUrl, '_blank');
+    }
+  }
+
+  async downloadAllModalImages(): Promise<void> {
+    const images: { src: string; alt: string }[] = [];
+    if (this.modalImage) {
+      images.push({ src: this.modalImage, alt: this.modalImageTitle });
+    }
+    for (const linked of this.modalLinkedSections) {
+      const src = this.getCroppedImageForSection(linked);
+      if (src) images.push({ src, alt: linked.title });
+    }
+    for (let i = 0; i < images.length; i++) {
+      await this.downloadImage(images[i].src, images[i].alt);
+      // Brief pause between downloads so the browser registers each one separately
+      if (i < images.length - 1) {
+        await new Promise<void>(resolve => setTimeout(resolve, 400));
+      }
     }
   }
 

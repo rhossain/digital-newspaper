@@ -623,7 +623,7 @@
         <!-- Main/Selected Image -->
         <div class="modal-image-item" *ngIf="modalImage">
           <div class="modal-image-actions">
-            <button class="modal-img-action-btn" (click)="printImage(modalImage!, modalImageTitle)">
+            <button class="modal-img-action-btn" (click)="printAllModalImages()">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="6 9 6 2 18 2 18 9"></polyline>
                 <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
@@ -631,7 +631,7 @@
               </svg>
               {{ 'viewer.print' | translate }}
             </button>
-            <button class="modal-img-action-btn" (click)="downloadImage(modalImage!, modalImageTitle)">
+            <button class="modal-img-action-btn" (click)="downloadAllModalImages()">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
                 <polyline points="7 10 12 15 17 10"></polyline>
@@ -649,9 +649,9 @@
         </div>
         
         <!-- Linked Section Images -->
-        <div class="modal-image-item" *ngFor="let linkedSection of modalLinkedSections">
-          <div class="modal-image-actions">
-            <button class="modal-img-action-btn" (click)="printImage(getCroppedImageForSection(linkedSection)!, linkedSection.title)">
+        <div class="modal-image-item" *ngFor="let linkedSection of modalLinkedSections; let isLast = last">
+          <div class="modal-image-actions" *ngIf="!isLast">
+            <button class="modal-img-action-btn" (click)="printAllModalImages()">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="6 9 6 2 18 2 18 9"></polyline>
                 <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
@@ -659,7 +659,7 @@
               </svg>
               {{ 'viewer.print' | translate }}
             </button>
-            <button class="modal-img-action-btn" (click)="downloadImage(getCroppedImageForSection(linkedSection)!, linkedSection.title)">
+            <button class="modal-img-action-btn" (click)="downloadAllModalImages()">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
                 <polyline points="7 10 12 15 17 10"></polyline>
