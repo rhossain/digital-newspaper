@@ -112,6 +112,18 @@ export class AdminComponent implements OnInit {
   imageNaturalHeight = 0;
   cropperZoom = 1;
 
+  // Image preview lightbox
+  previewPageUrl: string | null = null;
+
+  openPagePreview(page: any, event: MouseEvent) {
+    event.stopPropagation();
+    this.previewPageUrl = page.fullImage || page.thumbnail || null;
+  }
+
+  closePagePreview() {
+    this.previewPageUrl = null;
+  }
+
   constructor(
     private dataService: NewspaperDataService,
     private router: Router,
@@ -187,7 +199,7 @@ export class AdminComponent implements OnInit {
   }
 
   zoomOut() {
-    this.cropperZoom = Math.max(1, parseFloat((this.cropperZoom - 0.1).toFixed(1)));
+    this.cropperZoom = Math.max(0.25, parseFloat((this.cropperZoom - 0.1).toFixed(2)));
   }
 
   zoomIn() {

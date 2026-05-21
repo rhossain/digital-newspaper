@@ -864,7 +864,7 @@
 .clickable-section.selected {
   background-color: rgba(25, 118, 210, 0.25);
   border-color: var(--color-primary-darker);
-  border-width: 3px;
+  border-width: 1px;
 }
 
 .section-label {
