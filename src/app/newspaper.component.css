@@ -1221,7 +1221,7 @@
   width: 100%;
   height: auto;
   display: block;
-  border-radius: 8px;
+  border-radius: 0px 0px 8px 8px;
   box-shadow: 0 10px 60px rgba(0, 0, 0, 0.5);
 }
 

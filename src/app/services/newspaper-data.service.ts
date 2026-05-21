@@ -23,6 +23,8 @@ export interface NewspaperPage {
   id: number;
   thumbnail: string;
   fullImage: string;
+  /** Optional high-resolution image used in the crop selector. Falls back to fullImage if absent. */
+  fullImageHiRes?: string;
   sections: NewsSection[];
   /** Multilingual page name keyed by language code, e.g. { en: 'Sports', bn: 'খেলাধুলা' } */
   pageLabels?: { [lang: string]: string };

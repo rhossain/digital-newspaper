@@ -50,8 +50,10 @@ export class AdminComponent implements OnInit {
   
   // Image input modes
   fullImageInputMode: 'url' | 'file' = 'url';
+  fullImageHiResInputMode: 'url' | 'file' = 'url';
   thumbnailInputMode: 'url' | 'file' = 'url';
   fullImageFile: File | null = null;
+  fullImageHiResFile: File | null = null;
   thumbnailFile: File | null = null;
   previewLoading: boolean = false;
 
@@ -374,12 +376,15 @@ export class AdminComponent implements OnInit {
       id: this.dataService.getNextPageId(this.selectedDate, this.selectedEditionNumber),
       thumbnail: '',
       fullImage: '',
+      fullImageHiRes: '',
       sections: [],
       pageLabels: { en: '', bn: '' }
     };
     this.fullImageInputMode = 'url';
+    this.fullImageHiResInputMode = 'url';
     this.thumbnailInputMode = 'url';
     this.fullImageFile = null;
+    this.fullImageHiResFile = null;
     this.thumbnailFile = null;
   }
 
@@ -387,8 +392,10 @@ export class AdminComponent implements OnInit {
     this.isEditingPage = true;
     this.pageForm = { ...page, pageLabels: { en: page.pageLabels?.['en'] ?? '', bn: page.pageLabels?.['bn'] ?? '' } };
     this.fullImageInputMode = 'url';
+    this.fullImageHiResInputMode = 'url';
     this.thumbnailInputMode = 'url';
     this.fullImageFile = null;
+    this.fullImageHiResFile = null;
     this.thumbnailFile = null;
   }
 
@@ -418,7 +425,12 @@ export class AdminComponent implements OnInit {
       if (edition) {
         this.pages = edition.pages;
       }
-      
+
+      // Re-sync selectedPage so the cropper reflects the latest saved data
+      if (this.selectedPage?.id === page.id) {
+        this.selectedPage = this.pages.find(p => p.id === page.id) || null;
+      }
+
       this.cancelPageEdit();
       this.toaster.success('Page saved successfully!');
     }
@@ -442,7 +454,7 @@ export class AdminComponent implements OnInit {
 
   cancelPageEdit() {
     this.isEditingPage = false;
-    this.pageForm = { id: 0, thumbnail: '', fullImage: '', sections: [], pageLabels: { en: '', bn: '' } };
+    this.pageForm = { id: 0, thumbnail: '', fullImage: '', fullImageHiRes: '', sections: [], pageLabels: { en: '', bn: '' } };
   }
 
   // Section Management
@@ -1172,6 +1184,24 @@ export class AdminComponent implements OnInit {
 
   onFullImageUrlChange(value: string) {
     this.previewLoading = !!value;
+  }
+
+  onFullImageHiResFileSelected(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    if (input.files && input.files[0]) {
+      this.fullImageHiResFile = input.files[0];
+      const fileName = this.fullImageHiResFile.name || `page_full_hires_${Date.now()}.jpg`;
+      this.uploadMediaFile(this.fullImageHiResFile, fileName)
+        .then((url) => {
+          this.pageForm.fullImageHiRes = url;
+          this.cdr.detectChanges();
+          this.toaster.success('High-res image uploaded');
+        })
+        .catch((error) => {
+          console.error('Error uploading high-res image:', error);
+          this.toaster.error('Failed to upload high-res image');
+        });
+    }
   }
 
   onFullImagePreviewLoad() {

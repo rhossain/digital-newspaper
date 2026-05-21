@@ -273,6 +273,39 @@
               />
             </div>
             <div class="form-group">
+              <label>
+                Full Image — High Resolution
+                <span class="label-optional">(optional · used in crop selector only)</span>
+              </label>
+              <div class="input-mode-options">
+                <label class="radio-option">
+                  <input type="radio" name="fullImageHiResMode" value="url" [(ngModel)]="fullImageHiResInputMode" />
+                  <span>External URL</span>
+                </label>
+                <label class="radio-option">
+                  <input type="radio" name="fullImageHiResMode" value="file" [(ngModel)]="fullImageHiResInputMode" />
+                  <span>Upload File</span>
+                </label>
+              </div>
+              <input
+                *ngIf="fullImageHiResInputMode === 'url'"
+                type="text"
+                [(ngModel)]="pageForm.fullImageHiRes"
+                class="form-control"
+                placeholder="https://example.com/page-image-hires.jpg"
+              />
+              <input
+                *ngIf="fullImageHiResInputMode === 'file'"
+                type="file"
+                (change)="onFullImageHiResFileSelected($event)"
+                accept="image/*"
+                class="form-control"
+              />
+              <p *ngIf="pageForm.fullImageHiRes" class="field-hint">
+                ✓ High-res image set — crop selector will use this image.
+              </p>
+            </div>
+            <div class="form-group">
               <label>Thumbnail (optional)</label>
               <div class="input-mode-options">
                 <label class="radio-option">
@@ -765,7 +798,7 @@
         <div class="cropper-stage" [style.transform]="'scale(' + cropperZoom + ')'">
           <img 
             #cropperImage
-            [src]="selectedPage?.fullImage" 
+            [src]="selectedPage?.fullImageHiRes || selectedPage?.fullImage" 
             alt="Full page"
             (load)="onCropperImageLoad($event)"
           />
