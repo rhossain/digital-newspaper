@@ -164,14 +164,17 @@ export class AdminComponent implements OnInit {
       },
       error: (err) => {
         this.isAuthenticating = false;
-        if (err.status === 0 || err.name === 'HttpErrorResponse' && !err.status) {
-          this.authError = 'Cannot reach WordPress. Check that WordPress is online and CORS is configured.';
+        const isParseError = err.error instanceof SyntaxError || (err.status === 200 && err.name === 'HttpErrorResponse');
+        if (err.status === 0) {
+          this.authError = 'Cannot reach WordPress. Verify the WordPress site is online and CORS "Allowed Origins" includes this app\'s URL.';
         } else if (err.status === 401 || err.status === 400) {
-          this.authError = 'Invalid credentials. Please try again.';
+          this.authError = 'Invalid username or password. Please try again.';
         } else if (err.status === 403) {
-          this.authError = 'Access denied. Your account may not have editor permissions.';
+          this.authError = 'Access denied. Your WordPress account may not have the Administrator role.';
+        } else if (isParseError) {
+          this.authError = 'WordPress returned an unexpected response. Please check: (1) WordPress Permalinks are set to "Post name", (2) the Digital Newspaper plugin is active, and (3) the WordPress URL in the app configuration is correct.';
         } else {
-          this.authError = `Login failed (HTTP ${err.status || 'network error'}). Check CORS settings.`;
+          this.authError = `Login failed (HTTP ${err.status}). Check that the Digital Newspaper plugin is active and WordPress Permalinks are set to "Post name".`;
         }
         this.toaster.error(this.authError);
       }
@@ -469,7 +472,7 @@ export class AdminComponent implements OnInit {
     }
   }
 
-  saveSection() {
+  saveSection(closeForm = true) {
     if (this.selectedPage && this.sectionForm.id && this.sectionForm.title) {
       // Clear imageUrl if auto-crop is selected
       const imageUrl = this.imageSourceOption === 'auto-crop' ? '' : (this.sectionForm.imageUrl || '');
@@ -489,7 +492,6 @@ export class AdminComponent implements OnInit {
         showCaption: this.sectionForm.showCaption !== undefined ? this.sectionForm.showCaption : true
       };
       
-      console.log('Saving section:', section);
       
       // Check if section exists by looking in the service data (not the stale selectedPage)
       const currentEdition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);
@@ -497,10 +499,8 @@ export class AdminComponent implements OnInit {
       const existingSection = currentPage?.sections.find(s => s.id === section.id);
       
       if (existingSection) {
-        console.log('Updating existing section');
         this.dataService.updateSection(this.selectedPage.id, section.id, section, this.selectedDate, this.selectedEditionNumber);
       } else {
-        console.log('Adding new section');
         this.dataService.addSection(this.selectedPage.id, section, this.selectedDate, this.selectedEditionNumber);
       }
       
@@ -512,10 +512,11 @@ export class AdminComponent implements OnInit {
       // Update selected page reference
       this.selectedPage = this.pages.find(p => p.id === this.selectedPage?.id) || null;
       
-      console.log('Updated data:', this.dataService.getData());
       
-      this.cancelSectionEdit();
-      this.toaster.success('Section saved successfully!');
+      if (closeForm) {
+        this.cancelSectionEdit();
+        this.toaster.success('Section saved successfully!');
+      }
     } else {
       console.error('Missing required fields:', {
         hasPage: !!this.selectedPage,
@@ -574,18 +575,11 @@ export class AdminComponent implements OnInit {
     this.imageNaturalWidth = img.naturalWidth;
     this.imageNaturalHeight = img.naturalHeight;
     this.cropperImageLoaded = true;
-    console.log('Image loaded:', { 
-      naturalWidth: this.imageNaturalWidth, 
-      naturalHeight: this.imageNaturalHeight,
-      cropperImageRef: !!this.cropperImageRef 
-    });
     this.cdr.detectChanges();
   }
 
   onCropperMouseDown(event: MouseEvent) {
-    console.log('Mouse down event triggered');
     if (!this.cropperImageRef) {
-      console.log('cropperImageRef not available');
       return;
     }
     
@@ -596,7 +590,6 @@ export class AdminComponent implements OnInit {
     this.cropperEndY = this.cropperStartY;
     this.isDrawing = true;
     
-    console.log('Start coordinates:', { x: this.cropperStartX, y: this.cropperStartY });
     this.cdr.detectChanges();
   }
 
@@ -607,7 +600,6 @@ export class AdminComponent implements OnInit {
     this.cropperEndX = event.offsetX ?? 0;
     this.cropperEndY = event.offsetY ?? 0;
     
-    console.log('Move coordinates:', { x: this.cropperEndX, y: this.cropperEndY });
     
     // Only calculate coordinates in real-time, don't generate image yet
     this.calculateCropCoordinates();
@@ -616,7 +608,6 @@ export class AdminComponent implements OnInit {
 
   onCropperMouseUp() {
     if (!this.isDrawing) return;
-    console.log('Mouse up - finalizing crop');
     this.isDrawing = false;
     this.calculateCropCoordinates();
     this.cdr.detectChanges();
@@ -650,19 +641,11 @@ export class AdminComponent implements OnInit {
       height: newHeight
     };
     
-    console.log('Crop coordinates calculated:', { x: newX, y: newY, width: newWidth, height: newHeight });
   }
 
   async generateAndUploadCroppedImageFromFullSize(fullImageUrl: string) {
     try {
-      console.log('Fetching full-size image from:', fullImageUrl);
       const proxyUrl = `${this.dataService.getApiBaseUrl()}/wp-json/digital-newspaper/v1/proxy?url=${encodeURIComponent(fullImageUrl)}`;
-      console.log('Using crop coordinates (%):', { 
-        x: this.sectionForm.x, 
-        y: this.sectionForm.y, 
-        width: this.sectionForm.width, 
-        height: this.sectionForm.height 
-      });
       
       // Fetch the full-size image
       const response = await fetch(proxyUrl);
@@ -680,9 +663,8 @@ export class AdminComponent implements OnInit {
       const img = new Image();
       const objectUrl = URL.createObjectURL(blob);
       
-      img.onload = () => {
+      img.onload = async () => {
         try {
-          console.log('Full-size image loaded:', img.naturalWidth + 'x' + img.naturalHeight);
           
           // Create canvas
           const canvas = document.createElement('canvas');
@@ -700,7 +682,6 @@ export class AdminComponent implements OnInit {
           const cropWidth = Math.round(((this.sectionForm.width ?? 0) / 100) * img.naturalWidth);
           const cropHeight = Math.round(((this.sectionForm.height ?? 0) / 100) * img.naturalHeight);
           
-          console.log('Crop area in pixels:', { x: cropX, y: cropY, width: cropWidth, height: cropHeight });
           
           // Set canvas dimensions to the crop size
           canvas.width = cropWidth;
@@ -721,11 +702,16 @@ export class AdminComponent implements OnInit {
           
           // Convert to data URL
           const croppedImageData = canvas.toDataURL('image/jpeg', 0.9);
-          console.log('Canvas data URL generated, length:', croppedImageData.length);
           
-          // Generate filename
-          const safeName = this.sectionForm.title?.replace(/\s+/g, '_').toLowerCase() || 'section';
-          const fileName = `${safeName}_${this.sectionForm.x}_${this.sectionForm.y}_${this.sectionForm.width}_${this.sectionForm.height}_${this.sectionForm.id}`;
+          // Generate filename: DD_MM_YYYY_NNNN_sectionId
+          const datePrefix = this.formatDateForFilename(
+            this.selectedDate || this.dataService.getTodayDate()
+          );
+          const headers = this.authService.getAuthHeaders();
+          const sequence = await this.getNextCropSequence(datePrefix, headers);
+          const sequenceStr = sequence.toString().padStart(4, '0');
+          const sectionId = (this.sectionForm.id || 'unknown').toString();
+          const fileName = `${datePrefix}_${sequenceStr}_${sectionId}`;
           
           // Upload to backend
           this.uploadCroppedImage(croppedImageData, fileName);
@@ -761,9 +747,14 @@ export class AdminComponent implements OnInit {
           imageUrl: url
         };
         this.imageSourceOption = 'external-url';
+        // Close the cropper panel but stay in the section edit form.
+        this.showImageCropper = false;
         this.cdr.detectChanges();
-        this.toaster.success('Cropped image saved successfully!');
-        console.log('Cropped image saved at:', url);
+        // Persist the updated imageUrl to the in-memory store and backend
+        // without closing the section form — the user stays on the edit page.
+        this.saveSection(false);
+        this.saveAllData();
+        this.toaster.success('Cropped image saved!');
       })
       .catch((error) => {
         console.error('Error uploading cropped image:', error);
@@ -812,7 +803,6 @@ export class AdminComponent implements OnInit {
   }
 
   uploadImageFile(imageData: string, fileName: string) {
-    console.log('Uploading image, filename:', fileName);
     const file = this.dataUrlToFile(imageData, `${fileName}.jpg`);
     this.uploadMediaFile(file, `${fileName}.jpg`)
       .then((url) => {
@@ -822,7 +812,6 @@ export class AdminComponent implements OnInit {
         };
         this.cdr.detectChanges();
         this.toaster.success('Image uploaded successfully!');
-        console.log('Image uploaded at:', url);
       })
       .catch((error) => {
         console.error('Error uploading image:', error);
@@ -844,7 +833,7 @@ export class AdminComponent implements OnInit {
   }
 
   private async uploadMediaFile(file: File, filename: string): Promise<string> {
-    const url = `${this.dataService.getApiBaseUrl()}/wp-json/wp/v2/media`;
+    const url = `${this.dataService.getApiBaseUrl()}/wp-json/digital-newspaper/v1/media`;
     const headers = this.authService.getAuthHeaders();
     const desiredName = this.normalizeFilename(filename);
     let finalName = desiredName;
@@ -880,6 +869,46 @@ export class AdminComponent implements OnInit {
     return data.source_url || data.guid?.rendered || '';
   }
 
+  /** Convert YYYY-MM-DD → DD_MM_YYYY for use in media filenames. */
+  private formatDateForFilename(dateStr: string): string {
+    const parts = dateStr.split('-');
+    if (parts.length !== 3) return dateStr;
+    return `${parts[2]}_${parts[1]}_${parts[0]}`;
+  }
+
+  /**
+   * Query existing media to find the highest 4-digit crop sequence for a given
+   * date prefix (DD_MM_YYYY), then return max + 1.  Falls back to 1 on error.
+   */
+  private async getNextCropSequence(
+    datePrefix: string,
+    headers: Record<string, string>
+  ): Promise<number> {
+    const searchUrl =
+      `${this.dataService.getApiBaseUrl()}/wp-json/digital-newspaper/v1/media` +
+      `?search=${encodeURIComponent(datePrefix)}&per_page=100`;
+    try {
+      const response = await fetch(searchUrl, { headers });
+      if (!response.ok) return 1;
+      const items: any[] = await response.json();
+      if (!Array.isArray(items) || items.length === 0) return 1;
+      // Match titles/slugs like "21_05_2026_0003_section-123"
+      const pattern = new RegExp('^' + datePrefix + '_(\\d{4})_');
+      let max = 0;
+      for (const item of items) {
+        const title = ((item.title?.rendered ?? item.slug) ?? '').toLowerCase();
+        const match = title.match(pattern);
+        if (match) {
+          const num = parseInt(match[1], 10);
+          if (num > max) max = num;
+        }
+      }
+      return max + 1;
+    } catch {
+      return 1;
+    }
+  }
+
   private normalizeFilename(filename: string): string {
     const clean = filename.replace(/\s+/g, '_');
     return clean.length ? clean : `image_${Date.now()}.jpg`;
@@ -897,7 +926,7 @@ export class AdminComponent implements OnInit {
 
   private async findExistingMedia(filename: string, headers: Record<string, string>): Promise<{ id: number } | null> {
     const base = filename.replace(/\.[^/.]+$/, '').toLowerCase();
-    const searchUrl = `${this.dataService.getApiBaseUrl()}/wp-json/wp/v2/media?search=${encodeURIComponent(base)}&per_page=100`;
+    const searchUrl = `${this.dataService.getApiBaseUrl()}/wp-json/digital-newspaper/v1/media?search=${encodeURIComponent(base)}&per_page=100`;
     const response = await fetch(searchUrl, { headers });
     if (!response.ok) return null;
     const items = await response.json();
@@ -912,7 +941,7 @@ export class AdminComponent implements OnInit {
   }
 
   private async deleteMedia(id: number, headers: Record<string, string>): Promise<void> {
-    const deleteUrl = `${this.dataService.getApiBaseUrl()}/wp-json/wp/v2/media/${id}?force=true`;
+    const deleteUrl = `${this.dataService.getApiBaseUrl()}/wp-json/digital-newspaper/v1/media/${id}`;
     const response = await fetch(deleteUrl, { method: 'DELETE', headers });
     if (!response.ok) {
       const errorText = await response.text();
@@ -937,7 +966,6 @@ export class AdminComponent implements OnInit {
       height: `${height}px`
     };
     
-    console.log('getCropStyle returning:', style, 'isDrawing:', this.isDrawing, 'cropperEndX:', this.cropperEndX);
     
     return style;
   }
@@ -972,7 +1000,6 @@ export class AdminComponent implements OnInit {
     // Get the latest data from service to ensure we have all changes
     const currentData = this.dataService.getData();
     
-    console.log('Saving data to backend:', currentData);
     
     if (!currentData.editions || currentData.editions.length === 0) {
       console.warn('No data to save!');

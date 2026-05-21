@@ -31,17 +31,8 @@ export class ShareButtonsComponent {
   constructor(private toaster: ToasterService, private ts: TranslationService) {}
 
   private getShareableUrl(section: NewsSection): string {
-    const baseUrl = window.location.origin;
-    // Use title-based slug with section ID fallback
     const slug = this.createSectionSlug(section.title, section.id);
-    return `${baseUrl}/${this.selectedDate}/${slug}`;
-  }
-
-  private getEncodedShareableUrl(section: NewsSection): string {
-    const baseUrl = window.location.origin;
-    // Use title-based slug with section ID fallback
-    const slug = this.createSectionSlug(section.title, section.id);
-    return `${baseUrl}/${this.selectedDate}/${slug}`;
+    return `${window.location.origin}/${this.selectedDate}/${slug}`;
   }
 
   private createSectionSlug(title: string, sectionId: string): string {
@@ -66,27 +57,27 @@ export class ShareButtonsComponent {
   }
 
   shareOnFacebook(section: NewsSection) {
-    const url = this.getEncodedShareableUrl(section);
+    const url = encodeURIComponent(this.getShareableUrl(section));
     window.open(`https://www.facebook.com/sharer/sharer.php?u=${url}`, '_blank', 'width=600,height=400');
   }
 
   shareOnTwitter(section: NewsSection) {
-    const url = this.getEncodedShareableUrl(section);
+    const url = encodeURIComponent(this.getShareableUrl(section));
     window.open(`https://twitter.com/intent/tweet?url=${url}`, '_blank', 'width=600,height=400');
   }
 
   shareOnLinkedIn(section: NewsSection) {
-    const url = this.getEncodedShareableUrl(section);
+    const url = encodeURIComponent(this.getShareableUrl(section));
     window.open(`https://www.linkedin.com/sharing/share-offsite/?url=${url}`, '_blank', 'width=600,height=400');
   }
 
   shareOnWhatsApp(section: NewsSection) {
-    const url = this.getEncodedShareableUrl(section);
+    const url = encodeURIComponent(this.getShareableUrl(section));
     const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
     if (isMobile) {
-      window.open(`whatsapp://send?text=${encodeURIComponent(url)}`, '_blank');
+      window.open(`whatsapp://send?text=${url}`, '_blank');
     } else {
-      window.open(`https://web.whatsapp.com/send?text=${encodeURIComponent(url)}`, '_blank');
+      window.open(`https://web.whatsapp.com/send?text=${url}`, '_blank');
     }
   }
 

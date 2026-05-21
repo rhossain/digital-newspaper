@@ -4,8 +4,7 @@
   "scripts": {
     "ng": "ng",
     "start": "ng serve",
-    "server": "node server.js",
-    "dev": "concurrently \"npm run server\" \"npm start\"",
+    "dev": "ng serve",
     "build": "ng build",
     "watch": "ng build --watch --configuration development",
     "deploy": "node deploy.js",

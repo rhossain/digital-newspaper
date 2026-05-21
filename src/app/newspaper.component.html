@@ -246,10 +246,12 @@
         >
           <div class="thumbnail-image-wrapper">
             <div class="skeleton-loader" *ngIf="thumbnailsLoading[page.id]"></div>
-            <img 
-              [src]="resolveImageUrl(page.thumbnail)" 
+            <img
+              *ngIf="pageThumbnailSrcs[page.id]"
+              [src]="pageThumbnailSrcs[page.id]"
               [alt]="'Page ' + page.id"
               (load)="onThumbnailLoad(page.id)"
+              (error)="onThumbnailLoad(page.id)"
               [style.opacity]="thumbnailsLoading[page.id] ? '0' : '1'"
             />
           </div>

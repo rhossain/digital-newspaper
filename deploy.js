@@ -159,13 +159,14 @@ const distDir = TEMP_DIST_DIR;
 const htaccessPath = path.join(distDir, '.htaccess');
 if (!fs.existsSync(htaccessPath)) {
   log('Creating .htaccess...', colors.blue);
-  const htaccessContent = `<IfModule mod_rewrite.c>
+  const htaccessContent = `# Redirect all routes to index.html for Angular HTML5 pushState routing
+<IfModule mod_rewrite.c>
   RewriteEngine On
   RewriteBase /
   RewriteRule ^index\\.html$ - [L]
   RewriteCond %{REQUEST_FILENAME} !-f
   RewriteCond %{REQUEST_FILENAME} !-d
-  RewriteRule . /index.html [L]
+  RewriteRule ^ /index.html [L]
 </IfModule>`;
   fs.writeFileSync(htaccessPath, htaccessContent);
   log('✓ .htaccess created', colors.green);
@@ -259,7 +260,7 @@ async function deployWithFTP() {
     password: PASS,
     localRoot: distDir,
     remoteRoot: REMOTE,
-    include: ['*', '**/*'],
+    include: ['*', '**/*', '.htaccess'],  // dotfiles like .htaccess are not matched by * globs
     exclude: ['**/*.map'],
     deleteRemote: strategy === 'full',
     forcePasv: true

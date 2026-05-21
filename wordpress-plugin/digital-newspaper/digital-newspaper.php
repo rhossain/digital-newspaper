@@ -35,7 +35,7 @@ class Digital_Newspaper_API {
     header('Access-Control-Allow-Origin: ' . $origin);
     header('Vary: Origin');
     header('Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS');
-    header('Access-Control-Allow-Headers: Authorization, Content-Type');
+    header('Access-Control-Allow-Headers: Authorization, X-Authorization, Content-Type');
     if (get_option(self::OPTION_ALLOW_CREDENTIALS, true)) {
       header('Access-Control-Allow-Credentials: true');
     }
@@ -187,6 +187,28 @@ class Digital_Newspaper_API {
         'permission_callback' => '__return_true'
       ]
     ]);
+
+    // Custom media endpoints — authenticated via plugin JWT (bypasses core /wp/v2/media auth issues)
+    register_rest_route('digital-newspaper/v1', '/media', [
+      [
+        'methods'             => 'POST',
+        'callback'            => [$this, 'upload_media'],
+        'permission_callback' => [$this, 'auth_required']
+      ],
+      [
+        'methods'             => 'GET',
+        'callback'            => [$this, 'list_media'],
+        'permission_callback' => [$this, 'auth_required']
+      ]
+    ]);
+
+    register_rest_route('digital-newspaper/v1', '/media/(?P<id>\d+)', [
+      [
+        'methods'             => 'DELETE',
+        'callback'            => [$this, 'delete_media_item'],
+        'permission_callback' => [$this, 'auth_required']
+      ]
+    ]);
   }
 
   public function get_data_endpoint(
@@ -238,7 +260,7 @@ class Digital_Newspaper_API {
     ]);
   }
 
-  public function me(): WP_REST_Response {
+  public function me(WP_REST_Request $request): WP_REST_Response {
     $user = wp_get_current_user();
     if (!$user || !$user->ID) {
       return new WP_REST_Response(['error' => 'Unauthorized'], 401);
@@ -309,6 +331,117 @@ class Digital_Newspaper_API {
     ]);
   }
 
+  public function upload_media(WP_REST_Request $request): WP_REST_Response {
+    require_once ABSPATH . 'wp-admin/includes/file.php';
+    require_once ABSPATH . 'wp-admin/includes/media.php';
+    require_once ABSPATH . 'wp-admin/includes/image.php';
+
+    $files = $request->get_file_params();
+    if (empty($files['file'])) {
+      return new WP_REST_Response(['error' => 'No file provided'], 400);
+    }
+
+    $file = $files['file'];
+
+    if ($file['size'] > 10 * 1024 * 1024) {
+      return new WP_REST_Response(['error' => 'File too large (max 10 MB)'], 413);
+    }
+
+    // Sanitize filename to prevent path-traversal attacks
+    $file['name'] = sanitize_file_name($file['name']);
+
+    // Validate MIME type by actual file content — do NOT trust $file['type'],
+    // which is set by the client and can be spoofed.
+    $allowed_ext_map = [
+      'jpg'  => 'image/jpeg',
+      'jpeg' => 'image/jpeg',
+      'png'  => 'image/png',
+      'gif'  => 'image/gif',
+      'webp' => 'image/webp',
+    ];
+    $type_info    = wp_check_filetype_and_ext($file['tmp_name'], $file['name']);
+    $detected_ext = $type_info['ext'] ?? '';
+    if (!$detected_ext || !isset($allowed_ext_map[$detected_ext])) {
+      return new WP_REST_Response(['error' => 'Only JPEG, PNG, GIF and WebP images are allowed'], 415);
+    }
+    // Use the server-verified type, not the client-supplied one
+    $file['type'] = $allowed_ext_map[$detected_ext];
+
+    $overrides = ['test_form' => false];
+    $uploaded   = wp_handle_upload($file, $overrides);
+
+    if (isset($uploaded['error'])) {
+      return new WP_REST_Response(['error' => $uploaded['error']], 500);
+    }
+
+    $title = sanitize_text_field(preg_replace('/\.[^.]+$/', '', basename($uploaded['file'])));
+
+    $attachment = [
+      'post_mime_type' => $uploaded['type'],
+      'post_title'     => $title,
+      'post_content'   => '',
+      'post_status'    => 'inherit',
+    ];
+
+    $attach_id = wp_insert_attachment($attachment, $uploaded['file']);
+
+    if (is_wp_error($attach_id)) {
+      // Remove the orphaned upload so it does not occupy disk space untracked
+      @unlink($uploaded['file']);
+      return new WP_REST_Response(['error' => $attach_id->get_error_message()], 500);
+    }
+
+    $meta = wp_generate_attachment_metadata($attach_id, $uploaded['file']);
+    wp_update_attachment_metadata($attach_id, $meta);
+
+    $url = wp_get_attachment_url($attach_id);
+    return new WP_REST_Response([
+      'id'         => $attach_id,
+      'source_url' => $url,
+      'guid'       => ['rendered' => $url],
+    ], 201);
+  }
+
+  public function list_media(WP_REST_Request $request): WP_REST_Response {
+    $search   = sanitize_text_field((string) ($request->get_param('search') ?? ''));
+    $per_page = min((int) ($request->get_param('per_page') ?? 100), 200);
+
+    $args = [
+      'post_type'      => 'attachment',
+      'post_status'    => 'inherit',
+      'posts_per_page' => $per_page,
+    ];
+
+    if ($search !== '') {
+      $args['s'] = $search;
+    }
+
+    $query = new WP_Query($args);
+    $items = array_map(function ($post) {
+      return [
+        'id'    => $post->ID,
+        'title' => ['rendered' => $post->post_title],
+        'slug'  => $post->post_name,
+      ];
+    }, $query->posts);
+
+    return rest_ensure_response($items);
+  }
+
+  public function delete_media_item(WP_REST_Request $request): WP_REST_Response {
+    $id = (int) $request->get_param('id');
+    if (!$id) {
+      return new WP_REST_Response(['error' => 'Invalid id'], 400);
+    }
+
+    $result = wp_delete_attachment($id, true);
+    if (!$result) {
+      return new WP_REST_Response(['error' => 'Attachment not found or could not be deleted'], 404);
+    }
+
+    return rest_ensure_response(['deleted' => true, 'id' => $id]);
+  }
+
   public function auth_required(WP_REST_Request $request) {
     $token = $this->get_bearer_token($request);
     if (!$token) {
@@ -363,19 +496,20 @@ class Digital_Newspaper_API {
   }
 
   public function add_cors_headers($served, $result, $request, $server) {
+    // Only add CORS headers when the browser supplies an Origin.
+    // Same-origin fetch() GET requests do NOT send Origin, so we must not
+    // gate the proxy binary-serving logic on Origin being present.
     $origin = get_http_origin();
-    if (!$origin) {
-      return $served;
-    }
-
-    $allowed = $this->get_allowed_origins();
-    if ($allowed && in_array($origin, $allowed, true)) {
-      header('Access-Control-Allow-Origin: ' . $origin);
-      header('Vary: Origin');
-      header('Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS');
-      header('Access-Control-Allow-Headers: Authorization, Content-Type');
-      if (get_option(self::OPTION_ALLOW_CREDENTIALS, true)) {
-        header('Access-Control-Allow-Credentials: true');
+    if ($origin) {
+      $allowed = $this->get_allowed_origins();
+      if ($allowed && in_array($origin, $allowed, true)) {
+        header('Access-Control-Allow-Origin: ' . $origin);
+        header('Vary: Origin');
+        header('Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS');
+        header('Access-Control-Allow-Headers: Authorization, X-Authorization, Content-Type');
+        if (get_option(self::OPTION_ALLOW_CREDENTIALS, true)) {
+          header('Access-Control-Allow-Credentials: true');
+        }
       }
     }
 
@@ -410,7 +544,13 @@ class Digital_Newspaper_API {
   }
 
   private function get_bearer_token(WP_REST_Request $request): ?string {
-    $header = $request->get_header('authorization');
+    // Try standard Authorization header first, then X-Authorization fallback.
+    // Apache on shared hosting (cPanel, Hostinger) strips Authorization from $_SERVER;
+    // X-Authorization is a custom header that Apache always passes through.
+    $header = $request->get_header('authorization') ?? '';
+    if (!$header) {
+      $header = $request->get_header('x-authorization') ?? '';
+    }
     if (!$header) {
       return null;
     }
@@ -421,7 +561,22 @@ class Digital_Newspaper_API {
   }
 
   private function get_bearer_token_from_globals(): ?string {
+    // 1. Standard $_SERVER keys (Nginx and some Apache configs).
     $header = $_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? '';
+
+    // 2. X-Authorization — Apache never strips custom headers, so this is the
+    //    most reliable fallback on cPanel / Hostinger shared hosting.
+    if (!$header) {
+      $header = $_SERVER['HTTP_X_AUTHORIZATION'] ?? '';
+    }
+
+    // 3. getallheaders() — last resort for other Apache configurations.
+    if (!$header && function_exists('getallheaders')) {
+      $all = getallheaders();
+      $header = $all['Authorization'] ?? $all['authorization']
+             ?? $all['X-Authorization'] ?? $all['x-authorization'] ?? '';
+    }
+
     if (!$header) {
       return null;
     }
@@ -497,6 +652,13 @@ class Digital_Newspaper_API {
     }
     if (defined('LOGGED_IN_KEY') && LOGGED_IN_KEY) {
       return LOGGED_IN_KEY;
+    }
+    // AUTH_KEY / LOGGED_IN_KEY not set — the fallback is weak. This should
+    // not happen on a properly configured WordPress installation.
+    if (is_admin()) {
+      add_action('admin_notices', function () {
+        echo '<div class="notice notice-warning"><p><strong>Digital Newspaper:</strong> AUTH_KEY is not set in wp-config.php. JWT tokens use a fallback secret. Please define AUTH_KEY for production security.</p></div>';
+      });
     }
     return 'dn_fallback_secret';
   }

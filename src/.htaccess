@@ -1,11 +1,13 @@
-# Redirect all routes to index.html for Angular routing
+# Redirect all routes to index.html for Angular HTML5 pushState routing
 <IfModule mod_rewrite.c>
   RewriteEngine On
   RewriteBase /
+  # Serve existing files and directories directly
   RewriteRule ^index\.html$ - [L]
   RewriteCond %{REQUEST_FILENAME} !-f
   RewriteCond %{REQUEST_FILENAME} !-d
-  RewriteRule . /index.html [L]
+  # Catch-all: send everything else (including /admin/, /2026-01-01/, etc.) to index.html
+  RewriteRule ^ /index.html [L]
 </IfModule>
 
 # Long-term caching for hashed Angular assets (JS, CSS, images)

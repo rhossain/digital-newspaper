@@ -1,6 +1,7 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { Observable, tap, map } from 'rxjs';
+import { Observable, of } from 'rxjs';
+import { tap, map } from 'rxjs';
 import { WP_BASE_URL } from '../config';
 
 interface LoginResponse {
@@ -42,21 +43,39 @@ export class AuthService {
   }
 
   isAuthenticated(): boolean {
-    return !!this.getToken();
+    const token = this.getToken();
+    if (!token) return false;
+    // Check expiry client-side to avoid stale-token UI flicker before the
+    // server round-trip in verifyToken() completes.
+    try {
+      const parts = token.split('.');
+      if (parts.length !== 3) { this.logout(); return false; }
+      const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
+      if (payload?.exp && Math.floor(Date.now() / 1000) > payload.exp) {
+        this.logout(); // Clear the expired token immediately
+        return false;
+      }
+    } catch {
+      this.logout();
+      return false;
+    }
+    return true;
   }
 
   getAuthHeaders(): Record<string, string> {
     const token = this.getToken();
-    return token ? { Authorization: `Bearer ${token}` } : {};
+    // Send token in both Authorization and X-Authorization.
+    // Apache on shared hosting (cPanel, Hostinger) strips the Authorization header
+    // before PHP sees it; X-Authorization is a custom header Apache always passes through.
+    return token
+      ? { Authorization: `Bearer ${token}`, 'X-Authorization': `Bearer ${token}` }
+      : {};
   }
 
   verifyToken(): Observable<boolean> {
     const headers = this.getAuthHeaders();
     if (!headers['Authorization']) {
-      return new Observable<boolean>((observer) => {
-        observer.next(false);
-        observer.complete();
-      });
+      return of(false);
     }
     const meUrl = `${this.wpBaseUrl}/wp-json/digital-newspaper/v1/auth/me`;
     return this.http.get(meUrl, { headers }).pipe(

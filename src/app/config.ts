@@ -7,4 +7,4 @@
  */
 
 /** WordPress site root (no trailing slash). */
-export const WP_BASE_URL = 'https://wp.rshossain.me';
+export const WP_BASE_URL = 'https://diginews.rshossain.me/wp';

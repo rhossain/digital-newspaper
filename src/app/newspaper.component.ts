@@ -44,6 +44,8 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   
   // Image loading states
   thumbnailsLoading: { [key: number]: boolean } = {};
+  /** Pre-resolved thumbnail src for each page (thumbnail → fullImage fallback). */
+  pageThumbnailSrcs: { [pageId: number]: string } = {};
   sectionImageLoading = false;
   sectionImageError = false;
   
@@ -227,10 +229,16 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     const edition = this.dataService.getCurrentEdition(this.selectedEditionNumber);
     if (edition) {
       this.pages = edition.pages;
-      // Initialize loading states for thumbnails
+      // Pre-resolve thumbnail sources once, handling PHP [] → '' coercion and
+      // falling back from thumbnail → fullImage.
       this.thumbnailsLoading = {};
+      this.pageThumbnailSrcs = {};
       this.pages.forEach(page => {
-        this.thumbnailsLoading[page.id] = true;
+        const thumb = typeof page.thumbnail === 'string' ? page.thumbnail.trim() : '';
+        const full  = typeof page.fullImage  === 'string' ? page.fullImage.trim()  : '';
+        const src   = this.resolveImageUrl(thumb || full);
+        this.pageThumbnailSrcs[page.id] = src;
+        this.thumbnailsLoading[page.id] = !!src;
       });
       if (this.pages.length > 0) {
         // Navigate to section if pendingSectionSlug exists, otherwise select first page
@@ -254,6 +262,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
       this.croppedSectionImage = null;
       this.linkedSections = [];
       this.thumbnailsLoading = {};
+      this.pageThumbnailSrcs = {};
     }
     this.updateDisplayDate();
     this.cdr.detectChanges();
@@ -470,7 +479,6 @@ export class NewspaperComponent implements OnInit, OnDestroy {
       // and sectionImageLoading would stay true forever.
       this.sectionImageLoading = resolvedUrl !== this.croppedSectionImage;
       this.croppedSectionImage = resolvedUrl;
-      console.log('Loading section image from:', resolvedUrl);
 
       // Safety net: after Angular's next change-detection pass, check whether
       // the <img> is already complete (e.g. pulled from browser cache) but
@@ -538,10 +546,14 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   }
 
   resolveImageUrl(url: string): string {
-    if (!url) return '';
+    // Guard: PHP may serialize empty fields as [] (truthy array) instead of "".
+    if (!url || typeof url !== 'string') return '';
     if (url.startsWith('data:')) return url;
     if (url.startsWith('http://') || url.startsWith('https://')) return url;
-    return url;
+    // Relative URL — prepend the WordPress base URL so the browser resolves it
+    // against the WP host rather than the Angular dev server.
+    const base = this.dataService.getApiBaseUrl();
+    return url.startsWith('/') ? `${base}${url}` : `${base}/${url}`;
   }
 
   closeSection() {
@@ -601,23 +613,18 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   printImage(imageUrl: string, title: string): void {
     const win = window.open('', '_blank');
     if (!win) return;
-    win.document.write(`
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <title>${title}</title>
-        <style>
-          body { margin: 0; display: flex; justify-content: center; align-items: flex-start; background: white; }
-          img { max-width: 100%; height: auto; display: block; }
-          @media print { body { margin: 0; } }
-        </style>
-      </head>
-      <body>
-        <img src="${imageUrl}" alt="${title}" onload="window.print(); window.close();" />
-      </body>
-      </html>
-    `);
+    // Write a minimal skeleton with no user content to avoid XSS
+    win.document.write('<!DOCTYPE html><html><head><title></title><style>body{margin:0;display:flex;justify-content:center;align-items:flex-start;background:white;}img{max-width:100%;height:auto;display:block;}@media print{body{margin:0;}}</style></head><body><img/></body></html>');
     win.document.close();
+    // Set values via DOM APIs (safe — no HTML interpretation)
+    const titleEl = win.document.querySelector('title');
+    if (titleEl) titleEl.textContent = title;
+    const imgEl = win.document.querySelector('img') as HTMLImageElement | null;
+    if (imgEl) {
+      imgEl.alt = title;
+      imgEl.src = imageUrl;
+      imgEl.onload = () => { win.print(); win.close(); };
+    }
   }
 
   async downloadImage(imageUrl: string, title: string): Promise<void> {
@@ -723,7 +730,6 @@ export class NewspaperComponent implements OnInit, OnDestroy {
         ? this.selectedSection.imageUrl
         : (this.selectedSection.imageUrl.startsWith('/') ? this.selectedSection.imageUrl : `/${this.selectedSection.imageUrl}`);
       this.croppedSectionImage = imagePath;
-      console.log('Using section imageUrl:', imagePath);
       return;
     }
 

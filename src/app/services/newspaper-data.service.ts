@@ -187,6 +187,20 @@ export class NewspaperDataService {
         if (result.settings) {
           this.cacheSettings(result.settings);
         }
+        // Normalize page fields: PHP serializes empty/unset strings as [] (empty
+        // array) which is truthy in JS, causing *ngIf guards to pass while
+        // [src] bindings receive a non-string and silently resolve to "".
+        result.editions.forEach(edition => {
+          edition.pages = edition.pages.map(page => ({
+            ...page,
+            thumbnail: typeof page.thumbnail === 'string' ? page.thumbnail : '',
+            fullImage: typeof page.fullImage === 'string' ? page.fullImage : '',
+            sections: Array.isArray(page.sections) ? page.sections.map(section => ({
+              ...section,
+              imageUrl: typeof section.imageUrl === 'string' ? section.imageUrl : undefined,
+            })) : [],
+          }));
+        });
         return result;
       }),
       tap((data: NewspaperData) => {
@@ -533,10 +547,6 @@ export class NewspaperDataService {
       }
     } catch (_e) { /* corrupt data – ignore */ }
     return null;
-  }
-
-  private loadCachedSettings(): GlobalSettings | null {
-    return NewspaperDataService._readCachedSettings();
   }
 
   downloadJSON(): void {
