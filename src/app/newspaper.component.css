@@ -1349,6 +1349,10 @@
   z-index: 1;
 }
 
+.close-button.close-button--no-article {
+  top: 10px;
+}
+
 .close-button:hover {
   background-color: var(--color-danger-dark);
   transform: scale(1.1);
