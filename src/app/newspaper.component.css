@@ -1076,6 +1076,7 @@
 .read-article-section {
   display: flex;
   align-items: center;
+  min-height: 73px;
   padding: 20px;
   flex-shrink: 0;
   border-top: 1px solid var(--color-border);
