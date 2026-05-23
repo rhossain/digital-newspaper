@@ -88,6 +88,20 @@ export class AdminComponent implements OnInit {
   logoInputMode: 'url' | 'file' = 'url';
   logoFile: File | null = null;
 
+  // Predefined page name options
+  readonly predefinedPageNamesEn = [
+    'Front Page', 'National', 'International', 'Politics', 'Business',
+    'Sports', 'Entertainment', 'Editorial', 'Opinion', 'Technology',
+    'Health', 'Education', 'Culture', 'Classifieds', 'Weather'
+  ];
+  readonly predefinedPageNamesBn = [
+    'প্রথম পাতা', 'জাতীয়', 'আন্তর্জাতিক', 'রাজনীতি', 'ব্যবসা-বাণিজ্য',
+    'খেলাধুলা', 'বিনোদন', 'সম্পাদকীয়', 'মতামত', 'প্রযুক্তি',
+    'স্বাস্থ্য', 'শিক্ষা', 'সংস্কৃতি', 'বিজ্ঞাপন', 'আবহাওয়া'
+  ];
+  pageNameEnSelect: string = '';
+  pageNameBnSelect: string = '';
+
   sectionForm: Partial<NewsSection> = {
     id: '',
     title: '',
@@ -385,6 +399,31 @@ export class AdminComponent implements OnInit {
     this.activeTab = 'sections';
   }
 
+  onPageNameEnSelectChange(value: string) {
+    this.pageNameEnSelect = value;
+    if (value !== '__custom__') {
+      this.pageForm.pageLabels!['en'] = value;
+    } else {
+      this.pageForm.pageLabels!['en'] = '';
+    }
+  }
+
+  onPageNameBnSelectChange(value: string) {
+    this.pageNameBnSelect = value;
+    if (value !== '__custom__') {
+      this.pageForm.pageLabels!['bn'] = value;
+    } else {
+      this.pageForm.pageLabels!['bn'] = '';
+    }
+  }
+
+  private initPageNameSelects() {
+    const en = this.pageForm.pageLabels?.['en'] ?? '';
+    const bn = this.pageForm.pageLabels?.['bn'] ?? '';
+    this.pageNameEnSelect = this.predefinedPageNamesEn.includes(en) ? en : (en ? '__custom__' : '');
+    this.pageNameBnSelect = this.predefinedPageNamesBn.includes(bn) ? bn : (bn ? '__custom__' : '');
+  }
+
   newPage() {
     this.isEditingPage = true;
     this.pageForm = {
@@ -395,6 +434,8 @@ export class AdminComponent implements OnInit {
       sections: [],
       pageLabels: { en: '', bn: '' }
     };
+    this.pageNameEnSelect = '';
+    this.pageNameBnSelect = '';
     this.fullImageInputMode = 'url';
     this.fullImageHiResInputMode = 'url';
     this.thumbnailInputMode = 'url';
@@ -406,6 +447,7 @@ export class AdminComponent implements OnInit {
   editPage(page: NewspaperPage) {
     this.isEditingPage = true;
     this.pageForm = { ...page, pageLabels: { en: page.pageLabels?.['en'] ?? '', bn: page.pageLabels?.['bn'] ?? '' } };
+    this.initPageNameSelects();
     this.fullImageInputMode = 'url';
     this.fullImageHiResInputMode = 'url';
     this.thumbnailInputMode = 'url';
@@ -470,6 +512,8 @@ export class AdminComponent implements OnInit {
   cancelPageEdit() {
     this.isEditingPage = false;
     this.pageForm = { id: 0, thumbnail: '', fullImage: '', fullImageHiRes: '', sections: [], pageLabels: { en: '', bn: '' } };
+    this.pageNameEnSelect = '';
+    this.pageNameBnSelect = '';
   }
 
   // Section Management

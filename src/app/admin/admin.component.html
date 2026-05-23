@@ -272,7 +272,7 @@
                 class="form-control" 
               />
             </div>
-            <div class="form-group">
+            <!-- <div class="form-group">
               <label>
                 Full Image — High Resolution
                 <span class="label-optional">(optional · used in crop selector only)</span>
@@ -304,7 +304,7 @@
               <p *ngIf="pageForm.fullImageHiRes" class="field-hint">
                 ✓ High-res image set — crop selector will use this image.
               </p>
-            </div>
+            </div> -->
             <div class="form-group">
               <label>Thumbnail (optional)</label>
               <div class="input-mode-options">
@@ -342,21 +342,45 @@
               <div class="edition-label-fields">
                 <label class="edition-label-field">
                   <span class="edition-label-lang">EN</span>
-                  <input
-                    type="text"
-                    [(ngModel)]="pageForm.pageLabels!['en']"
-                    class="edition-label-input"
-                    placeholder="e.g. Sports"
-                  />
+                  <div class="page-name-select-group">
+                    <select
+                      [ngModel]="pageNameEnSelect"
+                      (ngModelChange)="onPageNameEnSelectChange($event)"
+                      class="edition-label-input"
+                    >
+                      <option value="">-- Select --</option>
+                      <option *ngFor="let name of predefinedPageNamesEn" [value]="name">{{ name }}</option>
+                      <option value="__custom__">Custom...</option>
+                    </select>
+                    <input
+                      *ngIf="pageNameEnSelect === '__custom__'"
+                      type="text"
+                      [(ngModel)]="pageForm.pageLabels!['en']"
+                      class="edition-label-input page-name-custom-input"
+                      placeholder="e.g. Sports"
+                    />
+                  </div>
                 </label>
                 <label class="edition-label-field">
                   <span class="edition-label-lang">বাং</span>
-                  <input
-                    type="text"
-                    [(ngModel)]="pageForm.pageLabels!['bn']"
-                    class="edition-label-input"
-                    placeholder="যেমন: খেলাধুলা"
-                  />
+                  <div class="page-name-select-group">
+                    <select
+                      [ngModel]="pageNameBnSelect"
+                      (ngModelChange)="onPageNameBnSelectChange($event)"
+                      class="edition-label-input"
+                    >
+                      <option value="">-- নির্বাচন করুন --</option>
+                      <option *ngFor="let name of predefinedPageNamesBn" [value]="name">{{ name }}</option>
+                      <option value="__custom__">কাস্টম...</option>
+                    </select>
+                    <input
+                      *ngIf="pageNameBnSelect === '__custom__'"
+                      type="text"
+                      [(ngModel)]="pageForm.pageLabels!['bn']"
+                      class="edition-label-input page-name-custom-input"
+                      placeholder="যেমন: খেলাধুলা"
+                    />
+                  </div>
                 </label>
               </div>
             </div>

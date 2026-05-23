@@ -320,7 +320,7 @@
   border-radius: 6px;
   padding: 4px 8px;
   font-size: 13px;
-  width: 130px;
+  width: 100%;
   min-width: 80px;
   flex: 1;
   outline: none;
@@ -335,6 +335,17 @@
 .edition-label-actions {
   display: flex;
   gap: 6px;
+}
+
+.page-name-select-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+}
+
+.page-name-custom-input {
+  width: 100%;
 }
 
 .btn-outline {
