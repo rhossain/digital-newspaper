@@ -482,7 +482,7 @@
   <!-- Right Panel: Article Content -->
   <div class="right-panel" [class.open]="selectedSection">
     <div *ngIf="selectedSection" class="article-content">
-      <button class="close-button" [class.close-button--no-article]="!(selectedSection.content && selectedSection.showCaption !== false)" (click)="closeSection()">
+      <button class="close-button" (click)="closeSection()">
         <span>&times;</span>
       </button>
 

@@ -3,7 +3,7 @@ export const BN = {
     pages: 'পাতা',
     previousDay: 'আগের দিন',
     nextDay: 'পরের দিন',
-    jumpTo: 'যান:',
+    jumpTo: 'আর্কাইভ',
     pickDate: 'তারিখ বেছে নিন',
   },
   viewer: {
@@ -12,7 +12,7 @@ export const BN = {
     for: 'তারিখ:',
     selectDifferentDate: 'অন্য তারিখ নির্বাচন করুন বা পরে আবার চেষ্টা করুন।',
     noPagesAvailable: 'কোনো পাতা পাওয়া যায়নি',
-    jumpTo: 'যান:',
+    jumpTo: 'আর্কাইভ',
     loadingSectionImage: 'ছবি লোড হচ্ছে...',
     previewUnavailable: 'ছবির অনুমতির সমস্যায় প্রিভিউ দেখা যাচ্ছে না।',
     page: 'পৃষ্ঠা',
