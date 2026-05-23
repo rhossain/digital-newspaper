@@ -806,24 +806,20 @@
 <!-- Image Cropper Modal -->
 <div class="modal-overlay cropper-overlay" *ngIf="showImageCropper">
   <div class="modal modal-large">
-    <div class="modal-header">
-      <h2>Visual Crop Selector</h2>
+    <div class="modal-header cropper-toolbar">
+      <h2>✂️ Visual Crop Selector</h2>
+      <span class="cropper-hint">📍 Click &amp; drag to select area</span>
+      <div class="cropper-zoom">
+        <label>Zoom: {{ (cropperZoom * 100) | number:'1.0-0' }}%</label>
+        <input type="range" min="0.25" max="3" step="0.05" [(ngModel)]="cropperZoom" />
+        <div class="zoom-buttons">
+          <button class="btn btn-sm btn-secondary" (click)="zoomOut()">-</button>
+          <button class="btn btn-sm btn-secondary" (click)="zoomIn()">+</button>
+        </div>
+      </div>
       <button class="btn-close" (click)="closeCropper()">&times;</button>
     </div>
     <div class="modal-body cropper-body">
-      <div class="cropper-instructions">
-        <p>📍 Click and drag on the image to select the section area</p>
-        <p>The coordinates will be automatically calculated in percentages</p>
-        <div class="cropper-zoom">
-          <label>Zoom: {{ (cropperZoom * 100) | number:'1.0-0' }}%</label>
-          <input type="range" min="0.25" max="3" step="0.05" [(ngModel)]="cropperZoom" />
-          <div class="zoom-buttons">
-            <button class="btn btn-sm btn-secondary" (click)="zoomOut()">-</button>
-            <button class="btn btn-sm btn-secondary" (click)="zoomIn()">+</button>
-          </div>
-        </div>
-      </div>
-      
       <div class="cropper-container">
         <div class="cropper-stage" [style.transform]="'scale(' + cropperZoom + ')'">
           <img 
