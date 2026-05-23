@@ -1283,6 +1283,109 @@ small {
   border-radius: 8px;
 }
 
+.section-crop-preview-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-top: 1rem;
+  padding: 0.875rem;
+  background: linear-gradient(135deg, var(--color-primary-light) 0%, var(--color-white) 65%);
+  border: 1.5px solid rgba(25, 118, 210, 0.22);
+  border-radius: 12px;
+  box-shadow: 0 2px 12px rgba(25, 118, 210, 0.07), 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.section-crop-preview {
+  width: 108px;
+  height: 135px;
+  border: 2px solid rgba(25, 118, 210, 0.28);
+  border-radius: 8px;
+  background-color: var(--color-bg-muted);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.14), 0 1px 4px rgba(0, 0, 0, 0.08);
+  flex-shrink: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+.section-crop-preview-badge {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  text-align: center;
+  background: rgba(0, 0, 0, 0.52);
+  backdrop-filter: blur(2px);
+  color: #fff;
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 3px 0 4px;
+}
+
+.section-crop-preview-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.section-crop-preview-title {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  color: var(--color-primary);
+}
+
+.section-crop-preview-title svg {
+  stroke: var(--color-success);
+  flex-shrink: 0;
+}
+
+.section-crop-preview-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.crop-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.18rem 0.5rem 0.18rem 0.3rem;
+  border-radius: 20px;
+  background: var(--color-white);
+  border: 1.5px solid var(--color-border-ui);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.chip-key {
+  font-size: 0.58rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--color-white);
+  background: var(--color-primary);
+  padding: 1px 5px;
+  border-radius: 10px;
+  letter-spacing: 0.04em;
+}
+
+.crop-chip strong {
+  font-size: 0.7rem;
+  font-family: monospace;
+  color: var(--color-text-dark);
+  font-weight: 600;
+}
+
+.section-crop-preview-hint {
+  margin: 0;
+  font-size: 0.7rem;
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
 .info-item {
   font-size: 0.875rem;
   color: var(--color-text-medium);

@@ -451,7 +451,7 @@
         </div>
 
         <div class="section-form">
-          <div class="form-row">
+          <div class="form-row" style="margin-bottom: 0;">
             <div class="form-group">
               <label>Section ID</label>
               <input type="text" [(ngModel)]="sectionForm.id" [disabled]="!!selectedSection" class="form-control" />
@@ -460,13 +460,6 @@
               <label>Title *</label>
               <input type="text" [(ngModel)]="sectionForm.title" class="form-control" placeholder="Section headline" />
             </div>
-          </div>
-
-          <div class="form-group">            <label class="checkbox-label">
-              <input type="checkbox" [(ngModel)]="sectionForm.showCaption" class="form-checkbox" />
-              <span>Show caption in viewer</span>
-            </label>
-            <small class="form-help">Display section title and page number below the image</small>
           </div>
 
           <div class="form-group">            <label>Position & Size</label>
@@ -496,6 +489,24 @@
                 </svg>
                 Visual Crop Selector
               </button>
+              <div class="section-crop-preview-wrapper" *ngIf="selectedPage && (sectionForm.width ?? 0) > 0 && (sectionForm.height ?? 0) > 0">
+                <div class="section-crop-preview" [ngStyle]="getSectionCropPreviewStyle()">
+                  <span class="section-crop-preview-badge">Preview</span>
+                </div>
+                <div class="section-crop-preview-meta">
+                  <div class="section-crop-preview-title">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                    Crop Region Set
+                  </div>
+                  <div class="section-crop-preview-chips">
+                    <span class="crop-chip"><span class="chip-key">X</span><strong>{{ sectionForm.x }}%</strong></span>
+                    <span class="crop-chip"><span class="chip-key">Y</span><strong>{{ sectionForm.y }}%</strong></span>
+                    <span class="crop-chip"><span class="chip-key">W</span><strong>{{ sectionForm.width }}%</strong></span>
+                    <span class="crop-chip"><span class="chip-key">H</span><strong>{{ sectionForm.height }}%</strong></span>
+                  </div>
+                  <p class="section-crop-preview-hint">Coordinates applied on save</p>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -534,14 +545,22 @@
           </div>
 
           <div class="form-group">
-            <label>Content (HTML) *</label>
+            <label style="width: 100%;">Content (HTML) *</label>
             <quill-editor
               [(ngModel)]="sectionForm.content"
               [modules]="quillModules"
               [styles]="{ 'min-height': '200px' }"
               placeholder="Enter section content..."
-              class="quill-content-editor">
+              class="quill-content-editor"
+              style="width: 100%;">
             </quill-editor>
+          </div>
+
+          <div class="form-group">            <label class="checkbox-label">
+              <input type="checkbox" [(ngModel)]="sectionForm.showCaption" class="form-checkbox" />
+              <span>Show caption in viewer</span>
+            </label>
+            <small class="form-help">Display section title and page number below the image</small>
           </div>
 
           <div class="form-group">

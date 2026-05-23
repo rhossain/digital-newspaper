@@ -1032,6 +1032,25 @@ export class AdminComponent implements OnInit {
     }
   }
 
+  getSectionCropPreviewStyle(): { [key: string]: string } {
+    const x = this.sectionForm.x ?? 0;
+    const y = this.sectionForm.y ?? 0;
+    const w = this.sectionForm.width ?? 0;
+    const h = this.sectionForm.height ?? 0;
+    const imageUrl = this.selectedPage?.fullImageHiRes || this.selectedPage?.fullImage || '';
+    if (!w || !h || !imageUrl) return {};
+
+    const previewW = 108; // must match .section-crop-preview width in CSS
+    const previewH = 135; // must match .section-crop-preview height in CSS
+
+    return {
+      'background-image': `url(${imageUrl})`,
+      'background-size': `${Math.round(previewW * 100 / w)}px ${Math.round(previewH * 100 / h)}px`,
+      'background-position': `${-Math.round(previewW * x / w)}px ${-Math.round(previewH * y / h)}px`,
+      'background-repeat': 'no-repeat',
+    };
+  }
+
   getCropStyle() {
     if (!this.cropperImageRef) {
       return { left: '0px', top: '0px', width: '0px', height: '0px' };
