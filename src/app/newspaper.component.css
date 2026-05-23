@@ -980,6 +980,7 @@
   padding: 20px 15px;
   border-bottom: none;
   min-height: 200px;
+  overflow: hidden;
 }
 
 .section-item:hover {
