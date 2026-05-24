@@ -3,11 +3,10 @@ import { provideHttpClient } from '@angular/common/http';
 import { provideRouter, Routes, UrlSerializer, DefaultUrlSerializer, UrlTree } from '@angular/router';
 import { AppComponent } from './app/app.component';
 import { NewspaperComponent } from './app/newspaper.component';
-import { AdminComponent } from './app/admin/admin.component';
 
 const routes: Routes = [
   { path: '', component: NewspaperComponent },
-  { path: 'admin', component: AdminComponent },
+  { path: 'admin', loadComponent: () => import('./app/admin/admin.component').then(m => m.AdminComponent) },
   { path: ':date', component: NewspaperComponent },
   { path: ':date/:section', component: NewspaperComponent },
   { path: '**', redirectTo: '' }
