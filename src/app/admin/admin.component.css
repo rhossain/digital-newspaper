@@ -722,6 +722,12 @@
   box-shadow: 0 0 0 3px rgba(25, 118, 210, 0.1);
 }
 
+.form-control.input-error,
+.edition-label-input.input-error {
+  border-color: #e53935 !important;
+  box-shadow: 0 0 0 3px rgba(229, 57, 53, 0.12);
+}
+
 .form-control:disabled {
   background: var(--color-bg-muted);
   color: var(--color-text-light);

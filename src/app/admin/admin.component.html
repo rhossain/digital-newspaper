@@ -245,7 +245,7 @@
               <input type="number" [(ngModel)]="pageForm.id" [disabled]="isEditingDisabled()" class="form-control" />
             </div>
             <div class="form-group">
-              <label>Full Image</label>
+              <label>Full Image <span style="color:#e53935">*</span></label>
               <div class="input-mode-options">
                 <label class="radio-option">
                   <input type="radio" name="fullImageMode" value="url" [(ngModel)]="fullImageInputMode" />
@@ -260,7 +260,8 @@
                 *ngIf="fullImageInputMode === 'url'" 
                 type="text" 
                 [(ngModel)]="pageForm.fullImage" 
-                (ngModelChange)="onFullImageUrlChange($event)"
+                (ngModelChange)="onFullImageUrlChange($event); pageFormErrors.fullImage = false"
+                [class.input-error]="pageFormErrors.fullImage"
                 class="form-control" 
                 placeholder="https://example.com/page-image.jpg" 
               />
@@ -338,49 +339,35 @@
             </div>
             <!-- Page Name (multilingual) -->
             <div class="form-group" style="margin-top: 16px;">
-              <label>Page Name <span style="font-weight:400; color:#888">(optional)</span></label>
-              <div class="edition-label-fields">
+              <label>Page Name <span style="color:#e53935">*</span></label>
+              <select
+                [ngModel]="pageNameSelect"
+                (ngModelChange)="onPageNameSelectChange($event); pageFormErrors.pageName = false"
+                [class.input-error]="pageFormErrors.pageName"
+                class="form-control"
+              >
+                <option value="">-- Select page name --</option>
+                <option *ngFor="let item of predefinedPageNames" [value]="item.bn">{{ item.bn }} — {{ item.en }}</option>
+                <option value="__custom__">Custom...</option>
+              </select>
+              <div *ngIf="pageNameSelect === '__custom__'" class="edition-label-fields" style="margin-top: 8px;">
                 <label class="edition-label-field">
                   <span class="edition-label-lang">EN</span>
-                  <div class="page-name-select-group">
-                    <select
-                      [ngModel]="pageNameEnSelect"
-                      (ngModelChange)="onPageNameEnSelectChange($event)"
-                      class="edition-label-input"
-                    >
-                      <option value="">-- Select --</option>
-                      <option *ngFor="let name of predefinedPageNamesEn" [value]="name">{{ name }}</option>
-                      <option value="__custom__">Custom...</option>
-                    </select>
-                    <input
-                      *ngIf="pageNameEnSelect === '__custom__'"
-                      type="text"
-                      [(ngModel)]="pageForm.pageLabels!['en']"
-                      class="edition-label-input page-name-custom-input"
-                      placeholder="e.g. Sports"
-                    />
-                  </div>
+                  <input
+                    type="text"
+                    [(ngModel)]="pageForm.pageLabels!['en']"
+                    class="edition-label-input"
+                    placeholder="e.g. Sports"
+                  />
                 </label>
                 <label class="edition-label-field">
                   <span class="edition-label-lang">বাং</span>
-                  <div class="page-name-select-group">
-                    <select
-                      [ngModel]="pageNameBnSelect"
-                      (ngModelChange)="onPageNameBnSelectChange($event)"
-                      class="edition-label-input"
-                    >
-                      <option value="">-- নির্বাচন করুন --</option>
-                      <option *ngFor="let name of predefinedPageNamesBn" [value]="name">{{ name }}</option>
-                      <option value="__custom__">কাস্টম...</option>
-                    </select>
-                    <input
-                      *ngIf="pageNameBnSelect === '__custom__'"
-                      type="text"
-                      [(ngModel)]="pageForm.pageLabels!['bn']"
-                      class="edition-label-input page-name-custom-input"
-                      placeholder="যেমন: খেলাধুলা"
-                    />
-                  </div>
+                  <input
+                    type="text"
+                    [(ngModel)]="pageForm.pageLabels!['bn']"
+                    class="edition-label-input"
+                    placeholder="যেমন: খেলাধুলা"
+                  />
                 </label>
               </div>
             </div>

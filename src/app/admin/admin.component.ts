@@ -88,19 +88,23 @@ export class AdminComponent implements OnInit {
   logoInputMode: 'url' | 'file' = 'url';
   logoFile: File | null = null;
 
-  // Predefined page name options
-  readonly predefinedPageNamesEn = [
-    'Front Page', 'National', 'International', 'Politics', 'Business',
-    'Sports', 'Entertainment', 'Editorial', 'Opinion', 'Technology',
-    'Health', 'Education', 'Culture', 'Classifieds', 'Weather'
+  // Predefined page name options (paired BN / EN)
+  readonly predefinedPageNames: { bn: string; en: string }[] = [
+    { bn: 'প্রথম পাতা',    en: 'First Page'   },
+    { bn: 'খবর',           en: 'News'          },
+    { bn: 'সম্পাদকীয়',   en: 'Editorial'     },
+    { bn: 'আন্তর্জাতিক', en: 'International'  },
+    { bn: 'সাহিত্য',      en: 'Literature'    },
+    { bn: 'গ্রাম-গঞ্জ-শহর', en: 'National'   },
+    { bn: 'খেলার খবর',   en: 'Sports'         },
+    { bn: 'শেষের পাতা',   en: 'Last Page'     },
+    { bn: 'নীল সবুজের হাট', en: 'For Kids'   },
+    { bn: 'বিষেশ সংখ্যা', en: 'Supplement'   },
+    { bn: 'ঈদুল ফিতর',   en: 'Eid al-Fitr'   },
+    { bn: 'ঈদুল আজহা',   en: 'Eid al-Adha'   },
   ];
-  readonly predefinedPageNamesBn = [
-    'প্রথম পাতা', 'জাতীয়', 'আন্তর্জাতিক', 'রাজনীতি', 'ব্যবসা-বাণিজ্য',
-    'খেলাধুলা', 'বিনোদন', 'সম্পাদকীয়', 'মতামত', 'প্রযুক্তি',
-    'স্বাস্থ্য', 'শিক্ষা', 'সংস্কৃতি', 'বিজ্ঞাপন', 'আবহাওয়া'
-  ];
-  pageNameEnSelect: string = '';
-  pageNameBnSelect: string = '';
+  pageNameSelect: string = '';
+  pageFormErrors: { fullImage?: boolean; pageName?: boolean } = {};
 
   sectionForm: Partial<NewsSection> = {
     id: '',
@@ -399,29 +403,29 @@ export class AdminComponent implements OnInit {
     this.activeTab = 'sections';
   }
 
-  onPageNameEnSelectChange(value: string) {
-    this.pageNameEnSelect = value;
-    if (value !== '__custom__') {
-      this.pageForm.pageLabels!['en'] = value;
-    } else {
+  onPageNameSelectChange(value: string) {
+    this.pageNameSelect = value;
+    if (value === '' ) {
       this.pageForm.pageLabels!['en'] = '';
-    }
-  }
-
-  onPageNameBnSelectChange(value: string) {
-    this.pageNameBnSelect = value;
-    if (value !== '__custom__') {
-      this.pageForm.pageLabels!['bn'] = value;
-    } else {
       this.pageForm.pageLabels!['bn'] = '';
+    } else if (value === '__custom__') {
+      this.pageForm.pageLabels!['en'] = '';
+      this.pageForm.pageLabels!['bn'] = '';
+    } else {
+      const found = this.predefinedPageNames.find(p => p.bn === value);
+      if (found) {
+        this.pageForm.pageLabels!['en'] = found.en;
+        this.pageForm.pageLabels!['bn'] = found.bn;
+      }
     }
   }
 
   private initPageNameSelects() {
     const en = this.pageForm.pageLabels?.['en'] ?? '';
     const bn = this.pageForm.pageLabels?.['bn'] ?? '';
-    this.pageNameEnSelect = this.predefinedPageNamesEn.includes(en) ? en : (en ? '__custom__' : '');
-    this.pageNameBnSelect = this.predefinedPageNamesBn.includes(bn) ? bn : (bn ? '__custom__' : '');
+    if (!en && !bn) { this.pageNameSelect = ''; return; }
+    const found = this.predefinedPageNames.find(p => p.bn === bn && p.en === en);
+    this.pageNameSelect = found ? found.bn : '__custom__';
   }
 
   newPage() {
@@ -434,8 +438,7 @@ export class AdminComponent implements OnInit {
       sections: [],
       pageLabels: { en: '', bn: '' }
     };
-    this.pageNameEnSelect = '';
-    this.pageNameBnSelect = '';
+    this.pageNameSelect = '';
     this.fullImageInputMode = 'url';
     this.fullImageHiResInputMode = 'url';
     this.thumbnailInputMode = 'url';
@@ -457,6 +460,23 @@ export class AdminComponent implements OnInit {
   }
 
   savePage() {
+    this.pageFormErrors = {};
+    const enLabel = (this.pageForm.pageLabels?.['en'] || '').trim();
+    const bnLabel = (this.pageForm.pageLabels?.['bn'] || '').trim();
+    let hasErrors = false;
+
+    if (!this.pageForm.fullImage) {
+      this.pageFormErrors.fullImage = true;
+      this.toaster.error('Full Image is required. Please provide an image URL or upload a file.');
+      hasErrors = true;
+    }
+    if (!enLabel && !bnLabel) {
+      this.pageFormErrors.pageName = true;
+      this.toaster.error('Page Name is required. Please select or enter a page name.');
+      hasErrors = true;
+    }
+    if (hasErrors) return;
+
     if (this.pageForm.id && this.pageForm.fullImage) {
       const page = { ...this.pageForm } as NewspaperPage;
       // Strip empty pageLabels
@@ -512,8 +532,8 @@ export class AdminComponent implements OnInit {
   cancelPageEdit() {
     this.isEditingPage = false;
     this.pageForm = { id: 0, thumbnail: '', fullImage: '', fullImageHiRes: '', sections: [], pageLabels: { en: '', bn: '' } };
-    this.pageNameEnSelect = '';
-    this.pageNameBnSelect = '';
+    this.pageNameSelect = '';
+    this.pageFormErrors = {};
   }
 
   // Section Management
