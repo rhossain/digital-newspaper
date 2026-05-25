@@ -60,7 +60,7 @@ export class AdminComponent implements OnInit {
 
   // Global Settings
   settingsForm: GlobalSettings = {
-    logo: { url: '', alt: 'Digital Newspaper' },
+    logo: { url: '', alt: 'Digital Newspaper', link: '' },
     socialLinks: {
       facebook: '',
       twitter: '',
@@ -1333,7 +1333,7 @@ export class AdminComponent implements OnInit {
     const settings = this.dataService.getSettings();
     const addr = settings.address || {};
     this.settingsForm = {
-      logo: settings.logo || { url: '', alt: 'Digital Newspaper' },
+      logo: { url: '', alt: 'Digital Newspaper', link: '', ...(settings.logo || {}) },
       socialLinks: settings.socialLinks || {},
       defaultDateMode: settings.defaultDateMode || 'current',
       specificDate: settings.specificDate || '',
@@ -1358,7 +1358,8 @@ export class AdminComponent implements OnInit {
         }
       },
       language: settings.language || 'en',
-      showPagePagination: settings.showPagePagination !== false
+      showPagePagination: settings.showPagePagination !== false,
+      showBetaBadge: settings.showBetaBadge === true
     };
   }
 
@@ -1395,7 +1396,8 @@ export class AdminComponent implements OnInit {
         phoneLabels: cleanPhoneLabels
       },
       language: this.settingsForm.language || 'en',
-      showPagePagination: this.settingsForm.showPagePagination !== false
+      showPagePagination: this.settingsForm.showPagePagination !== false,
+      showBetaBadge: this.settingsForm.showBetaBadge === true
     };
     
     // Update settings in the data service

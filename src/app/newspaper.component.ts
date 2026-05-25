@@ -85,6 +85,11 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   /** Expose TranslationService to the template. */
   get ts(): TranslationService { return this.translationService; }
 
+  /** URL for the logo anchor. Uses the configured link, falling back to the app's base URL. */
+  get logoHref(): string {
+    return this.settings?.logo?.link?.trim() || document.baseURI;
+  }
+
   ngOnInit() {
     this.todayDate = this.dataService.getTodayDate();
     
@@ -658,8 +663,9 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   printContent(content: string, title: string): void {
     const win = window.open('', '_blank');
     if (!win) return;
-    win.document.write('<!DOCTYPE html><html><head><title></title><style>body{margin:20px;font-family:serif;font-size:16px;line-height:1.7;color:#000;}h1{font-size:22px;margin-bottom:16px;}@media print{body{margin:10mm;}}</style></head><body><h1></h1><article></article></body></html>');
+    win.document.write('<!DOCTYPE html><html><head><title></title><style>body{margin:0;background:white;font-family:serif;font-size:16px;line-height:1.7;color:#000;padding-top:100px;padding-bottom:70px;}.print-header{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid #ccc;background:white;font-family:sans-serif;}.print-header-left{display:flex;align-items:center;gap:12px;}.logo-img{height:40px;width:auto;object-fit:contain;}.logo-text{font-size:20px;font-weight:600;}.print-header-date{font-size:16px;color:#444;white-space:nowrap;}h1{font-size:22px;margin:16px 20px;}article{padding:0 20px 20px;}.print-footer{padding:16px 20px;border-top:1px solid #ccc;text-align:left;font-size:15px;color:#555;background:white;font-family:sans-serif;}.footer-editor{font-weight:bold;white-space:nowrap;display:block;margin-bottom:4px;}.footer-detail{display:block;line-height:1.5;}@media print{body{margin:0;padding-top:100px;padding-bottom:120px;}.print-header{position:fixed;top:0;left:0;right:0;z-index:1000;}.print-footer{position:fixed;bottom:0;left:0;right:0;z-index:1000;}}</style></head><body><div class="print-header"><div class="print-header-left"></div><span class="print-header-date"></span></div><h1></h1><article></article><div class="print-footer"></div></body></html>');
     win.document.close();
+    this.populatePrintHeaderFooter(win);
     const titleEl = win.document.querySelector('title');
     if (titleEl) titleEl.textContent = title;
     const h1El = win.document.querySelector('h1');
@@ -684,11 +690,12 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   printImage(imageUrl: string, title: string): void {
     const win = window.open('', '_blank');
     if (!win) return;
-    win.document.write('<!DOCTYPE html><html><head><title></title><style>body{margin:0;display:flex;justify-content:center;align-items:flex-start;background:white;}img{max-width:100%;height:auto;display:block;}@media print{body{margin:0;}}</style></head><body><img/></body></html>');
+    win.document.write('<!DOCTYPE html><html><head><title></title><style>body{margin:0;background:white;font-family:sans-serif;padding-top:100px;padding-bottom:70px;}.print-header{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid #ccc;background:white;}.print-header-left{display:flex;align-items:center;gap:12px;}.logo-img{height:40px;width:auto;object-fit:contain;}.logo-text{font-size:20px;font-weight:600;}.print-header-date{font-size:16px;color:#444;white-space:nowrap;}.img-container{display:flex;justify-content:center;align-items:flex-start;padding:20px;}img{max-width:100%;height:auto;display:block;}.print-footer{padding:16px 20px;border-top:1px solid #ccc;text-align:left;font-size:15px;color:#555;background:white;}.footer-editor{font-weight:bold;white-space:nowrap;display:block;margin-bottom:4px;}.footer-detail{display:block;line-height:1.5;}@media print{body{margin:0;padding-top:100px;padding-bottom:120px;}.print-header{position:fixed;top:0;left:0;right:0;z-index:1000;}.print-footer{position:fixed;bottom:0;left:0;right:0;z-index:1000;}}</style></head><body><div class="print-header"><div class="print-header-left"></div><span class="print-header-date"></span></div><div class="img-container"><img/></div><div class="print-footer"></div></body></html>');
     win.document.close();
+    this.populatePrintHeaderFooter(win);
     const titleEl = win.document.querySelector('title');
     if (titleEl) titleEl.textContent = title;
-    const imgEl = win.document.querySelector('img') as HTMLImageElement | null;
+    const imgEl = win.document.querySelector('.img-container img') as HTMLImageElement | null;
     if (imgEl) {
       imgEl.alt = title;
       imgEl.src = imageUrl;
@@ -711,24 +718,10 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     if (!win) return;
 
     // Write a minimal skeleton — no user content injected as HTML
-    win.document.write('<!DOCTYPE html><html><head><title></title><style>body{margin:0;background:white;font-family:sans-serif;}.print-header{display:flex;align-items:center;gap:12px;padding:16px 20px;border-bottom:1px solid #ccc;}.logo-img{height:40px;width:auto;object-fit:contain;}.logo-text{font-size:18px;font-weight:600;}.images-container{padding:20px;display:flex;flex-direction:column;gap:30px;align-items:center;}.print-image{width:100%;max-width:900px;height:auto;display:block;}@media print{body{margin:0;}}</style></head><body><div class="print-header"></div><div class="images-container"></div></body></html>');
+    win.document.write('<!DOCTYPE html><html><head><title></title><style>body{margin:0;background:white;font-family:sans-serif;padding-top:100px;padding-bottom:70px;}.print-header{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid #ccc;background:white;}.print-header-left{display:flex;align-items:center;gap:12px;}.logo-img{height:40px;width:auto;object-fit:contain;}.logo-text{font-size:20px;font-weight:600;}.print-header-date{font-size:16px;color:#444;white-space:nowrap;}.images-container{padding:20px;display:flex;flex-direction:column;gap:30px;align-items:center;}.print-image{width:100%;max-width:900px;height:auto;display:block;}.print-footer{padding:16px 20px;border-top:1px solid #ccc;text-align:left;font-size:15px;color:#555;background:white;}.footer-editor{font-weight:bold;white-space:nowrap;display:block;margin-bottom:4px;}.footer-detail{display:block;line-height:1.5;}@media print{body{margin:0;padding-top:100px;padding-bottom:120px;}.print-header{position:fixed;top:0;left:0;right:0;z-index:1000;}.print-footer{position:fixed;bottom:0;left:0;right:0;z-index:1000;}}</style></head><body><div class="print-header"><div class="print-header-left"></div><span class="print-header-date"></span></div><div class="images-container"></div><div class="print-footer"></div></body></html>');
     win.document.close();
 
-    // Build header via DOM APIs (safe)
-    const header = win.document.querySelector('.print-header')!;
-    const logo = this.settings?.logo;
-    if (logo?.url) {
-      const logoImg = win.document.createElement('img');
-      logoImg.className = 'logo-img';
-      logoImg.alt = logo.alt || 'Logo';
-      logoImg.src = logo.url;
-      header.appendChild(logoImg);
-    } else {
-      const logoText = win.document.createElement('span');
-      logoText.className = 'logo-text';
-      logoText.textContent = logo?.alt || 'Digital Newspaper';
-      header.appendChild(logoText);
-    }
+    this.populatePrintHeaderFooter(win);
 
     // Add all images; print once all are loaded
     const container = win.document.querySelector('.images-container')!;
@@ -746,6 +739,34 @@ export class NewspaperComponent implements OnInit, OnDestroy {
       el.src = img.src;
       container.appendChild(el);
     }
+  }
+
+  private populatePrintHeaderFooter(win: Window): void {
+    const headerLeft = win.document.querySelector('.print-header-left')!;
+    const logo = this.settings?.logo;
+    if (logo?.url) {
+      const logoImg = win.document.createElement('img');
+      logoImg.className = 'logo-img';
+      logoImg.alt = logo.alt || 'Logo';
+      logoImg.src = logo.url;
+      headerLeft.appendChild(logoImg);
+    } else {
+      const logoText = win.document.createElement('span');
+      logoText.className = 'logo-text';
+      logoText.textContent = logo?.alt || 'Digital Newspaper';
+      headerLeft.appendChild(logoText);
+    }
+    const dateEl = win.document.querySelector('.print-header-date')!;
+    dateEl.textContent = this.displayDate;
+    const footerEl = win.document.querySelector('.print-footer')!;
+    const editorEl = win.document.createElement('strong');
+    editorEl.className = 'footer-editor';
+    editorEl.textContent = 'সম্পাদকঃ আযম মীর শাহীদুল আহসান';
+    footerEl.appendChild(editorEl);
+    const detailEl = win.document.createElement('span');
+    detailEl.className = 'footer-detail';
+    detailEl.textContent = 'বাংলাদেশ পাবলিকেশন লিঃ- এর পক্ষে আবুল আসাদ কর্তৃক আল ফালাহ প্রিন্টিং প্রেস, ৪২৩ বড় মগবাজার, ঢাকা-১২১৭ থেকে মুদ্রিত ও প্রকাশিত। পিএবিএক্সঃ 02222226448, 02222226362, 02222226862, 0248318128, 0248321073, 0258310013, 01775489135 (বিজ্ঞাপন)। ই-মেইল : news@dailysangram.com, ad@dailysangram.com (বিজ্ঞাপন)';
+    footerEl.appendChild(detailEl);
   }
 
   async downloadImage(imageUrl: string, title: string): Promise<void> {

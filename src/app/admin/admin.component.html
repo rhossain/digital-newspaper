@@ -686,8 +686,20 @@
             <label>Logo Alt Text</label>
             <input type="text" [(ngModel)]="settingsForm.logo!.alt" class="form-control" placeholder="Digital Newspaper" />
           </div>
+          <div class="form-group">
+            <label>Logo Link URL</label>
+            <input type="url" [(ngModel)]="settingsForm.logo!.link" class="form-control" placeholder="https://example.com (leave empty to use app base URL)" />
+            <small class="hint-text">When clicked, the logo will navigate to this URL. Leave empty to use the current app URL.</small>
+          </div>
           <div class="logo-preview" *ngIf="settingsForm.logo?.url">
             <img [src]="settingsForm.logo!.url" [alt]="settingsForm.logo!.alt || 'Logo'" />
+          </div>
+          <div class="form-group" style="margin-top: 12px;">
+            <label class="toggle-label">
+              <input type="checkbox" [(ngModel)]="settingsForm.showBetaBadge" />
+              <span>Show "beta" badge on logo</span>
+            </label>
+            <p class="hint-text">When enabled, a small "beta" label appears at the bottom-right corner of the logo in the header.</p>
           </div>
         </div>
 

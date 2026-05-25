@@ -44,6 +44,7 @@ export interface GlobalSettings {
   logo?: {
     url: string;
     alt?: string;
+    link?: string;
   };
   socialLinks?: {
     facebook?: string;
@@ -73,6 +74,7 @@ export interface GlobalSettings {
   };
   language?: 'en' | 'bn';
   showPagePagination?: boolean;
+  showBetaBadge?: boolean;
 }
 
 export interface NewspaperData {
