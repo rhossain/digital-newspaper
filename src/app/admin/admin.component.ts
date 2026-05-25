@@ -83,7 +83,8 @@ export class AdminComponent implements OnInit {
       email: '',
       website: ''
     },
-    language: 'en'
+    language: 'en',
+    headScripts: ''
   };
   logoInputMode: 'url' | 'file' = 'url';
   logoFile: File | null = null;
@@ -1359,7 +1360,8 @@ export class AdminComponent implements OnInit {
       },
       language: settings.language || 'en',
       showPagePagination: settings.showPagePagination !== false,
-      showBetaBadge: settings.showBetaBadge === true
+      showBetaBadge: settings.showBetaBadge === true,
+      headScripts: settings.headScripts ?? ''
     };
   }
 
@@ -1397,7 +1399,8 @@ export class AdminComponent implements OnInit {
       },
       language: this.settingsForm.language || 'en',
       showPagePagination: this.settingsForm.showPagePagination !== false,
-      showBetaBadge: this.settingsForm.showBetaBadge === true
+      showBetaBadge: this.settingsForm.showBetaBadge === true,
+      headScripts: this.settingsForm.headScripts || ''
     };
     
     // Update settings in the data service

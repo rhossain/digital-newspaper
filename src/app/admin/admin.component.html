@@ -816,6 +816,32 @@
             <input type="url" [(ngModel)]="settingsForm.address!.website" class="form-control" placeholder="https://yournewspaper.com" />
           </div>
         </div>
+
+        <!-- Analytics / Head Scripts -->
+        <div class="settings-section">
+          <h3>Analytics &amp; Head Scripts</h3>
+          <div class="form-group">
+            <label>Custom &lt;head&gt; Scripts</label>
+            <textarea
+              [(ngModel)]="settingsForm.headScripts"
+              class="form-control"
+              rows="8"
+              style="font-family: monospace; font-size: 12px; resize: vertical;"
+              placeholder="<!-- Paste Google Analytics, Facebook Pixel, or any other <script> tags here -->
+<!-- Example: Google Analytics -->
+<!-- <script async src=&quot;https://www.googletagmanager.com/gtag/js?id=G-XXXXXXXXXX&quot;></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-XXXXXXXXXX');
+</script> -->"></textarea>
+            <p class="hint-text">
+              Scripts entered here are injected into <code>&lt;head&gt;</code> on every page load.
+              Leave empty to disable dynamic script injection (the static tag in index.html will still run).
+            </p>
+          </div>
+        </div>
       </div>
     </div>
   </div>

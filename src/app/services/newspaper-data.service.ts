@@ -75,6 +75,8 @@ export interface GlobalSettings {
   language?: 'en' | 'bn';
   showPagePagination?: boolean;
   showBetaBadge?: boolean;
+  /** Raw HTML string of <script> / <noscript> tags to inject into <head> (e.g. Google Analytics). */
+  headScripts?: string;
 }
 
 export interface NewspaperData {
