@@ -39,5 +39,22 @@
         <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
       </svg>
     </button>
+    <span class="action-divider" *ngIf="showPrint || showDownload"></span>
+    <button *ngIf="showPrint" class="action-btn" (click)="printClicked.emit()" [title]="ts.t('viewer.print')">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polyline points="6 9 6 2 18 2 18 9"></polyline>
+        <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
+        <rect x="6" y="14" width="12" height="8"></rect>
+      </svg>
+      {{ ts.t('viewer.print') }}
+    </button>
+    <button *ngIf="showDownload" class="action-btn" (click)="downloadClicked.emit()" [title]="ts.t('viewer.download')">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+        <polyline points="7 10 12 15 17 10"></polyline>
+        <line x1="12" y1="15" x2="12" y2="3"></line>
+      </svg>
+      {{ ts.t('viewer.download') }}
+    </button>
   </div>
 </div>

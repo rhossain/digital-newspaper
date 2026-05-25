@@ -1,4 +1,4 @@
-import { Component, Input } from '@angular/core';
+import { Component, Input, Output, EventEmitter } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Meta, Title } from '@angular/platform-browser';
 import { ToasterService } from '../../services/toaster.service';
@@ -20,10 +20,14 @@ export class ShareButtonsComponent {
   @Input() imageUrl?: string;
   /** Site name shown in meta tags and as Twitter creator/site. */
   @Input() siteName?: string;
+  @Input() showPrint = false;
+  @Input() showDownload = false;
+  @Output() printClicked = new EventEmitter<void>();
+  @Output() downloadClicked = new EventEmitter<void>();
 
   constructor(
     private toaster: ToasterService,
-    private ts: TranslationService,
+    protected ts: TranslationService,
     private meta: Meta,
     private titleService: Title
   ) {}
