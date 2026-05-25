@@ -2,6 +2,7 @@ import { Component, OnInit, OnDestroy, ChangeDetectorRef, ElementRef, ViewChild 
 import { CommonModule, Location } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router, ActivatedRoute } from '@angular/router';
+import { Meta, Title } from '@angular/platform-browser';
 import { NewspaperDataService, NewsSection, NewspaperPage, NewspaperEdition, GlobalSettings } from './services/newspaper-data.service';
 import { ToasterService } from './services/toaster.service';
 import { ShareButtonsComponent } from './shared/share-buttons/share-buttons.component';
@@ -76,7 +77,9 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     private router: Router,
     private route: ActivatedRoute,
     private translationService: TranslationService,
-    private location: Location
+    private location: Location,
+    private meta: Meta,
+    private titleService: Title
   ) {}
 
   /** Expose TranslationService to the template. */
@@ -378,6 +381,19 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     return this.editionsForDate.find(e => (e.edition || 1) === this.selectedEditionNumber) || this.editionsForDate[0] || null;
   }
 
+  /**
+   * Returns the best absolute HTTP(S) image URL for the selected section —
+   * safe to use as an OG image. Never returns a data: URL (which crawlers
+   * and social platforms cannot fetch).
+   */
+  get shareImageUrl(): string {
+    const sectionImg = this.selectedSection?.imageUrl?.trim() ?? '';
+    if (sectionImg) return this.resolveImageUrl(sectionImg);
+    const pageImg = this.currentPage?.fullImage?.trim() ?? '';
+    if (pageImg) return this.resolveImageUrl(pageImg);
+    return '';
+  }
+
   /** Returns the display label for an edition in the current UI language. */
   getEditionLabel(ed: NewspaperEdition): string {
     const label = this.dataService.getEditionDisplayLabel(ed, this.translationService.language);
@@ -519,6 +535,8 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     
     // Update URL with section
     this.updateUrl();
+    // Update social sharing meta tags
+    this.updateMetaTags(section);
   }
 
   onSectionImageLoad() {
@@ -545,11 +563,36 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     this.cdr.detectChanges();
   }
 
+  onLogoError(event: Event): void {
+    (event.target as HTMLImageElement).style.display = 'none';
+  }
+
+  onLinkedSectionImageError(event: Event): void {
+    (event.target as HTMLImageElement).style.display = 'none';
+  }
+
+  onModalImageError(event: Event): void {
+    (event.target as HTMLImageElement).style.display = 'none';
+  }
+
   resolveImageUrl(url: string): string {
     // Guard: PHP may serialize empty fields as [] (truthy array) instead of "".
     if (!url || typeof url !== 'string') return '';
     if (url.startsWith('data:')) return url;
-    if (url.startsWith('http://') || url.startsWith('https://')) return url;
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      // Normalize WordPress uploads absolute URLs to the current WP origin.
+      // This fixes images after a domain migration: source_url saved with the
+      // old domain is rewritten to the current WP_BASE_URL host so the browser
+      // can resolve them without touching the database.
+      if (url.includes('/wp-content/uploads/')) {
+        try {
+          const wpOrigin = new URL(this.dataService.getApiBaseUrl()).origin;
+          const pathMatch = url.match(/^https?:\/\/[^/]+(\/.*)$/);
+          if (pathMatch) return wpOrigin + pathMatch[1];
+        } catch { /* malformed URL — fall through and return as-is */ }
+      }
+      return url;
+    }
     // Relative URL — prepend the WordPress base URL so the browser resolves it
     // against the WP host rather than the Angular dev server.
     const base = this.dataService.getApiBaseUrl();
@@ -567,6 +610,8 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     
     // Update URL to remove section
     this.updateUrl();
+    // Reset social sharing meta tags to site defaults
+    this.updateMetaTags(null);
   }
 
   openContentModal() {
@@ -952,6 +997,69 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     }
   }
 
+  /** Update Open Graph and Twitter Card meta tags for the selected section.
+   *  Pass null to reset to site-level defaults. */
+  private updateMetaTags(section: NewsSection | null): void {
+    const siteName = this.settings?.logo?.alt || 'ইপেপার - দৈনিক সংগ্রাম';
+    const pageUrl = window.location.href;
+
+    if (section) {
+      // Title
+      const title = `${section.title} | ${siteName}`;
+      this.titleService.setTitle(title);
+
+      // Description: strip HTML tags, collapse whitespace, truncate to 155 chars
+      const rawContent = section.content || '';
+      const plainText = rawContent.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+      const description = plainText.length > 155 ? plainText.slice(0, 152) + '...' : (plainText || siteName);
+
+      // Image: prefer section's own imageUrl, fall back to full page image
+      const imageUrl = this.resolveImageUrl(
+        (section.imageUrl && section.imageUrl.trim()) ||
+        (this.currentPage?.fullImage?.trim() ?? '')
+      );
+
+      // Open Graph
+      this.meta.updateTag({ property: 'og:site_name', content: siteName });
+      this.meta.updateTag({ property: 'og:type',      content: 'article' });
+      this.meta.updateTag({ property: 'og:title',     content: section.title });
+      this.meta.updateTag({ property: 'og:description', content: description });
+      this.meta.updateTag({ property: 'og:url',       content: pageUrl });
+      this.meta.updateTag({ property: 'og:image',        content: imageUrl });
+      this.meta.updateTag({ property: 'og:image:secure_url', content: imageUrl });
+      this.meta.updateTag({ property: 'og:image:width',  content: '' });
+      this.meta.updateTag({ property: 'og:image:height', content: '' });
+
+      // Twitter Card
+      this.meta.updateTag({ name: 'twitter:card',        content: 'summary_large_image' });
+      this.meta.updateTag({ name: 'twitter:site',        content: siteName });
+      this.meta.updateTag({ name: 'twitter:title',       content: section.title });
+      this.meta.updateTag({ name: 'twitter:description', content: description });
+      this.meta.updateTag({ name: 'twitter:creator',     content: siteName });
+      this.meta.updateTag({ name: 'twitter:image',       content: imageUrl });
+    } else {
+      // Reset to site-level defaults
+      this.titleService.setTitle(siteName);
+
+      this.meta.updateTag({ property: 'og:site_name', content: siteName });
+      this.meta.updateTag({ property: 'og:type',      content: 'article' });
+      this.meta.updateTag({ property: 'og:title',     content: siteName });
+      this.meta.updateTag({ property: 'og:description', content: siteName });
+      this.meta.updateTag({ property: 'og:url',       content: pageUrl });
+      this.meta.updateTag({ property: 'og:image',        content: '' });
+      this.meta.updateTag({ property: 'og:image:secure_url', content: '' });
+      this.meta.updateTag({ property: 'og:image:width',  content: '' });
+      this.meta.updateTag({ property: 'og:image:height', content: '' });
+
+      this.meta.updateTag({ name: 'twitter:card',        content: 'summary_large_image' });
+      this.meta.updateTag({ name: 'twitter:site',        content: siteName });
+      this.meta.updateTag({ name: 'twitter:title',       content: siteName });
+      this.meta.updateTag({ name: 'twitter:description', content: siteName });
+      this.meta.updateTag({ name: 'twitter:creator',     content: siteName });
+      this.meta.updateTag({ name: 'twitter:image',       content: '' });
+    }
+  }
+
   private createSectionSlug(title: string, sectionId: string): string {
     // Preserve Unicode characters for non-ASCII languages like Bengali
     let slug = title
@@ -961,12 +1069,12 @@ export class NewspaperComponent implements OnInit, OnDestroy {
       .replace(/[^\w\u0980-\u09FF-]/g, '') // Keep alphanumeric, Bengali Unicode, and hyphens
       .replace(/-+/g, '-')            // Replace multiple hyphens with single hyphen
       .replace(/^-|-$/g, '');         // Remove leading/trailing hyphens
-    
+
     // If slug is empty, use section ID
     if (!slug || slug.length === 0) {
       slug = sectionId;
     }
-    
+
     return slug;
   }
 }
