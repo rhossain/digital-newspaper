@@ -84,11 +84,84 @@ export interface NewspaperData {
   editions: NewspaperEdition[];
 }
 
+// ─── Export / Import types ───────────────────────────────────────────────────
+
+export const SCHEMA_VERSION = 2;
+
+export interface ExportMeta {
+  exportedAt: string;
+  schemaVersion: number;
+  sourceUrl: string;
+  exportScope: 'full' | 'current-date' | 'date-range';
+  exportType: 'full' | 'settings-only' | 'editions-only';
+  editionCount: number;
+  dateRange?: { from: string; to: string };
+}
+
+export interface ExportPayload {
+  meta: ExportMeta;
+  settings?: GlobalSettings;
+  editions?: NewspaperEdition[];
+}
+
+export interface ExportOptions {
+  exportType: ExportMeta['exportType'];
+  exportScope: ExportMeta['exportScope'];
+  dateFrom?: string;
+  dateTo?: string;
+  currentDate?: string;
+}
+
+export interface BackupHistoryEntry {
+  id: string;
+  exportedAt: string;
+  filename: string;
+  exportScope: ExportMeta['exportScope'];
+  exportType: ExportMeta['exportType'];
+  editionCount: number;
+  sizeKb: number;
+  sourceUrl: string;
+}
+
+export interface ImportValidationResult {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+}
+
+export interface ImportPreview {
+  sourceUrl: string;
+  currentUrl: string;
+  urlMismatch: boolean;
+  exportedAt: string;
+  schemaVersion: number;
+  exportType: ExportMeta['exportType'] | 'unknown';
+  exportScope: ExportMeta['exportScope'] | 'unknown';
+  incomingEditionCount: number;
+  currentEditionCount: number;
+  incomingDateRange: { from: string; to: string } | null;
+  newEditions: string[];
+  conflictingEditions: string[];
+  hasSettings: boolean;
+  hasEditions: boolean;
+}
+
+export interface ImportOptions {
+  importSettings: boolean;
+  importEditions: boolean;
+  mergeMode: 'overwrite-all' | 'add-new' | 'add-and-replace';
+  rewriteUrls: boolean;
+  oldBaseUrl?: string;
+  newBaseUrl?: string;
+}
+
 @Injectable({
   providedIn: 'root'
 })
 export class NewspaperDataService {
   private static readonly SETTINGS_CACHE_KEY = 'dn_global_settings';
+  private static readonly BACKUP_HISTORY_KEY = 'dn_backup_history';
+  private static readonly MAX_HISTORY_ENTRIES = 20;
 
   private dataSubject!: BehaviorSubject<NewspaperData>;
   private currentDateSubject!: BehaviorSubject<string>;
@@ -565,16 +638,294 @@ export class NewspaperDataService {
     return null;
   }
 
-  downloadJSON(): void {
-    const data = this.getData();
-    const date = this.getCurrentDate();
-    const json = JSON.stringify(data, null, 2);
+  private triggerFileDownload(json: string, filename: string): void {
     const blob = new Blob([json], { type: 'application/json' });
     const url = window.URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `newspaper-data-${date}.json`;
+    link.download = filename;
     link.click();
     window.URL.revokeObjectURL(url);
+  }
+
+  buildExportPayload(options: ExportOptions): { payload: ExportPayload; filename: string } {
+    const allData = this.getData();
+    let filteredEditions: NewspaperEdition[] = allData.editions || [];
+
+    if (options.exportType !== 'settings-only') {
+      if (options.exportScope === 'current-date' && options.currentDate) {
+        filteredEditions = filteredEditions.filter(e => e.date === options.currentDate);
+      } else if (options.exportScope === 'date-range' && options.dateFrom && options.dateTo) {
+        filteredEditions = filteredEditions.filter(
+          e => e.date >= options.dateFrom! && e.date <= options.dateTo!
+        );
+      }
+    } else {
+      filteredEditions = [];
+    }
+
+    const sortedDates = filteredEditions.map(e => e.date).sort();
+    const dateRange = sortedDates.length > 0
+      ? { from: sortedDates[0], to: sortedDates[sortedDates.length - 1] }
+      : undefined;
+
+    const meta: ExportMeta = {
+      exportedAt: new Date().toISOString(),
+      schemaVersion: SCHEMA_VERSION,
+      sourceUrl: this.wpBaseUrl,
+      exportScope: options.exportType === 'settings-only' ? 'full' : options.exportScope,
+      exportType: options.exportType,
+      editionCount: filteredEditions.length,
+      dateRange,
+    };
+
+    const payload: ExportPayload = { meta };
+    if (options.exportType !== 'editions-only') {
+      payload.settings = allData.settings;
+    }
+    if (options.exportType !== 'settings-only') {
+      payload.editions = filteredEditions;
+    }
+
+    const today = this.getTodayDate();
+    let suffix = '';
+    if (options.exportType === 'settings-only') suffix = '-settings';
+    else if (options.exportType === 'editions-only') suffix = '-editions';
+    if (options.exportScope === 'current-date') suffix += `-${options.currentDate ?? today}`;
+    else if (options.exportScope === 'date-range') suffix += `-${options.dateFrom}-to-${options.dateTo}`;
+
+    const filename = `newspaper-backup${suffix}-${today}.json`;
+    return { payload, filename };
+  }
+
+  downloadExport(options: ExportOptions): { filename: string; sizeKb: number } {
+    const { payload, filename } = this.buildExportPayload(options);
+    const json = JSON.stringify(payload, null, 2);
+    this.triggerFileDownload(json, filename);
+    const sizeKb = Math.round((json.length / 1024) * 10) / 10;
+    this.addBackupHistoryEntry({
+      id: Date.now().toString(),
+      exportedAt: payload.meta.exportedAt,
+      filename,
+      exportScope: payload.meta.exportScope,
+      exportType: payload.meta.exportType,
+      editionCount: payload.meta.editionCount,
+      sizeKb,
+      sourceUrl: payload.meta.sourceUrl,
+    });
+    return { filename, sizeKb };
+  }
+
+  /** Backward-compatible alias – triggers a full export with metadata envelope. */
+  downloadJSON(): void {
+    this.downloadExport({ exportType: 'full', exportScope: 'full' });
+  }
+
+  // ─── Backup History ───────────────────────────────────────────────────────
+
+  getBackupHistory(): BackupHistoryEntry[] {
+    try {
+      const raw = localStorage.getItem(NewspaperDataService.BACKUP_HISTORY_KEY);
+      if (raw) return JSON.parse(raw) as BackupHistoryEntry[];
+    } catch { /* ignore */ }
+    return [];
+  }
+
+  private addBackupHistoryEntry(entry: BackupHistoryEntry): void {
+    try {
+      const history = this.getBackupHistory();
+      history.unshift(entry);
+      if (history.length > NewspaperDataService.MAX_HISTORY_ENTRIES) {
+        history.splice(NewspaperDataService.MAX_HISTORY_ENTRIES);
+      }
+      localStorage.setItem(NewspaperDataService.BACKUP_HISTORY_KEY, JSON.stringify(history));
+    } catch { /* quota exceeded – ignore */ }
+  }
+
+  clearBackupHistory(): void {
+    localStorage.removeItem(NewspaperDataService.BACKUP_HISTORY_KEY);
+  }
+
+  // ─── Import Validation & Preview ─────────────────────────────────────────
+
+  validateImportPayload(parsed: any): ImportValidationResult {
+    const errors: string[] = [];
+    const warnings: string[] = [];
+
+    if (typeof parsed !== 'object' || parsed === null) {
+      errors.push('File is not a valid JSON object.');
+      return { valid: false, errors, warnings };
+    }
+
+    const hasEditions = Array.isArray(parsed.editions);
+    const hasSettings = typeof parsed.settings === 'object' && parsed.settings !== null;
+
+    if (!hasEditions && !hasSettings) {
+      errors.push('File does not contain "editions" array or "settings" object — not a valid backup.');
+      return { valid: false, errors, warnings };
+    }
+
+    if (!parsed.meta) {
+      warnings.push('This backup has no metadata (created with an older version). Limited validation available.');
+    } else if (parsed.meta.schemaVersion > SCHEMA_VERSION) {
+      warnings.push(
+        `Backup schema version (${parsed.meta.schemaVersion}) is newer than this app supports (${SCHEMA_VERSION}). Some fields may be ignored.`
+      );
+    }
+
+    if (hasEditions) {
+      const datePattern = /^\d{4}-\d{2}-\d{2}$/;
+      (parsed.editions as any[]).forEach((edition, i) => {
+        if (!edition.date || !datePattern.test(edition.date)) {
+          errors.push(`Edition at index ${i} has an invalid date: "${edition.date}" (expected YYYY-MM-DD).`);
+        }
+        if (!Array.isArray(edition.pages)) {
+          errors.push(`Edition "${edition.date}" (index ${i}) is missing a "pages" array.`);
+        } else {
+          (edition.pages as any[]).forEach((page, pi) => {
+            if (page.id === undefined || page.id === null) {
+              errors.push(`Page at index ${pi} in edition "${edition.date}" is missing an "id".`);
+            }
+            if (!page.fullImage && !page.thumbnail) {
+              warnings.push(`Page ${page.id ?? pi} in edition "${edition.date}" has no image URL.`);
+            }
+            if (!Array.isArray(page.sections)) {
+              errors.push(`Page ${page.id ?? pi} in edition "${edition.date}" is missing a "sections" array.`);
+            }
+          });
+        }
+      });
+    }
+
+    return { valid: errors.length === 0, errors, warnings };
+  }
+
+  buildImportPreview(parsed: any): ImportPreview {
+    const currentData = this.getData();
+    const currentEditions = currentData.editions || [];
+    const currentDatesSet = new Set(currentEditions.map(e => e.date));
+
+    const hasEditions = Array.isArray(parsed.editions);
+    const hasSettings = typeof parsed.settings === 'object' && parsed.settings !== null;
+    const incomingEditions: NewspaperEdition[] = hasEditions ? parsed.editions : [];
+    const incomingDates = incomingEditions.map(e => e.date);
+
+    const newEditions = [...new Set(incomingDates.filter(d => !currentDatesSet.has(d)))];
+    const conflictingEditions = [...new Set(incomingDates.filter(d => currentDatesSet.has(d)))];
+    const sortedIncoming = [...incomingDates].sort();
+    const incomingDateRange = sortedIncoming.length > 0
+      ? { from: sortedIncoming[0], to: sortedIncoming[sortedIncoming.length - 1] }
+      : null;
+
+    const meta: ExportMeta | null = parsed.meta ?? null;
+    const sourceUrl = meta?.sourceUrl ?? '';
+    const currentUrl = this.wpBaseUrl;
+    const inferredType: ExportMeta['exportType'] =
+      hasEditions && hasSettings ? 'full' : hasEditions ? 'editions-only' : 'settings-only';
+
+    return {
+      sourceUrl: sourceUrl || 'Unknown (older backup format)',
+      currentUrl,
+      urlMismatch: !!sourceUrl && sourceUrl !== currentUrl,
+      exportedAt: meta?.exportedAt ?? 'Unknown',
+      schemaVersion: meta?.schemaVersion ?? 1,
+      exportType: meta?.exportType ?? inferredType,
+      exportScope: meta?.exportScope ?? 'unknown',
+      incomingEditionCount: incomingEditions.length,
+      currentEditionCount: currentEditions.length,
+      incomingDateRange,
+      newEditions,
+      conflictingEditions,
+      hasSettings,
+      hasEditions,
+    };
+  }
+
+  // ─── Image URL Rewriting ─────────────────────────────────────────────────
+
+  rewriteImageUrls(data: NewspaperData, oldBase: string, newBase: string): NewspaperData {
+    const rewrite = (url: string | undefined): string | undefined => {
+      if (!url || typeof url !== 'string') return url;
+      return url.startsWith(oldBase) ? newBase + url.slice(oldBase.length) : url;
+    };
+
+    return {
+      ...data,
+      settings: data.settings ? {
+        ...data.settings,
+        logo: data.settings.logo ? {
+          ...data.settings.logo,
+          url: rewrite(data.settings.logo.url) ?? '',
+        } : data.settings.logo,
+      } : data.settings,
+      editions: (data.editions || []).map(edition => ({
+        ...edition,
+        pages: edition.pages.map(page => ({
+          ...page,
+          thumbnail: rewrite(page.thumbnail) ?? '',
+          fullImage: rewrite(page.fullImage) ?? '',
+          fullImageHiRes: rewrite(page.fullImageHiRes),
+          sections: page.sections.map(section => ({
+            ...section,
+            imageUrl: rewrite(section.imageUrl),
+          })),
+        })),
+      })),
+    };
+  }
+
+  // ─── Apply Import ─────────────────────────────────────────────────────────
+
+  applyImport(parsed: any, options: ImportOptions): NewspaperData {
+    const currentData = this.getData();
+
+    let importedEditions: NewspaperEdition[] = Array.isArray(parsed.editions) ? [...parsed.editions] : [];
+    let importedSettings: GlobalSettings | undefined = parsed.settings ?? undefined;
+
+    // Normalize imported settings (backward compat)
+    if (importedSettings) {
+      if (!importedSettings.logo) {
+        importedSettings = { ...importedSettings, logo: { url: '', alt: 'Digital Newspaper' } };
+      }
+      if (!importedSettings.socialLinks || Array.isArray(importedSettings.socialLinks)) {
+        importedSettings = { ...importedSettings, socialLinks: {} };
+      }
+    }
+
+    // URL rewriting
+    if (options.rewriteUrls && options.oldBaseUrl && options.newBaseUrl && options.oldBaseUrl !== options.newBaseUrl) {
+      const temp: NewspaperData = { settings: importedSettings, editions: importedEditions };
+      const rewritten = this.rewriteImageUrls(temp, options.oldBaseUrl, options.newBaseUrl);
+      importedEditions = rewritten.editions;
+      importedSettings = rewritten.settings;
+    }
+
+    const resultSettings = options.importSettings && importedSettings
+      ? importedSettings
+      : currentData.settings;
+
+    let resultEditions = currentData.editions;
+    if (options.importEditions && importedEditions.length > 0) {
+      if (options.mergeMode === 'overwrite-all') {
+        resultEditions = importedEditions;
+      } else if (options.mergeMode === 'add-new') {
+        const currentKeys = new Set(currentData.editions.map(e => `${e.date}:${e.edition ?? 1}`));
+        const newOnly = importedEditions.filter(e => !currentKeys.has(`${e.date}:${e.edition ?? 1}`));
+        resultEditions = [...currentData.editions, ...newOnly].sort((a, b) => {
+          const d = b.date.localeCompare(a.date);
+          return d !== 0 ? d : (a.edition ?? 1) - (b.edition ?? 1);
+        });
+      } else {
+        // add-and-replace
+        const map = new Map(currentData.editions.map(e => [`${e.date}:${e.edition ?? 1}`, e]));
+        importedEditions.forEach(e => map.set(`${e.date}:${e.edition ?? 1}`, e));
+        resultEditions = Array.from(map.values()).sort((a, b) => {
+          const d = b.date.localeCompare(a.date);
+          return d !== 0 ? d : (a.edition ?? 1) - (b.edition ?? 1);
+        });
+      }
+    }
+
+    return { settings: resultSettings, editions: resultEditions };
   }
 }

@@ -18,7 +18,7 @@
           </svg>
           Save All
         </button>
-        <button class="btn btn-primary" *ngIf="isAuthenticated" (click)="downloadJSON()" title="Export a local JSON backup of all WordPress data">
+        <button class="btn btn-primary" *ngIf="isAuthenticated" (click)="openExportModal()" title="Export a JSON backup of WordPress data">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
             <polyline points="7 10 12 15 17 10"></polyline>
@@ -842,7 +842,236 @@
             </p>
           </div>
         </div>
+
+        <!-- Export History -->
+        <div class="settings-section">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+            <h3 style="margin:0;">Export History</h3>
+            <button class="btn btn-sm btn-secondary" *ngIf="backupHistory.length > 0" (click)="clearBackupHistory()">Clear History</button>
+          </div>
+          <div class="backup-history-empty" *ngIf="backupHistory.length === 0">
+            No exports yet. Use the Export Backup button in the header to create your first backup.
+          </div>
+          <div class="backup-history-list" *ngIf="backupHistory.length > 0">
+            <div class="backup-history-item" *ngFor="let entry of backupHistory">
+              <div class="backup-history-meta">
+                <div class="backup-history-filename">{{ entry.filename }}</div>
+                <div class="backup-history-details">
+                  {{ formatExportDate(entry.exportedAt) }} &bull; {{ entry.editionCount }} edition(s) &bull; {{ entry.sizeKb }} KB
+                </div>
+              </div>
+              <span class="backup-type-badge">{{ entry.exportType }}</span>
+              <button class="btn btn-sm btn-primary" (click)="reExport(entry)" title="Re-export with same options (fresh data)">Export Again</button>
+            </div>
+          </div>
+          <p class="hint-text" *ngIf="backupHistory.length > 0" style="margin-top:8px;">Last {{ backupHistory.length }} export(s) recorded locally in this browser.</p>
+        </div>
+
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- Export Backup Modal -->
+<div class="modal-overlay" *ngIf="showExportModal">
+  <div class="modal">
+    <div class="modal-header">
+      <h2>📤 Export Backup</h2>
+      <button class="btn-close" (click)="closeExportModal()">&times;</button>
+    </div>
+    <div class="modal-body export-modal-body">
+
+      <div class="form-group">
+        <label>Export Type</label>
+        <div class="input-mode-options" style="flex-direction:column; gap:6px;">
+          <label class="radio-option">
+            <input type="radio" name="exportType" value="full" [(ngModel)]="exportOptions.exportType" />
+            <span>Full Backup <small class="hint-text">&mdash; settings + all editions</small></span>
+          </label>
+          <label class="radio-option">
+            <input type="radio" name="exportType" value="settings-only" [(ngModel)]="exportOptions.exportType" />
+            <span>Settings Only <small class="hint-text">&mdash; logo, social links, language, etc.</small></span>
+          </label>
+          <label class="radio-option">
+            <input type="radio" name="exportType" value="editions-only" [(ngModel)]="exportOptions.exportType" />
+            <span>Editions Only <small class="hint-text">&mdash; news data, no settings</small></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="form-group" *ngIf="exportOptions.exportType !== 'settings-only'">
+        <label>Editions Scope</label>
+        <div class="input-mode-options" style="flex-direction:column; gap:6px;">
+          <label class="radio-option">
+            <input type="radio" name="exportScope" value="full" [(ngModel)]="exportOptions.exportScope" />
+            <span>All Editions</span>
+          </label>
+          <label class="radio-option">
+            <input type="radio" name="exportScope" value="current-date" [(ngModel)]="exportOptions.exportScope" />
+            <span>Current Date Only <small class="hint-text">({{ selectedDate }})</small></span>
+          </label>
+          <label class="radio-option">
+            <input type="radio" name="exportScope" value="date-range" [(ngModel)]="exportOptions.exportScope" />
+            <span>Date Range</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="form-row" *ngIf="exportOptions.exportType !== 'settings-only' && exportOptions.exportScope === 'date-range'">
+        <div class="form-group">
+          <label>From Date</label>
+          <input type="date" [(ngModel)]="exportOptions.dateFrom" class="form-control" />
+        </div>
+        <div class="form-group">
+          <label>To Date</label>
+          <input type="date" [(ngModel)]="exportOptions.dateTo" class="form-control" />
+        </div>
+      </div>
+
+      <p class="hint-text" style="margin-top:12px; padding:10px; background:#f0f9ff; border-radius:8px; border:1px solid #bae6fd;">
+        💡 A metadata envelope (source URL, timestamp, schema version) is embedded automatically for safe import.
+      </p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" (click)="closeExportModal()">Cancel</button>
+      <button class="btn btn-primary" (click)="confirmExport()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+          <polyline points="7 10 12 15 17 10"></polyline>
+          <line x1="12" y1="15" x2="12" y2="3"></line>
+        </svg>
+        Download
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Import Preview Modal -->
+<div class="modal-overlay" *ngIf="showImportPreviewModal">
+  <div class="modal modal-import-preview">
+    <div class="modal-header">
+      <h2>📥 Import Preview</h2>
+      <button class="btn-close" (click)="closeImportModal()">&times;</button>
+    </div>
+    <div class="modal-body import-modal-body">
+
+      <!-- Validation Errors -->
+      <div class="import-validation-errors" *ngIf="importValidation && importValidation.errors.length > 0">
+        <h4>❌ Validation Errors ({{ importValidation.errors.length }})</h4>
+        <ul>
+          <li *ngFor="let e of importValidation.errors">{{ e }}</li>
+        </ul>
+        <p style="margin:8px 0 0; font-size:13px;">Fix the errors above before importing.</p>
+      </div>
+
+      <!-- Validation Warnings -->
+      <div class="import-validation-warnings" *ngIf="importValidation && importValidation.warnings.length > 0">
+        <h4>⚠️ Warnings ({{ importValidation.warnings.length }})</h4>
+        <ul>
+          <li *ngFor="let w of importValidation.warnings">{{ w }}</li>
+        </ul>
+      </div>
+
+      <!-- Preview (valid only) -->
+      <ng-container *ngIf="importPreview && importValidation?.valid">
+
+        <div class="import-preview-section">
+          <h4>Backup Info</h4>
+          <table class="import-preview-table">
+            <tr><td>Exported At</td><td>{{ formatExportDate(importPreview.exportedAt) }}</td></tr>
+            <tr><td>Schema Version</td><td>{{ importPreview.schemaVersion }}</td></tr>
+            <tr><td>Export Type</td><td>{{ importPreview.exportType }}</td></tr>
+            <tr><td>Source URL</td><td><code>{{ importPreview.sourceUrl }}</code></td></tr>
+          </table>
+        </div>
+
+        <!-- URL Mismatch Warning -->
+        <div class="import-url-warning" *ngIf="importPreview.urlMismatch">
+          <h4>⚠️ Image URL Mismatch Detected</h4>
+          <p>Images in this backup point to: <code>{{ importPreview.sourceUrl }}</code></p>
+          <p>This site's URL is: <code>{{ importPreview.currentUrl }}</code></p>
+          <p>Without rewriting, all images will continue loading from the <strong>old site</strong>.</p>
+          <label class="toggle-label" style="margin-top:10px;">
+            <input type="checkbox" [(ngModel)]="importOptions.rewriteUrls" />
+            <span>Rewrite all image URLs to this site's URL</span>
+          </label>
+          <p class="hint-text" *ngIf="importOptions.rewriteUrls" style="margin-top:6px;">
+            Thumbnail, fullImage, fullImageHiRes, section imageUrl, and logo URL will all be updated.
+          </p>
+        </div>
+
+        <!-- Editions Summary -->
+        <div class="import-preview-section" *ngIf="importPreview.hasEditions">
+          <h4>Editions Summary</h4>
+          <div class="import-diff-grid">
+            <div class="diff-card diff-card-info">
+              <span class="diff-count">{{ importPreview.currentEditionCount }}</span>
+              <span class="diff-label">Current Editions</span>
+            </div>
+            <div class="diff-card diff-card-new">
+              <span class="diff-count">{{ importPreview.newEditions.length }}</span>
+              <span class="diff-label">New Editions</span>
+            </div>
+            <div class="diff-card diff-card-conflict">
+              <span class="diff-count">{{ importPreview.conflictingEditions.length }}</span>
+              <span class="diff-label">Conflicting Dates</span>
+            </div>
+          </div>
+          <p class="hint-text" *ngIf="importPreview.incomingDateRange">
+            Incoming range: <strong>{{ importPreview.incomingDateRange.from }}</strong> &rarr; <strong>{{ importPreview.incomingDateRange.to }}</strong>
+          </p>
+        </div>
+
+        <!-- Import Options -->
+        <div class="import-preview-section">
+          <h4>Import Options</h4>
+          <div class="form-group" *ngIf="importPreview.hasSettings">
+            <label class="toggle-label">
+              <input type="checkbox" [(ngModel)]="importOptions.importSettings" />
+              <span>Import Settings <small class="hint-text">(logo, social links, language, etc.)</small></span>
+            </label>
+          </div>
+          <div class="form-group" *ngIf="importPreview.hasEditions">
+            <label class="toggle-label">
+              <input type="checkbox" [(ngModel)]="importOptions.importEditions" />
+              <span>Import Editions <small class="hint-text">(news data)</small></span>
+            </label>
+          </div>
+          <div class="form-group" *ngIf="importPreview.hasEditions && importOptions.importEditions">
+            <label>Merge Mode</label>
+            <div class="input-mode-options" style="flex-direction:column; gap:6px; margin-top:6px;">
+              <label class="radio-option">
+                <input type="radio" name="mergeMode" value="overwrite-all" [(ngModel)]="importOptions.mergeMode" />
+                <span>Overwrite All <small class="hint-text">&mdash; replace all current editions</small></span>
+              </label>
+              <label class="radio-option">
+                <input type="radio" name="mergeMode" value="add-new" [(ngModel)]="importOptions.mergeMode" />
+                <span>Add New Only <small class="hint-text">&mdash; skip conflicting dates</small></span>
+              </label>
+              <label class="radio-option">
+                <input type="radio" name="mergeMode" value="add-and-replace" [(ngModel)]="importOptions.mergeMode" />
+                <span>Add New + Replace Conflicts <small class="hint-text">&mdash; keep editions not in backup</small></span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div style="padding:10px; background:#f0fdf4; border-radius:8px; border:1px solid #86efac; font-size:13px;">
+          💾 A full auto-backup of your current data will be downloaded automatically before import starts.
+        </div>
+
+      </ng-container>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" (click)="closeImportModal()">Cancel</button>
+      <button
+        class="btn btn-warning"
+        (click)="confirmImport()"
+        *ngIf="importValidation?.valid"
+        [disabled]="isImporting || (!importOptions.importSettings && !importOptions.importEditions)"
+      >
+        {{ isImporting ? 'Importing…' : 'Import' }}
+      </button>
     </div>
   </div>
 </div>

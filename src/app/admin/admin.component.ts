@@ -3,7 +3,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { QuillModule } from 'ngx-quill';
-import { NewspaperDataService, NewspaperPage, NewsSection, GlobalSettings, NewspaperEdition } from '../services/newspaper-data.service';
+import { NewspaperDataService, NewspaperPage, NewsSection, GlobalSettings, NewspaperEdition, ExportOptions, ImportOptions, ImportValidationResult, ImportPreview, BackupHistoryEntry } from '../services/newspaper-data.service';
 import { AuthService } from '../services/auth.service';
 import { ToasterService } from '../services/toaster.service';
 import { TranslationService } from '../i18n/translation.service';
@@ -137,6 +137,29 @@ export class AdminComponent implements OnInit {
     ]
   };
   
+  // ─── Export modal state
+  showExportModal = false;
+  exportOptions: ExportOptions = {
+    exportType: 'full',
+    exportScope: 'full',
+  };
+
+  // ─── Import preview modal state
+  showImportPreviewModal = false;
+  importParsed: any = null;
+  importValidation: ImportValidationResult | null = null;
+  importPreview: ImportPreview | null = null;
+  importOptions: ImportOptions = {
+    importSettings: true,
+    importEditions: true,
+    mergeMode: 'overwrite-all',
+    rewriteUrls: false,
+  };
+  isImporting = false;
+
+  // ─── Backup history
+  backupHistory: BackupHistoryEntry[] = [];
+
   // Image Cropper
   cropperImageLoaded = false;
   cropperStartX = 0;
@@ -173,7 +196,7 @@ export class AdminComponent implements OnInit {
     this.todayDate = this.dataService.getTodayDate();
     this.selectedDate = this.todayDate;
     this.availableDates = this.selectedDate ? [this.selectedDate] : [];
-    
+    this.backupHistory = this.dataService.getBackupHistory();
     this.verifyAuth();
   }
 
@@ -1151,18 +1174,41 @@ export class AdminComponent implements OnInit {
     });
   }
 
+  // ─── Export ──────────────────────────────────────────────────────
+
   downloadJSON() {
-    this.dataService.downloadJSON();
-    this.toaster.success('JSON file downloaded!');
+    this.openExportModal();
   }
+
+  openExportModal() {
+    this.exportOptions = {
+      exportType: 'full',
+      exportScope: 'full',
+      currentDate: this.selectedDate,
+    };
+    this.showExportModal = true;
+  }
+
+  closeExportModal() {
+    this.showExportModal = false;
+  }
+
+  confirmExport() {
+    const opts: ExportOptions = { ...this.exportOptions, currentDate: this.selectedDate };
+    const { filename } = this.dataService.downloadExport(opts);
+    this.toaster.success(`Exported: ${filename}`);
+    this.backupHistory = this.dataService.getBackupHistory();
+    this.showExportModal = false;
+  }
+
+  // ─── Import ──────────────────────────────────────────────────────
 
   importBackup(event: Event) {
     const input = event.target as HTMLInputElement;
     if (!input.files || !input.files[0]) return;
 
     const file = input.files[0];
-    // Reset so the same file can be re-selected if needed
-    input.value = '';
+    input.value = ''; // reset so the same file can be re-selected
 
     if (!file.name.endsWith('.json') && file.type !== 'application/json') {
       this.toaster.error('Please select a valid .json backup file');
@@ -1174,48 +1220,89 @@ export class AdminComponent implements OnInit {
       try {
         const raw = e.target?.result as string;
         const parsed = JSON.parse(raw);
+        const validation = this.dataService.validateImportPayload(parsed);
+        const preview = validation.valid ? this.dataService.buildImportPreview(parsed) : null;
 
-        // Validate structure
-        if (typeof parsed !== 'object' || parsed === null) {
-          this.toaster.error('Invalid backup: not a JSON object');
-          return;
-        }
-        if (!Array.isArray(parsed.editions)) {
-          this.toaster.error('Invalid backup: missing "editions" array');
-          return;
-        }
+        this.importParsed = parsed;
+        this.importValidation = validation;
+        this.importPreview = preview;
 
-        if (!confirm(`This will OVERWRITE all current WordPress data with the backup from "${file.name}".\n\nAre you sure?`)) {
-          return;
-        }
+        this.importOptions = {
+          importSettings: preview ? preview.hasSettings : false,
+          importEditions: preview ? preview.hasEditions : false,
+          mergeMode: 'overwrite-all',
+          rewriteUrls: preview ? preview.urlMismatch : false,
+          oldBaseUrl: preview?.sourceUrl ?? '',
+          newBaseUrl: preview?.currentUrl ?? '',
+        };
 
-        // Normalize settings in case backup came from an older export
-        if (parsed.settings) {
-          if (!parsed.settings.logo) {
-            parsed.settings.logo = { url: '', alt: 'Digital Newspaper' };
-          }
-          if (!parsed.settings.socialLinks || Array.isArray(parsed.settings.socialLinks)) {
-            parsed.settings.socialLinks = {};
-          }
-        } else {
-          parsed.settings = { defaultDateMode: 'current', socialLinks: {}, logo: { url: '', alt: 'Digital Newspaper' } };
-        }
-
-        this.dataService.saveData(parsed).subscribe({
-          next: () => {
-            this.toaster.success('Backup imported successfully!');
-            this.loadData();
-          },
-          error: (err) => {
-            console.error('Import failed:', err);
-            this.toaster.error('Failed to import backup: ' + (err.message || 'Unknown error'));
-          }
-        });
+        this.showImportPreviewModal = true;
       } catch {
         this.toaster.error('Failed to parse JSON file. Make sure it is a valid backup.');
       }
     };
     reader.readAsText(file);
+  }
+
+  closeImportModal() {
+    this.showImportPreviewModal = false;
+    this.importParsed = null;
+    this.importValidation = null;
+    this.importPreview = null;
+    this.isImporting = false;
+  }
+
+  confirmImport() {
+    if (!this.importParsed || !this.importValidation?.valid) return;
+    this.isImporting = true;
+
+    // Auto-backup current data before overwriting
+    this.dataService.downloadExport({ exportType: 'full', exportScope: 'full' });
+    this.toaster.info('Auto-backup downloaded. Starting import…');
+
+    const mergedData = this.dataService.applyImport(this.importParsed, this.importOptions);
+    this.dataService.saveData(mergedData).subscribe({
+      next: () => {
+        this.isImporting = false;
+        this.toaster.success('Backup imported successfully!');
+        this.backupHistory = this.dataService.getBackupHistory();
+        this.closeImportModal();
+        this.loadData();
+      },
+      error: (err) => {
+        this.isImporting = false;
+        console.error('Import failed:', err);
+        this.toaster.error('Failed to import: ' + (err.message || 'Unknown error'));
+      }
+    });
+  }
+
+  // ─── Backup History ─────────────────────────────────────────────────
+
+  clearBackupHistory() {
+    this.dataService.clearBackupHistory();
+    this.backupHistory = [];
+    this.toaster.success('Backup history cleared.');
+  }
+
+  reExport(entry: BackupHistoryEntry) {
+    const opts: ExportOptions = {
+      exportType: entry.exportType,
+      exportScope: entry.exportScope,
+      currentDate: this.selectedDate,
+    };
+    const { filename } = this.dataService.downloadExport(opts);
+    this.toaster.success(`Re-exported: ${filename}`);
+    this.backupHistory = this.dataService.getBackupHistory();
+  }
+
+  formatExportDate(dateStr: string): string {
+    if (!dateStr || dateStr === 'Unknown') return 'Unknown';
+    try {
+      return new Date(dateStr).toLocaleString();
+    } catch {
+      return dateStr;
+    }
   }
 
   // Navigation
