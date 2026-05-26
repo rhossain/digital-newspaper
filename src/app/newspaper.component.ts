@@ -304,20 +304,31 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   }
 
   navigateToSection(sectionSlug: string): boolean {
-    // Convert post-xxxx → section-xxxx for ID-based lookup (new URL format);
-    // keep the original slug as a fallback for backward compatibility.
-    const idToFind = sectionSlug.startsWith('post-')
-      ? 'section-' + sectionSlug.slice('post-'.length)
-      : sectionSlug;
+    // Accept canonical post IDs plus legacy IDs from older links.
+    const slugValue = (sectionSlug || '').trim();
+    const idsToFind = new Set<string>([slugValue]);
+
+    if (slugValue.startsWith('post-')) {
+      const suffix = slugValue.slice('post-'.length);
+      idsToFind.add(`section-${suffix}`);
+      idsToFind.add(suffix);
+    } else if (slugValue.startsWith('section-')) {
+      const suffix = slugValue.slice('section-'.length);
+      idsToFind.add(`post-${suffix}`);
+      idsToFind.add(suffix);
+    } else if (slugValue) {
+      idsToFind.add(`post-${slugValue}`);
+      idsToFind.add(`section-${slugValue}`);
+    }
 
     for (const page of this.pages) {
-      // Try both the converted ID and the raw slug value (handles old section- URLs)
-      let section = page.sections.find(s => s.id === idToFind || s.id === sectionSlug);
+      // Try all known ID aliases first (post- / section- / bare ID)
+      let section = page.sections.find(s => idsToFind.has((s.id || '').trim()));
 
       // Fall back to legacy title-based slug match so older shared links keep working.
       if (!section) {
         section = page.sections.find(s => {
-          return this.createLegacySectionSlug(s.title, s.id) === sectionSlug;
+          return this.createLegacySectionSlug(s.title, s.id) === slugValue;
         });
       }
 
@@ -1186,9 +1197,12 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   }
 
   private createSectionSlug(_: string, sectionId: string): string {
-    return sectionId.startsWith('section-')
-      ? 'post-' + sectionId.slice('section-'.length)
-      : sectionId;
+    const rawId = (sectionId || '').trim();
+    if (!rawId) return 'post-unknown';
+    if (rawId.startsWith('post-')) return rawId;
+    return rawId.startsWith('section-')
+      ? 'post-' + rawId.slice('section-'.length)
+      : `post-${rawId}`;
   }
 
   private createLegacySectionSlug(title: string, sectionId: string): string {

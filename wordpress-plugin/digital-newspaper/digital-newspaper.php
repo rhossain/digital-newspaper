@@ -256,8 +256,10 @@ class Digital_Newspaper_API {
   public function social_sharing_endpoint(WP_REST_Request $request) {
     // Use wp_unslash + trim instead of sanitize_text_field — the latter
     // strips %XX byte sequences which can corrupt multibyte Bengali slugs.
-    $date = trim(wp_unslash((string) ($request->get_param('date') ?? '')));
-    $slug = trim(wp_unslash(urldecode((string) ($request->get_param('slug') ?? ''))));
+    $date         = trim(wp_unslash((string) ($request->get_param('date') ?? '')));
+    $pageSlug     = trim(wp_unslash((string) ($request->get_param('page') ?? '')));
+    $editionSlug  = trim(wp_unslash((string) ($request->get_param('edition') ?? '')));
+    $slug         = trim(wp_unslash(urldecode((string) ($request->get_param('slug') ?? ''))));
 
     // ---------------------------------------------------------------
     // Homepage case: ?homepage=1 — return site-level OG tags with logo.
@@ -407,6 +409,11 @@ HTML;
 
     $editions = isset($data['editions']) && is_array($data['editions']) ? $data['editions'] : [];
 
+    $editionNumberFilter = 0;
+    if ($editionSlug !== '' && preg_match('/^edition-(\d+)$/', $editionSlug, $m)) {
+      $editionNumberFilter = (int) $m[1];
+    }
+
     $secTitle   = '';
     $secContent = '';
     $imageUrl   = '';
@@ -418,16 +425,31 @@ HTML;
       if ($editionDate !== $date) {
         continue;
       }
-      foreach (($edition['pages'] ?? []) as $page) {
-        $pageImg = $this->dn_resolve_image((string) ($page['fullImage'] ?? ''), $wpBase);
-        foreach (($page['sections'] ?? []) as $sec) {
+      if ($editionNumberFilter > 0) {
+        $edNo = isset($edition['edition']) ? (int) $edition['edition'] : 1;
+        if ($edNo !== $editionNumberFilter) {
+          continue;
+        }
+      }
+      foreach (($edition['pages'] ?? []) as $editionPage) {
+        $pageImg = $this->dn_resolve_image((string) ($editionPage['fullImage'] ?? ''), $wpBase);
+        foreach (($editionPage['sections'] ?? []) as $sec) {
           $id    = (string) ($sec['id']    ?? '');
           $title = (string) ($sec['title'] ?? '');
-          if ($this->dn_create_slug($title, $id) === $slug || $id === $slug) {
+          if ($this->dn_matches_section_slug($slug, $title, $id)) {
             $secTitle   = $title;
             $secContent = strip_tags((string) ($sec['content'] ?? ''));
             $rawImg     = trim((string) ($sec['imageUrl'] ?? ''));
-            $imageUrl   = $rawImg !== '' ? $this->dn_resolve_image($rawImg, $wpBase) : $pageImg;
+            if ($rawImg !== '') {
+              $imageUrl = $this->dn_resolve_image($rawImg, $wpBase);
+            } else {
+              // No dedicated section image: crop from full-page image using
+              // section coordinates so social preview matches selected section.
+              $imageUrl = $this->dn_crop_section_from_page($pageImg, $sec);
+              if ($imageUrl === '') {
+                $imageUrl = $pageImg;
+              }
+            }
             $found      = true;
             break 3; // Exit sections + pages + editions loops.
           }
@@ -443,8 +465,8 @@ HTML;
       foreach ($editions as $edition) {
         $editionDate = substr(trim((string) ($edition['date'] ?? '')), 0, 10);
         if ($editionDate !== $date) continue;
-        foreach (($edition['pages'] ?? []) as $page) {
-          $fallbackImg = $this->dn_resolve_image((string) ($page['fullImage'] ?? ''), $wpBase);
+        foreach (($edition['pages'] ?? []) as $editionPage) {
+          $fallbackImg = $this->dn_resolve_image((string) ($editionPage['fullImage'] ?? ''), $wpBase);
           if ($fallbackImg !== '') {
             $imageUrl = $fallbackImg;
             break 2;
@@ -466,7 +488,11 @@ HTML;
       $desc = $siteName;
     }
 
-    $canonical = $angularBase . '/' . $date . '/' . rawurlencode($slug);
+    if ($pageSlug !== '' && $editionSlug !== '') {
+      $canonical = $angularBase . '/' . rawurlencode($date) . '/' . rawurlencode($pageSlug) . '/' . rawurlencode($editionSlug) . '/' . rawurlencode($slug);
+    } else {
+      $canonical = $angularBase . '/' . rawurlencode($date) . '/' . rawurlencode($slug);
+    }
 
     // Resize to 1200×630 for consistent social-media thumbnail dimensions.
     // Falls back to the original URL if GD is unavailable or the fetch fails.
@@ -559,7 +585,7 @@ HTML;
 
   public function social_image_endpoint(WP_REST_Request $request): WP_REST_Response {
     $file = trim((string) ($request->get_param('file') ?? ''));
-    if (!preg_match('/^dn-social-(?:resize|fallback)-[a-z0-9_-]+\.jpg$/', $file)) {
+    if (!preg_match('/^dn-social-(?:resize|fallback|section)-[a-z0-9_-]+\.jpg$/', $file)) {
       return new WP_REST_Response(['error' => 'Invalid file'], 400);
     }
 
@@ -636,8 +662,17 @@ HTML;
         // Pre-warm each section's image.
         foreach (($page['sections'] ?? []) as $sec) {
           $rawImg = trim((string) ($sec['imageUrl'] ?? ''));
-          if ($rawImg === '') continue;
-          $imageUrl = $this->dn_resolve_image($rawImg, $wpBase);
+          if ($rawImg === '') {
+            // If no dedicated section image exists, generate a section crop
+            // from the page scan and then pre-warm the 1200x630 social size.
+            $cropUrl = $this->dn_crop_section_from_page($pageImg, $sec);
+            if ($cropUrl === '') {
+              continue;
+            }
+            $imageUrl = $cropUrl;
+          } else {
+            $imageUrl = $this->dn_resolve_image($rawImg, $wpBase);
+          }
           if ($imageUrl === '') continue;
 
           $upload    = wp_upload_dir();
@@ -794,6 +829,77 @@ HTML;
   }
 
   /**
+   * Crop a section rectangle from the full-page image based on percentage
+   * coordinates, then return a cached URL to the cropped JPEG.
+   * Returns empty string if cropping cannot be completed.
+   */
+  private function dn_crop_section_from_page(string $pageImageUrl, array $section): string {
+    if ($pageImageUrl === '' || !extension_loaded('gd') || !function_exists('imagecreatetruecolor')) {
+      return '';
+    }
+
+    $xPct = (float) ($section['x'] ?? 0);
+    $yPct = (float) ($section['y'] ?? 0);
+    $wPct = (float) ($section['width'] ?? 0);
+    $hPct = (float) ($section['height'] ?? 0);
+
+    if ($wPct <= 0 || $hPct <= 0) {
+      return '';
+    }
+
+    $upload = wp_upload_dir();
+    $idPart = preg_replace('/[^a-zA-Z0-9_-]/', '-', (string) ($section['id'] ?? 'unknown'));
+    $cacheKey = substr(md5($pageImageUrl . '|' . $xPct . '|' . $yPct . '|' . $wPct . '|' . $hPct), 0, 12);
+    $filename = "dn-social-section-{$idPart}-{$cacheKey}.jpg";
+    $path = $upload['basedir'] . '/' . $filename;
+    $url  = $upload['baseurl'] . '/' . $filename;
+
+    if (file_exists($path)) {
+      return $url;
+    }
+
+    $localPath = $this->dn_uploads_url_to_path($pageImageUrl);
+    if ($localPath !== '' && file_exists($localPath)) {
+      $body = @file_get_contents($localPath);
+    } else {
+      $resp = wp_remote_get($pageImageUrl, ['timeout' => 10, 'sslverify' => true]);
+      if (is_wp_error($resp)) return '';
+      $body = wp_remote_retrieve_body($resp);
+    }
+
+    if ($body === false || $body === '') return '';
+
+    $src = @imagecreatefromstring($body);
+    if ($src === false) return '';
+
+    $sw = imagesx($src);
+    $sh = imagesy($src);
+    if ($sw <= 0 || $sh <= 0) {
+      imagedestroy($src);
+      return '';
+    }
+
+    $cropX = (int) round(($xPct / 100) * $sw);
+    $cropY = (int) round(($yPct / 100) * $sh);
+    $cropW = (int) round(($wPct / 100) * $sw);
+    $cropH = (int) round(($hPct / 100) * $sh);
+
+    $cropX = max(0, min($cropX, $sw - 1));
+    $cropY = max(0, min($cropY, $sh - 1));
+    $cropW = max(1, min($cropW, $sw - $cropX));
+    $cropH = max(1, min($cropH, $sh - $cropY));
+
+    $crop = imagecreatetruecolor($cropW, $cropH);
+    imagecopy($crop, $src, 0, 0, $cropX, $cropY, $cropW, $cropH);
+    imagedestroy($src);
+
+    imagejpeg($crop, $path, 90);
+    imagedestroy($crop);
+
+    return file_exists($path) ? $url : '';
+  }
+
+  /**
    * Map a wp-content/uploads URL to its local filesystem path for fast direct reads.
    * Returns '' if the URL does not belong to this site's uploads directory.
    *
@@ -820,11 +926,44 @@ HTML;
     }
 
     $filename = basename((string) parse_url($imageUrl, PHP_URL_PATH));
-    if (!preg_match('/^dn-social-(?:resize|fallback)-[a-z0-9_-]+\.jpg$/', $filename)) {
+    if (!preg_match('/^dn-social-(?:resize|fallback|section)-[a-z0-9_-]+\.jpg$/', $filename)) {
       return $imageUrl;
     }
 
-    return site_url('/index.php?rest_route=/digital-newspaper/v1/social-image&file=' . rawurlencode($filename));
+    $upload = wp_upload_dir();
+    return trailingslashit($upload['baseurl']) . rawurlencode($filename);
+  }
+
+  /**
+   * Match a route slug against section title/id with tolerant ID aliases.
+   * Supports these equivalent forms: post-123, section-123, 123.
+   */
+  private function dn_matches_section_slug(string $slug, string $title, string $id): bool {
+    $slug = trim($slug);
+    $id   = trim($id);
+    if ($slug === '') {
+      return false;
+    }
+
+    if ($this->dn_create_slug($title, $id) === $slug || $id === $slug) {
+      return true;
+    }
+
+    if (preg_match('/^(?:post|section)-(\d+)$/', $slug, $slugMatch)) {
+      $slugNum = $slugMatch[1];
+      if ($id === $slugNum || $id === 'post-' . $slugNum || $id === 'section-' . $slugNum) {
+        return true;
+      }
+    }
+
+    if (preg_match('/^(?:post|section)-(\d+)$/', $id, $idMatch)) {
+      $idNum = $idMatch[1];
+      if ($slug === $idNum || $slug === 'post-' . $idNum || $slug === 'section-' . $idNum) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   /**

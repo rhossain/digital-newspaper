@@ -163,9 +163,21 @@ if (!fs.existsSync(htaccessPath)) {
 <IfModule mod_rewrite.c>
   RewriteEngine On
   RewriteBase /
+
+  # Social crawler rewrites: serve OG/Twitter HTML from WordPress endpoint
+  RewriteCond %{HTTP_USER_AGENT} "facebookexternalhit|Facebot|Twitterbot|LinkedInBot|WhatsApp|Slackbot|TelegramBot|Discordbot|Pinterest|vkShare|W3C_Validator|Googlebot-Image" [NC]
+  RewriteRule ^$ /wp/index.php?rest_route=/digital-newspaper/v1/social&homepage=1 [NE,L,QSA]
+
+  RewriteCond %{HTTP_USER_AGENT} "facebookexternalhit|Facebot|Twitterbot|LinkedInBot|WhatsApp|Slackbot|TelegramBot|Discordbot|Pinterest|vkShare|W3C_Validator|Googlebot-Image" [NC]
+  RewriteRule ^([0-9]{4}-[0-9]{2}-[0-9]{2})/(page-[^/]+)/((?:edition)-[^/]+)/([^/?]+)/?$ /wp/index.php?rest_route=/digital-newspaper/v1/social&date=$1&page=$2&edition=$3&slug=$4 [NE,L,QSA]
+
+  RewriteCond %{HTTP_USER_AGENT} "facebookexternalhit|Facebot|Twitterbot|LinkedInBot|WhatsApp|Slackbot|TelegramBot|Discordbot|Pinterest|vkShare|W3C_Validator|Googlebot-Image" [NC]
+  RewriteRule ^([0-9]{4}-[0-9]{2}-[0-9]{2})/([^/?]+)/?$ /wp/index.php?rest_route=/digital-newspaper/v1/social&date=$1&slug=$2 [NE,L,QSA]
+
   RewriteRule ^index\\.html$ - [L]
   RewriteCond %{REQUEST_FILENAME} !-f
   RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteCond %{REQUEST_URI} !^/wp/ [NC]
   RewriteRule ^ /index.html [L]
 </IfModule>`;
   fs.writeFileSync(htaccessPath, htaccessContent);

@@ -40,13 +40,27 @@ export class ShareButtonsComponent {
 
   private getShareableUrl(section: NewsSection): string {
     const sectionSlug = this.createSectionSlug(section.title, section.id);
-    return `${window.location.origin}/${this.selectedDate}/${this.pageSlug}/${this.editionSlug}/${sectionSlug}`;
+    const pathParts = window.location.pathname.split('/').filter(Boolean);
+
+    const date = (this.selectedDate || pathParts[0] || '').trim();
+    const page = (this.pageSlug || pathParts[1] || '').trim();
+    const edition = (this.editionSlug || pathParts[2] || '').trim();
+
+    if (!date || !page || !edition) {
+      // Fallback to current URL when required segments are unavailable.
+      return window.location.href;
+    }
+
+    return `${window.location.origin}/${date}/${page}/${edition}/${sectionSlug}/`;
   }
 
   private createSectionSlug(_: string, sectionId: string): string {
-    return sectionId.startsWith('section-')
-      ? 'post-' + sectionId.slice('section-'.length)
-      : sectionId;
+    const rawId = (sectionId || '').trim();
+    if (!rawId) return 'post-unknown';
+    if (rawId.startsWith('post-')) return rawId;
+    return rawId.startsWith('section-')
+      ? 'post-' + rawId.slice('section-'.length)
+      : `post-${rawId}`;
   }
 
   /** Strip HTML tags and truncate to maxLen characters. */

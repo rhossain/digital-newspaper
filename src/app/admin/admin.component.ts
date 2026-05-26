@@ -119,6 +119,19 @@ export class AdminComponent implements OnInit {
     linkedSectionIds: [],
     showCaption: true
   };
+
+  private generateSectionId(): string {
+    return `post-${Date.now()}`;
+  }
+
+  private normalizeSectionId(sectionId: string | undefined | null): string {
+    const rawId = (sectionId || '').trim();
+    if (!rawId) return this.generateSectionId();
+    if (rawId.startsWith('section-')) {
+      return `post-${rawId.slice('section-'.length)}`;
+    }
+    return rawId;
+  }
   
   // Image source option
   imageSourceOption: 'auto-crop' | 'external-url' | 'upload' = 'auto-crop';
@@ -570,7 +583,7 @@ export class AdminComponent implements OnInit {
     this.isEditingSection = true;
     this.imageSourceOption = 'auto-crop'; // Default to auto-crop
     this.sectionForm = {
-      id: `section-${Date.now()}`,
+      id: this.generateSectionId(),
       title: '',
       x: 0,
       y: 0,
@@ -587,7 +600,10 @@ export class AdminComponent implements OnInit {
   editSection(section: NewsSection) {
     this.isEditingSection = true;
     this.selectedSection = section;
-    this.sectionForm = { ...section };
+    this.sectionForm = {
+      ...section,
+      id: this.normalizeSectionId(section.id)
+    };
     
     // Set the appropriate radio button based on imageUrl
     if (!section.imageUrl || section.imageUrl.trim() === '') {
@@ -601,12 +617,14 @@ export class AdminComponent implements OnInit {
 
   saveSection(closeForm = true) {
     if (this.selectedPage && this.sectionForm.id && this.sectionForm.title) {
+      const normalizedSectionId = this.normalizeSectionId(this.sectionForm.id);
+
       // Clear imageUrl if auto-crop is selected
       const imageUrl = this.imageSourceOption === 'auto-crop' ? '' : (this.sectionForm.imageUrl || '');
       
       // Create a clean copy of the section
       const section: NewsSection = {
-        id: this.sectionForm.id,
+        id: normalizedSectionId,
         title: this.sectionForm.title,
         x: this.sectionForm.x || 0,
         y: this.sectionForm.y || 0,
@@ -623,13 +641,16 @@ export class AdminComponent implements OnInit {
       // Check if section exists by looking in the service data (not the stale selectedPage)
       const currentEdition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);
       const currentPage = currentEdition?.pages.find(p => p.id === this.selectedPage?.id);
-      const existingSection = currentPage?.sections.find(s => s.id === section.id);
+      const originalSectionId = this.selectedSection?.id || normalizedSectionId;
+      const existingSection = currentPage?.sections.find(s => s.id === originalSectionId);
       
       if (existingSection) {
-        this.dataService.updateSection(this.selectedPage.id, section.id, section, this.selectedDate, this.selectedEditionNumber);
+        this.dataService.updateSection(this.selectedPage.id, originalSectionId, section, this.selectedDate, this.selectedEditionNumber);
       } else {
         this.dataService.addSection(this.selectedPage.id, section, this.selectedDate, this.selectedEditionNumber);
       }
+
+      this.sectionForm.id = normalizedSectionId;
       
       // Update local pages immediately from service (no network call)
       const edition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);

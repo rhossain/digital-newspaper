@@ -508,17 +508,28 @@ export class NewspaperDataService {
   updateSection(pageId: number, sectionId: string, updatedSection: NewsSection, date?: string, editionNumber: number = 1): void {
     const targetDate = date || this.getCurrentDate();
     const currentData = this.getData();
+    const nextSectionId = updatedSection.id;
     
     const newEditions = currentData.editions.map(edition => {
       if (this.editionMatches(edition, targetDate, editionNumber)) {
         const newPages = edition.pages.map(page => {
-          if (page.id === pageId) {
-            const newSections = page.sections.map(s =>
-              s.id === sectionId ? { ...updatedSection } : s
+          const newSections = page.sections.map(s => {
+            if (s.id === sectionId && page.id === pageId) {
+              return { ...updatedSection };
+            }
+
+            if (!s.linkedSectionIds || s.linkedSectionIds.length === 0 || sectionId === nextSectionId) {
+              return s;
+            }
+
+            const linkedSectionIds = s.linkedSectionIds.map(linkedId =>
+              linkedId === sectionId ? nextSectionId : linkedId
             );
-            return { ...page, sections: newSections };
-          }
-          return page;
+
+            return { ...s, linkedSectionIds };
+          });
+
+          return { ...page, sections: newSections };
         });
         return { ...edition, pages: newPages };
       }
