@@ -1,5 +1,5 @@
-import { Component, OnInit, OnDestroy, ChangeDetectorRef, ElementRef, ViewChild } from '@angular/core';
-import { CommonModule, Location } from '@angular/common';
+import { Component, OnInit, OnDestroy, ChangeDetectorRef, ElementRef, ViewChild, Inject } from '@angular/core';
+import { CommonModule, Location, DOCUMENT } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router, ActivatedRoute } from '@angular/router';
 import { Meta, Title } from '@angular/platform-browser';
@@ -79,7 +79,8 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     private translationService: TranslationService,
     private location: Location,
     private meta: Meta,
-    private titleService: Title
+    private titleService: Title,
+    @Inject(DOCUMENT) private document: Document
   ) {}
 
   /** Expose TranslationService to the template. */
@@ -145,6 +146,13 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     this.subscriptions.push(dataSubscription);
     
     this.loadNewspaperData();
+
+    // Dismiss the static splash loader now that the skeleton is taking over.
+    const splash = this.document.getElementById('app-splash');
+    if (splash) {
+      splash.classList.add('hidden');
+      splash.addEventListener('transitionend', () => splash.remove(), { once: true });
+    }
 
     // Detect mobile/tablet view and keep it updated on resize
     this.updateIsMobileView();

@@ -627,6 +627,30 @@
   }
 }
 
+/* Skeleton placeholders shown while API data is loading */
+.skeleton-thumbnail-item {
+  pointer-events: none;
+}
+
+.skeleton-page-number {
+  width: 28px;
+  height: 20px;
+  border-radius: 4px;
+  background: #e0e0e0;
+  position: absolute;
+  bottom: 15px;
+  right: 15px;
+}
+
+.center-panel-loading-skeleton {
+  position: relative;
+  flex: 1;
+  min-height: 60vh;
+  border-radius: 8px;
+  overflow: hidden;
+  margin: 16px;
+}
+
 /* Empty State Styles */
 .empty-state {
   display: flex;

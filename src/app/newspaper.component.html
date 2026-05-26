@@ -264,7 +264,17 @@
           <span class="page-number">{{ ts.toLocaleDigits(page.id) }}</span>
         </div>
       </div>
-      <div class="empty-state" *ngIf="pages.length === 0">
+
+      <!-- Skeleton thumbnails while API data is loading -->
+      <div class="thumbnail-list" *ngIf="isLoading && pages.length === 0">
+        <div class="thumbnail-item skeleton-thumbnail-item" *ngFor="let n of [1,2,3,4]">
+          <div class="thumbnail-image-wrapper">
+            <div class="skeleton-loader"></div>
+          </div>
+          <div class="skeleton-page-number"></div>
+        </div>
+      </div>
+      <div class="empty-state" *ngIf="pages.length === 0 && !isLoading">
         <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
           <polyline points="14 2 14 8 20 8"></polyline>
@@ -276,7 +286,13 @@
 
     <!-- Center Panel: Main Page View -->
     <div class="center-panel">
-    <div class="empty-state" *ngIf="!currentPage && pages.length === 0">
+
+    <!-- Skeleton fill while API data is loading -->
+    <div class="center-panel-loading-skeleton" *ngIf="isLoading && !currentPage">
+      <div class="skeleton-loader"></div>
+    </div>
+
+    <div class="empty-state" *ngIf="!currentPage && pages.length === 0 && !isLoading">
       <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
         <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
         <circle cx="8.5" cy="8.5" r="1.5"></circle>
