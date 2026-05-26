@@ -526,7 +526,17 @@ export class NewspaperDataService {
     if (settings.defaultDateMode === 'specific' && settings.specificDate) {
       return settings.specificDate;
     }
-    return this.getTodayDate();
+    // 'current' mode: use today, but fall back to the most recent date with
+    // pages if today's edition has no pages yet.
+    const today = this.getTodayDate();
+    const todayHasPages = this.getEditionsByDate(today).some(e => e.pages && e.pages.length > 0);
+    if (!todayHasPages) {
+      // getAvailableDates() already filters for dates with pages, sorted newest-first
+      const availableDates = this.getAvailableDates();
+      const fallback = availableDates.find(d => d < today) ?? availableDates[0];
+      if (fallback) return fallback;
+    }
+    return today;
   }
 
   // --- localStorage settings cache ---
