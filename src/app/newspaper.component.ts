@@ -25,6 +25,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   currentPage: NewspaperPage | null = null;
   selectedSection: NewsSection | null = null;
   imageLoaded = false;
+  assetLogoError = false;
   croppedSectionImage: string | null = null;
   showContentModal = false;
   showImageModal = false;
@@ -658,6 +659,10 @@ export class NewspaperComponent implements OnInit, OnDestroy {
 
   onLogoError(event: Event): void {
     (event.target as HTMLImageElement).style.display = 'none';
+  }
+
+  onAssetLogoError(): void {
+    this.assetLogoError = true;
   }
 
   onLinkedSectionImageError(event: Event): void {
