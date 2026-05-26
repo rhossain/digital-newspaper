@@ -7,8 +7,8 @@ import { NewspaperComponent } from './app/newspaper.component';
 const routes: Routes = [
   { path: '', component: NewspaperComponent },
   { path: 'admin', loadComponent: () => import('./app/admin/admin.component').then(m => m.AdminComponent) },
-  { path: ':date', component: NewspaperComponent },
-  { path: ':date/:section', component: NewspaperComponent },
+  { path: ':date/:page/:edition', component: NewspaperComponent },
+  { path: ':date/:page/:edition/:section', component: NewspaperComponent },
   { path: '**', redirectTo: '' }
 ];
 

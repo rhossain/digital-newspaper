@@ -1,7 +1,7 @@
 import { Component, OnInit, OnDestroy, ChangeDetectorRef, ElementRef, ViewChild, Inject } from '@angular/core';
 import { CommonModule, Location, DOCUMENT } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { Router, ActivatedRoute } from '@angular/router';
+import { ActivatedRoute } from '@angular/router';
 import { Meta, Title } from '@angular/platform-browser';
 import { NewspaperDataService, NewsSection, NewspaperPage, NewspaperEdition, GlobalSettings } from './services/newspaper-data.service';
 import { ToasterService } from './services/toaster.service';
@@ -36,6 +36,10 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   modalImageTitle: string = '';
   modalLinkedSections: NewsSection[] = [];
   pendingSectionSlug: string | null = null;
+  pendingPageSlug: string | null = null;
+  pendingEditionSlug: string | null = null;
+  private startedFromBaseUrl = false;
+  private userNavigated = false;
 
   // Mobile/tablet responsive state
   isMobileView = false;
@@ -79,7 +83,6 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     private dataService: NewspaperDataService,
     private toaster: ToasterService,
     private cdr: ChangeDetectorRef,
-    private router: Router,
     private route: ActivatedRoute,
     private translationService: TranslationService,
     private location: Location,
@@ -98,40 +101,37 @@ export class NewspaperComponent implements OnInit, OnDestroy {
 
   ngOnInit() {
     this.todayDate = this.dataService.getTodayDate();
-    
-    // Subscribe to route parameters
+
+    // Detect if the app was opened at the base URL (no path segments)
+    this.startedFromBaseUrl = !this.route.snapshot.routeConfig?.path;
+
+    // Subscribe to route parameters — only apply pending slugs before initial load
+    // completes; after that all URL updates use location.replaceState() which
+    // does NOT re-fire paramMap, so this guard is purely defensive.
     const routeSubscription = this.route.paramMap.subscribe(params => {
-      const dateParam = params.get('date');
+      if (this.initialLoadComplete) return;
+
+      const dateParam    = params.get('date');
+      const pageParam    = params.get('page');
+      const editionParam = params.get('edition');
       const sectionParam = params.get('section');
-      
+
       if (dateParam) {
         this.selectedDate = dateParam;
         this.dataService.setCurrentDate(dateParam);
       }
-      
-      // Store section parameter for later use after data loads
-      if (sectionParam) {
-        this.pendingSectionSlug = sectionParam;
-      }
+      if (pageParam)    this.pendingPageSlug    = pageParam;
+      if (editionParam) this.pendingEditionSlug = editionParam;
+      if (sectionParam) this.pendingSectionSlug = sectionParam;
     });
     this.subscriptions.push(routeSubscription);
 
-    // Subscribe to query parameters (edition number)
-    const querySubscription = this.route.queryParamMap.subscribe(params => {
-      const editionParam = params.get('e');
-      this.selectedEditionNumber = editionParam ? parseInt(editionParam, 10) : 1;
-    });
-    this.subscriptions.push(querySubscription);
-    
-    // Subscribe to date changes
+    // Subscribe to date changes — URL is updated via selectPage()/selectSection()
+    // after loadCurrentEdition() resolves, avoiding interim incorrect URLs.
     const dateSubscription = this.dataService.currentDate$.subscribe(date => {
       this.selectedDate = date;
       this.updateDisplayDate();
       this.checkIfToday();
-      // Update URL when date changes (unless there's a pending section to navigate to)
-      if (!this.pendingSectionSlug) {
-        this.updateUrl();
-      }
     });
     this.subscriptions.push(dateSubscription);
     
@@ -233,6 +233,12 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   }
 
   loadCurrentEdition() {
+    // Resolve pending edition slug first so getCurrentEdition() uses the correct number
+    if (this.pendingEditionSlug) {
+      this.selectedEditionNumber = this.getEditionFromSlug(this.pendingEditionSlug);
+      this.pendingEditionSlug = null;
+    }
+
     // Reset main view so the image element gets recreated when date changes
     this.currentPage = null;
     this.selectedSection = null;
@@ -260,15 +266,25 @@ export class NewspaperComponent implements OnInit, OnDestroy {
         this.thumbnailsLoading[page.id] = !!src;
       });
       if (this.pages.length > 0) {
-        // Navigate to section if pendingSectionSlug exists, otherwise select first page
+        // Resolve target page from pending page slug (default: first page)
+        let targetPage = this.pages[0];
+        if (this.pendingPageSlug) {
+          const resolvedPage = this.getPageFromSlug(this.pendingPageSlug);
+          if (resolvedPage) targetPage = resolvedPage;
+          this.pendingPageSlug = null;
+        }
+
         if (this.pendingSectionSlug) {
-          const found = this.navigateToSection(this.pendingSectionSlug);
-          this.pendingSectionSlug = null; // Clear after use
+          // Navigate to section; fall back to target page with no section selected
+          const sectionSlug = this.pendingSectionSlug;
+          this.pendingSectionSlug = null;
+          const found = this.navigateToSection(sectionSlug);
           if (!found) {
-            this.selectPage(this.pages[0]);
+            this.selectPage(targetPage);
           }
         } else {
-          this.selectPage(this.pages[0]);
+          // No section pending — show page without auto-selecting a section
+          this.selectPage(targetPage);
         }
       } else {
         this.currentPage = null;
@@ -288,29 +304,30 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   }
 
   navigateToSection(sectionSlug: string): boolean {
-    let found = false;
-    // Find the section across all pages by ID or title-based slug
+    // Convert post-xxxx → section-xxxx for ID-based lookup (new URL format);
+    // keep the original slug as a fallback for backward compatibility.
+    const idToFind = sectionSlug.startsWith('post-')
+      ? 'section-' + sectionSlug.slice('post-'.length)
+      : sectionSlug;
+
     for (const page of this.pages) {
-      // First try to find by ID (for backward compatibility)
-      let section = page.sections.find(s => s.id === sectionSlug);
-      
-      // If not found by ID, try to match by title slug
+      // Try both the converted ID and the raw slug value (handles old section- URLs)
+      let section = page.sections.find(s => s.id === idToFind || s.id === sectionSlug);
+
+      // Fall back to legacy title-based slug match so older shared links keep working.
       if (!section) {
         section = page.sections.find(s => {
-          const slug = this.createSectionSlug(s.title, s.id);
-          return slug === sectionSlug;
+          return this.createLegacySectionSlug(s.title, s.id) === sectionSlug;
         });
       }
-      
+
       if (section) {
-        // Select the page with the target section ID
         this.selectPage(page, section.id);
-        found = true;
-        break;
+        return true;
       }
     }
 
-    return found;
+    return false;
   }
 
   updateDisplayDate() {
@@ -354,6 +371,32 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     this.isToday = this.selectedDate === this.todayDate;
   }
 
+  // --- URL slug helpers ---
+
+  /** Returns the zero-padded URL slug for a page, e.g. 'page-01'. Public for use in template. */
+  getPageSlug(page: NewspaperPage): string {
+    const index = this.pages.indexOf(page);
+    const num = index >= 0 ? index + 1 : 1;
+    return `page-${String(num).padStart(2, '0')}`;
+  }
+
+  private getPageFromSlug(slug: string): NewspaperPage | null {
+    const match = /^page-(\d+)$/.exec(slug);
+    if (!match) return null;
+    const index = parseInt(match[1], 10) - 1;
+    return this.pages[index] ?? null;
+  }
+
+  /** Returns the zero-padded URL slug for an edition, e.g. 'edition-01'. Public for use in template. */
+  getEditionSlug(editionNumber: number): string {
+    return `edition-${String(editionNumber).padStart(2, '0')}`;
+  }
+
+  private getEditionFromSlug(slug: string): number {
+    const match = /^edition-(\d+)$/.exec(slug);
+    return match ? parseInt(match[1], 10) : 1;
+  }
+
   // --- trackBy helpers for *ngFor performance ---
   trackByPageId(_: number, page: NewspaperPage): number { return page.id; }
   trackBySectionId(_: number, section: NewsSection): string { return section.id; }
@@ -364,6 +407,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
 
   onDateChange() {
     this.selectedEditionNumber = 1;
+    this.userNavigated = true;
     this.dataService.setCurrentDate(this.selectedDate);
     this.loadCurrentEdition();
     this.checkIfToday();
@@ -393,8 +437,14 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   onEditionChange(editionNumber: number) {
     this.selectedEditionNumber = editionNumber;
     this.editionDropdownOpen = false;
+    this.userNavigated = true;
     this.loadCurrentEdition();
-    this.updateUrl();
+  }
+
+  /** Called when the user explicitly clicks a page thumbnail or pagination button. */
+  onPageClick(page: NewspaperPage) {
+    this.userNavigated = true;
+    this.selectPage(page);
   }
 
   editionDropdownOpen = false;
@@ -447,31 +497,39 @@ export class NewspaperComponent implements OnInit, OnDestroy {
         this.onImageLoad();
       }
     }, 0);
-    
-    // If a target section is specified, select it; otherwise select the first section
-    if (page.sections && page.sections.length > 0) {
-      let sectionToSelect = page.sections[0];
-      
-      if (targetSectionId) {
+
+    if (targetSectionId) {
+      // Section explicitly requested — find and select it
+      if (page.sections && page.sections.length > 0) {
         const targetSection = page.sections.find(s => s.id === targetSectionId);
-        if (targetSection) {
-          sectionToSelect = targetSection;
-        }
+        this.selectSection(targetSection ?? page.sections[0]);
+        setTimeout(() => {
+          const rightPanel = document.querySelector('.right-panel');
+          if (rightPanel) rightPanel.scrollTop = 0;
+        }, 0);
+      } else {
+        this.selectedSection = null;
+        this.linkedSections = [];
+        this.croppedSectionImage = null;
+        this.sectionImageLoading = false;
+        this.updateUrl();
+        this.updateMetaTags(null);
       }
-      
-      // Use selectSection to properly initialize everything including linked sections
-      this.selectSection(sectionToSelect);
-      
-      // Scroll right panel to top when page changes
-      setTimeout(() => {
-        const rightPanel = document.querySelector('.right-panel');
-        if (rightPanel) {
-          rightPanel.scrollTop = 0;
-        }
-      }, 0);
     } else {
+      // No section: clear section state and show the placeholder panel
       this.selectedSection = null;
       this.linkedSections = [];
+      this.croppedSectionImage = null;
+      this.sectionImageLoading = false;
+      this.sectionImageError = false;
+      this.showContentModal = false;
+      this.showImageModal = false;
+      setTimeout(() => {
+        const rightPanel = document.querySelector('.right-panel');
+        if (rightPanel) rightPanel.scrollTop = 0;
+      }, 0);
+      this.updateUrl();
+      this.updateMetaTags(null);
     }
   }
 
@@ -641,8 +699,9 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     this.linkedSections = [];
     this.sectionImageLoading = false;
     this.pendingMobileModal = false;
-    
-    // Update URL to remove section
+
+    // User explicitly closed the section — update URL to page/edition only
+    this.userNavigated = true;
     this.updateUrl();
     // Reset social sharing meta tags to site defaults
     this.updateMetaTags(null);
@@ -908,10 +967,9 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   }
 
   selectLinkedSection(linkedSection: NewsSection) {
-    // Navigate to the page containing the linked section
     const targetPage = this.pages.find(p => p.id === linkedSection.pageId);
     if (targetPage) {
-      // Pass the linked section ID to selectPage so it selects the right section
+      this.userNavigated = true;
       this.selectPage(targetPage, linkedSection.id);
     }
   }
@@ -1044,22 +1102,23 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   }
 
   private updateUrl() {
-    // Update URL with current date, optional edition, and section if selected
-    if (this.selectedDate) {
-      const queryParams = this.selectedEditionNumber > 1 ? { e: this.selectedEditionNumber } : {};
-      if (this.selectedSection) {
-        // Use title-based slug with section ID fallback
-        const slug = this.createSectionSlug(this.selectedSection.title, this.selectedSection.id);
-        this.router.navigate(['/', this.selectedDate, slug], { queryParams, replaceUrl: true });
-      } else if (this.selectedEditionNumber > 1) {
-        this.router.navigate(['/', this.selectedDate], { queryParams, replaceUrl: true });
-      } else {
-        // Use Location.replaceState instead of router.navigate so that
-        // paramMap does NOT fire — this prevents the cascade:
-        // paramMap → setCurrentDate → currentDate$ → loadCurrentEdition
-        // → selectPage → selectSection → updateUrl (loop back to section URL)
-        this.location.replaceState('/' + this.selectedDate + '/');
-      }
+    if (!this.selectedDate || !this.currentPage) return;
+
+    const date        = this.selectedDate;
+    const pageSlug    = this.getPageSlug(this.currentPage);
+    const editionSlug = this.getEditionSlug(this.selectedEditionNumber);
+
+    if (this.selectedSection) {
+      // Full URL: /date/page-XX/edition-XX/post-xxxx/
+      const sectionSlug = this.createSectionSlug(this.selectedSection.title, this.selectedSection.id);
+      this.location.replaceState(`/${date}/${pageSlug}/${editionSlug}/${sectionSlug}/`);
+    } else if (!this.startedFromBaseUrl || this.userNavigated) {
+      // Page + edition URL: /date/page-XX/edition-XX/
+      // (either started from a full URL path, or user has interacted)
+      this.location.replaceState(`/${date}/${pageSlug}/${editionSlug}/`);
+    } else {
+      // Keep base URL for the first visit before any user interaction
+      this.location.replaceState('/');
     }
   }
 
@@ -1126,19 +1185,24 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     }
   }
 
-  private createSectionSlug(title: string, sectionId: string): string {
+  private createSectionSlug(_: string, sectionId: string): string {
+    return sectionId.startsWith('section-')
+      ? 'post-' + sectionId.slice('section-'.length)
+      : sectionId;
+  }
+
+  private createLegacySectionSlug(title: string, sectionId: string): string {
     // Preserve Unicode characters for non-ASCII languages like Bengali
     let slug = title
       .toLowerCase()
       .trim()
-      .replace(/\s+/g, '-')           // Replace spaces with hyphens
-      .replace(/[^\w\u0980-\u09FF-]/g, '') // Keep alphanumeric, Bengali Unicode, and hyphens
-      .replace(/-+/g, '-')            // Replace multiple hyphens with single hyphen
-      .replace(/^-|-$/g, '');         // Remove leading/trailing hyphens
+      .replace(/\s+/g, '-')
+      .replace(/[^\w\u0980-\u09FF-]/g, '')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '');
 
-    // If slug is empty, use section ID
     if (!slug || slug.length === 0) {
-      slug = sectionId;
+      slug = this.createSectionSlug('', sectionId);
     }
 
     return slug;

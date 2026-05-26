@@ -22,6 +22,8 @@ export class ShareButtonsComponent {
   @Input() siteName?: string;
   @Input() showPrint = false;
   @Input() showDownload = false;
+  @Input() pageSlug: string = '';
+  @Input() editionSlug: string = '';
   @Output() printClicked = new EventEmitter<void>();
   @Output() downloadClicked = new EventEmitter<void>();
 
@@ -37,29 +39,14 @@ export class ShareButtonsComponent {
   }
 
   private getShareableUrl(section: NewsSection): string {
-    const slug = this.createSectionSlug(section.title, section.id);
-    return `${window.location.origin}/${this.selectedDate}/${slug}`;
+    const sectionSlug = this.createSectionSlug(section.title, section.id);
+    return `${window.location.origin}/${this.selectedDate}/${this.pageSlug}/${this.editionSlug}/${sectionSlug}`;
   }
 
-  private createSectionSlug(title: string, sectionId: string): string {
-    if (!title) return sectionId;
-
-    // Convert to lowercase and replace spaces with hyphens
-    // Keep Bengali/Unicode characters (U+0980-U+09FF for Bengali)
-    let slug = title.toLowerCase()
-      .trim()
-      .replace(/\s+/g, '-')
-      .replace(/[^\w\u0980-\u09FF-]/g, '')
-      .replace(/--+/g, '-')
-      .replace(/^-+/, '')
-      .replace(/-+$/, '');
-
-    // If slug is empty or only hyphens after processing, use section ID
-    if (!slug || slug.match(/^-+$/)) {
-      return sectionId;
-    }
-
-    return slug;
+  private createSectionSlug(_: string, sectionId: string): string {
+    return sectionId.startsWith('section-')
+      ? 'post-' + sectionId.slice('section-'.length)
+      : sectionId;
   }
 
   /** Strip HTML tags and truncate to maxLen characters. */

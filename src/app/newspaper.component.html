@@ -248,7 +248,7 @@
           *ngFor="let page of pages; trackBy: trackByPageId"
           class="thumbnail-item"
           [class.active]="currentPage?.id === page.id"
-          (click)="selectPage(page)"
+          (click)="onPageClick(page)"
         >
           <div class="thumbnail-image-wrapper">
             <div class="skeleton-loader" *ngIf="thumbnailsLoading[page.id]"></div>
@@ -360,7 +360,7 @@
                 *ngFor="let page of pages; trackBy: trackByPageId"
                 class="edition-option"
                 [class.active]="currentPage.id === page.id"
-                (click)="selectPage(page); pageDropdownOpen = false"
+                (click)="onPageClick(page); pageDropdownOpen = false"
               >
                 {{ getPageLabel(page) }}
               </button>
@@ -402,7 +402,7 @@
       <div class="page-pagination" *ngIf="pages.length > 1 && settings?.showPagePagination !== false">
         <button
           class="pagination-btn"
-          (click)="selectPage(pages[pages.indexOf(currentPage) - 1])"
+          (click)="onPageClick(pages[pages.indexOf(currentPage) - 1])"
           [disabled]="pages.indexOf(currentPage) === 0"
           title="Previous Page"
         >
@@ -413,7 +413,7 @@
           *ngFor="let page of pages; trackBy: trackByPageId"
           class="pagination-page-btn"
           [class.active]="currentPage.id === page.id"
-          (click)="selectPage(page)"
+          (click)="onPageClick(page)"
           [title]="ts.t('viewer.page') + ' ' + ts.toLocaleDigits(page.id)"
         >
           {{ ts.toLocaleDigits(page.id) }}
@@ -421,7 +421,7 @@
 
         <button
           class="pagination-btn"
-          (click)="selectPage(pages[pages.indexOf(currentPage) + 1])"
+          (click)="onPageClick(pages[pages.indexOf(currentPage) + 1])"
           [disabled]="pages.indexOf(currentPage) === pages.length - 1"
           title="Next Page"
         >
@@ -654,6 +654,8 @@
         *ngIf="selectedSection" 
         [section]="selectedSection" 
         [selectedDate]="selectedDate"
+        [pageSlug]="getPageSlug(currentPage!)"
+        [editionSlug]="getEditionSlug(selectedEditionNumber)"
         [logo]="settings?.logo"
         [imageUrl]="shareImageUrl || undefined"
         [siteName]="settings?.logo?.alt"
@@ -701,6 +703,8 @@
         *ngIf="selectedSection" 
         [section]="selectedSection" 
         [selectedDate]="selectedDate"
+        [pageSlug]="getPageSlug(currentPage!)"
+        [editionSlug]="getEditionSlug(selectedEditionNumber)"
         [logo]="settings?.logo"
         [imageUrl]="shareImageUrl || undefined"
         [siteName]="settings?.logo?.alt"
