@@ -142,7 +142,7 @@ export class NewspaperDataService {
   // Data loading with backwards compatibility (no caching)
   loadData(): Observable<NewspaperData> {
     return this.http.get<NewspaperData | { pages: NewspaperPage[] }>(this.apiUrl).pipe(
-      timeout(10000),
+      timeout(5000),
       catchError(() => this.http.get<NewspaperData | { pages: NewspaperPage[] }>(this.assetsUrl)),
       map((data): NewspaperData => {
         // Backwards compatibility: convert old format to new format

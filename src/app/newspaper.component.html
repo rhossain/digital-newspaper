@@ -24,7 +24,7 @@
       <div class="available-dates" *ngIf="availableDates.length > 1">
         <span class="dates-label">{{ 'header.jumpTo' | translate }}</span>
         <select [(ngModel)]="selectedDate" (change)="onDateChange()" class="dates-dropdown">
-          <option *ngFor="let date of availableDates" [value]="date">
+          <option *ngFor="let date of availableDates; trackBy: trackByDate" [value]="date">
             {{ date | localeDate:'short' }}
           </option>
         </select>
@@ -150,7 +150,7 @@
         <div class="available-dates" *ngIf="availableDates.length > 1">
           <span class="dates-label">{{ 'header.jumpTo' | translate }}</span>
           <select [(ngModel)]="selectedDate" (change)="onDateChange()" class="dates-dropdown">
-            <option *ngFor="let date of availableDates" [value]="date">
+            <option *ngFor="let date of availableDates; trackBy: trackByDate" [value]="date">
               {{ date | localeDate:'short' }}
             </option>
           </select>
@@ -245,7 +245,7 @@
 
       <div class="thumbnail-list" *ngIf="pages.length > 0">
         <div
-          *ngFor="let page of pages"
+          *ngFor="let page of pages; trackBy: trackByPageId"
           class="thumbnail-item"
           [class.active]="currentPage?.id === page.id"
           (click)="selectPage(page)"
@@ -256,6 +256,8 @@
               *ngIf="pageThumbnailSrcs[page.id]"
               [src]="pageThumbnailSrcs[page.id]"
               [alt]="'Page ' + page.id"
+              loading="lazy"
+              decoding="async"
               (load)="onThumbnailLoad(page.id)"
               (error)="onThumbnailLoad(page.id)"
               [style.opacity]="thumbnailsLoading[page.id] ? '0' : '1'"
@@ -267,7 +269,7 @@
 
       <!-- Skeleton thumbnails while API data is loading -->
       <div class="thumbnail-list" *ngIf="isLoading && pages.length === 0">
-        <div class="thumbnail-item skeleton-thumbnail-item" *ngFor="let n of [1,2,3,4]">
+        <div class="thumbnail-item skeleton-thumbnail-item" *ngFor="let n of [1,2,3,4]; trackBy: trackByIndex">
           <div class="thumbnail-image-wrapper">
             <div class="skeleton-loader"></div>
           </div>
@@ -327,7 +329,7 @@
             </div>
             <div class="edition-dropdown" *ngIf="editionsForDate.length > 1 && editionDropdownOpen">
               <button
-                *ngFor="let ed of editionsForDate"
+                *ngFor="let ed of editionsForDate; trackBy: trackByEditionKey"
                 class="edition-option"
                 [class.active]="selectedEditionNumber === (ed.edition || 1)"
                 (click)="onEditionChange(ed.edition || 1)"
@@ -355,7 +357,7 @@
             </div>
             <div class="edition-dropdown" *ngIf="pages.length > 1 && pageDropdownOpen">
               <button
-                *ngFor="let page of pages"
+                *ngFor="let page of pages; trackBy: trackByPageId"
                 class="edition-option"
                 [class.active]="currentPage.id === page.id"
                 (click)="selectPage(page); pageDropdownOpen = false"
@@ -408,7 +410,7 @@
         </button>
 
         <button
-          *ngFor="let page of pages"
+          *ngFor="let page of pages; trackBy: trackByPageId"
           class="pagination-page-btn"
           [class.active]="currentPage.id === page.id"
           (click)="selectPage(page)"
@@ -443,7 +445,7 @@
           <!-- Clickable sections overlay -->
           <div class="sections-overlay" *ngIf="imageLoaded">
             <div
-              *ngFor="let section of currentPage.sections"
+              *ngFor="let section of currentPage.sections; trackBy: trackBySectionId"
               class="clickable-section"
               [style.left.%]="section.x"
               [style.top.%]="section.y"
@@ -566,7 +568,7 @@
         <div class="linked-sections" *ngIf="linkedSections.length > 0">
           <div class="linked-section-list">
             <div 
-              *ngFor="let linkedSection of linkedSections"
+              *ngFor="let linkedSection of linkedSections; trackBy: trackByLinkedSectionId"
               class="linked-section-item"
             >
               <div class="linked-section-wrapper" (click)="openLinkedSectionImage(linkedSection)" [title]="ts.t('viewer.clickToViewFull')">
@@ -674,7 +676,7 @@
         </div>
         
         <!-- Linked Section Images -->
-        <div class="modal-image-item" *ngFor="let linkedSection of modalLinkedSections; let isLast = last">
+        <div class="modal-image-item" *ngFor="let linkedSection of modalLinkedSections; trackBy: trackByLinkedSectionId; let isLast = last">
           <img 
             [src]="getCroppedImageForSection(linkedSection)!" 
             [alt]="linkedSection.title"

@@ -7,9 +7,22 @@ import { TranslationService } from './translation.service';
  */
 @Pipe({ name: 'translate', standalone: true, pure: false })
 export class TranslatePipe implements PipeTransform {
+  private cache = new Map<string, string>();
+  private cachedLang = '';
+
   constructor(private ts: TranslationService) {}
 
   transform(key: string): string {
-    return this.ts.t(key);
+    const lang = this.ts.language;
+    if (lang !== this.cachedLang) {
+      this.cache.clear();
+      this.cachedLang = lang;
+    }
+    let value = this.cache.get(key);
+    if (value === undefined) {
+      value = this.ts.t(key);
+      this.cache.set(key, value);
+    }
+    return value;
   }
 }

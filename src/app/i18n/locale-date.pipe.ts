@@ -8,9 +8,23 @@ import { TranslationService } from './translation.service';
  */
 @Pipe({ name: 'localeDate', standalone: true, pure: false })
 export class LocaleDatePipe implements PipeTransform {
+  private cache = new Map<string, string>();
+  private cachedLang = '';
+
   constructor(private ts: TranslationService) {}
 
   transform(dateStr: string, format: 'full' | 'long' | 'short' = 'long'): string {
-    return this.ts.formatDate(dateStr, format);
+    const lang = this.ts.language;
+    if (lang !== this.cachedLang) {
+      this.cache.clear();
+      this.cachedLang = lang;
+    }
+    const cacheKey = `${dateStr}:${format}`;
+    let value = this.cache.get(cacheKey);
+    if (value === undefined) {
+      value = this.ts.formatDate(dateStr, format);
+      this.cache.set(cacheKey, value);
+    }
+    return value;
   }
 }

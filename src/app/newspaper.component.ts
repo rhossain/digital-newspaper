@@ -42,6 +42,11 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   mobileHeaderMenuOpen = false;
   pendingMobileModal = false;
   private resizeListener?: () => void;
+  private resizeDebounceTimer?: ReturnType<typeof setTimeout>;
+
+  // Performance caches
+  private cropCache = new Map<string, string>();
+  private resolvedUrlCache = new Map<string, string>();
   
   // Image loading states
   thumbnailsLoading: { [key: number]: boolean } = {};
@@ -149,12 +154,16 @@ export class NewspaperComponent implements OnInit, OnDestroy {
 
     // Detect mobile/tablet view and keep it updated on resize
     this.updateIsMobileView();
-    this.resizeListener = () => this.updateIsMobileView();
+    this.resizeListener = () => {
+      clearTimeout(this.resizeDebounceTimer);
+      this.resizeDebounceTimer = setTimeout(() => this.updateIsMobileView(), 150);
+    };
     window.addEventListener('resize', this.resizeListener);
   }
 
   ngOnDestroy() {
     this.subscriptions.forEach(sub => sub.unsubscribe());
+    clearTimeout(this.resizeDebounceTimer);
     if (this.resizeListener) {
       window.removeEventListener('resize', this.resizeListener);
     }
@@ -231,6 +240,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     this.croppedSectionImage = null;
     this.imageLoaded = false;
     this.sectionImageLoading = false;
+    this.cropCache.clear();
 
     // Populate edition tabs for current date
     this.editionsForDate = this.dataService.getEditionsByDate(this.selectedDate);
@@ -343,6 +353,14 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   checkIfToday() {
     this.isToday = this.selectedDate === this.todayDate;
   }
+
+  // --- trackBy helpers for *ngFor performance ---
+  trackByPageId(_: number, page: NewspaperPage): number { return page.id; }
+  trackBySectionId(_: number, section: NewsSection): string { return section.id; }
+  trackByDate(_: number, date: string): string { return date; }
+  trackByEditionKey(_: number, ed: NewspaperEdition): string { return `${ed.date}-${ed.edition ?? 1}`; }
+  trackByLinkedSectionId(_: number, section: NewsSection): string { return section.id; }
+  trackByIndex(index: number): number { return index; }
 
   onDateChange() {
     this.selectedEditionNumber = 1;
@@ -584,8 +602,13 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   resolveImageUrl(url: string): string {
     // Guard: PHP may serialize empty fields as [] (truthy array) instead of "".
     if (!url || typeof url !== 'string') return '';
-    if (url.startsWith('data:')) return url;
-    if (url.startsWith('http://') || url.startsWith('https://')) {
+    const cached = this.resolvedUrlCache.get(url);
+    if (cached !== undefined) return cached;
+
+    let resolved: string;
+    if (url.startsWith('data:')) {
+      resolved = url;
+    } else if (url.startsWith('http://') || url.startsWith('https://')) {
       // Normalize WordPress uploads absolute URLs to the current WP origin.
       // This fixes images after a domain migration: source_url saved with the
       // old domain is rewritten to the current WP_BASE_URL host so the browser
@@ -594,15 +617,20 @@ export class NewspaperComponent implements OnInit, OnDestroy {
         try {
           const wpOrigin = new URL(this.dataService.getApiBaseUrl()).origin;
           const pathMatch = url.match(/^https?:\/\/[^/]+(\/.*)$/);
-          if (pathMatch) return wpOrigin + pathMatch[1];
-        } catch { /* malformed URL — fall through and return as-is */ }
+          resolved = pathMatch ? wpOrigin + pathMatch[1] : url;
+        } catch { resolved = url; /* malformed URL — fall through and return as-is */ }
+      } else {
+        resolved = url;
       }
-      return url;
+    } else {
+      // Relative URL — prepend the WordPress base URL so the browser resolves it
+      // against the WP host rather than the Angular dev server.
+      const base = this.dataService.getApiBaseUrl();
+      resolved = url.startsWith('/') ? `${base}${url}` : `${base}/${url}`;
     }
-    // Relative URL — prepend the WordPress base URL so the browser resolves it
-    // against the WP host rather than the Angular dev server.
-    const base = this.dataService.getApiBaseUrl();
-    return url.startsWith('/') ? `${base}${url}` : `${base}/${url}`;
+
+    this.resolvedUrlCache.set(url, resolved);
+    return resolved;
   }
 
   closeSection() {
@@ -916,6 +944,20 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     const fullImageUrl = this.currentPage.fullImage;
     if (!fullImageUrl) return;
 
+    // Return a previously computed crop immediately without re-fetching the image.
+    const cacheKey = `${this.currentPage.id}:${section.id}`;
+    const cachedCrop = this.cropCache.get(cacheKey);
+    if (cachedCrop) {
+      this.croppedSectionImage = cachedCrop;
+      this.sectionImageLoading = false;
+      this.cdr.detectChanges();
+      if (this.pendingMobileModal) {
+        this.pendingMobileModal = false;
+        setTimeout(() => this.openImageModal(), 0);
+      }
+      return;
+    }
+
     // For cross-origin images (WP media), fetch via proxy so canvas.toDataURL() doesn't
     // throw a tainted-canvas error. The display <img> tag has no crossorigin attribute
     // so it loads fine; we only need CORS for the canvas crop operation.
@@ -954,7 +996,9 @@ export class NewspaperComponent implements OnInit, OnDestroy {
       ctx.drawImage(img, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
 
       try {
-        this.croppedSectionImage = canvas.toDataURL('image/jpeg', 0.9);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+        this.cropCache.set(cacheKey, dataUrl);
+        this.croppedSectionImage = dataUrl;
         this.sectionImageLoading = false;
         this.cdr.detectChanges();
         if (this.pendingMobileModal) {
