@@ -651,6 +651,47 @@
   margin: 16px;
 }
 
+.right-panel-loading-skeleton {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.rp-skeleton-image {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.rp-skeleton-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 4px;
+}
+
+.rp-skeleton-line {
+  position: relative;
+  height: 14px;
+  border-radius: 6px;
+  overflow: hidden;
+  width: 100%;
+}
+
+.rp-line-title {
+  height: 20px;
+  width: 75%;
+}
+
+.rp-line-short {
+  width: 55%;
+}
+
 /* Empty State Styles */
 .empty-state {
   display: flex;

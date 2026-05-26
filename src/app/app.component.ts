@@ -26,6 +26,14 @@ export class AppComponent implements OnInit {
     this.dataService.data$.subscribe(() => {
       this.injectHeadScripts();
     });
+
+    // Dismiss the static splash screen for all routes (e.g. /admin/ never
+    // mounts NewspaperComponent, so the splash must be hidden here instead).
+    const splash = this.document.getElementById('app-splash');
+    if (splash) {
+      splash.classList.add('hidden');
+      splash.addEventListener('transitionend', () => splash.remove(), { once: true });
+    }
   }
 
   /**

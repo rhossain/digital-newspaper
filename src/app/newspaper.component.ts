@@ -147,13 +147,6 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     
     this.loadNewspaperData();
 
-    // Dismiss the static splash loader now that the skeleton is taking over.
-    const splash = this.document.getElementById('app-splash');
-    if (splash) {
-      splash.classList.add('hidden');
-      splash.addEventListener('transitionend', () => splash.remove(), { once: true });
-    }
-
     // Detect mobile/tablet view and keep it updated on resize
     this.updateIsMobileView();
     this.resizeListener = () => this.updateIsMobileView();
