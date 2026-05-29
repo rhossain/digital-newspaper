@@ -6,6 +6,7 @@ import { QuillModule } from 'ngx-quill';
 import { NewspaperDataService, NewspaperPage, NewsSection, GlobalSettings, NewspaperEdition, ExportOptions, ImportOptions, ImportValidationResult, ImportPreview, BackupHistoryEntry } from '../services/newspaper-data.service';
 import { AuthService } from '../services/auth.service';
 import { ToasterService } from '../services/toaster.service';
+import { LoaderService } from '../services/loader.service';
 import { TranslationService } from '../i18n/translation.service';
 
 @Component({
@@ -202,7 +203,8 @@ export class AdminComponent implements OnInit {
     private cdr: ChangeDetectorRef,
     private toaster: ToasterService,
     private authService: AuthService,
-    private translationService: TranslationService
+    private translationService: TranslationService,
+    private loader: LoaderService
   ) {}
 
   ngOnInit() {
@@ -888,6 +890,7 @@ export class AdminComponent implements OnInit {
 
   uploadCroppedImage(imageData: string, fileName: string) {
     const file = this.dataUrlToFile(imageData, `${fileName}.jpg`);
+    this.loader.show();
     this.uploadMediaFile(file, `${fileName}.jpg`)
       .then((url) => {
         this.sectionForm = {
@@ -913,7 +916,8 @@ export class AdminComponent implements OnInit {
         };
         this.imageSourceOption = 'auto-crop';
         this.cdr.detectChanges();
-      });
+      })
+      .finally(() => this.loader.hide());
   }
 
   onImageFileSelected(event: Event) {
@@ -952,6 +956,7 @@ export class AdminComponent implements OnInit {
 
   uploadImageFile(imageData: string, fileName: string) {
     const file = this.dataUrlToFile(imageData, `${fileName}.jpg`);
+    this.loader.show();
     this.uploadMediaFile(file, `${fileName}.jpg`)
       .then((url) => {
         this.sectionForm = {
@@ -964,7 +969,8 @@ export class AdminComponent implements OnInit {
       .catch((error) => {
         console.error('Error uploading image:', error);
         this.toaster.error('Failed to upload image: ' + error.message);
-      });
+      })
+      .finally(() => this.loader.hide());
   }
 
   private dataUrlToFile(dataUrl: string, filename: string): File {
@@ -1236,6 +1242,10 @@ export class AdminComponent implements OnInit {
       return;
     }
 
+    // Give immediate feedback — large backup files can take a moment to read
+    this.loader.show();
+    this.toaster.info(`Reading backup file…`);
+
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
@@ -1257,10 +1267,17 @@ export class AdminComponent implements OnInit {
           newBaseUrl: preview?.currentUrl ?? '',
         };
 
+        this.loader.hide();
         this.showImportPreviewModal = true;
+        this.cdr.detectChanges();
       } catch {
+        this.loader.hide();
         this.toaster.error('Failed to parse JSON file. Make sure it is a valid backup.');
       }
+    };
+    reader.onerror = () => {
+      this.loader.hide();
+      this.toaster.error('Failed to read the backup file.');
     };
     reader.readAsText(file);
   }
@@ -1276,6 +1293,7 @@ export class AdminComponent implements OnInit {
   confirmImport() {
     if (!this.importParsed || !this.importValidation?.valid) return;
     this.isImporting = true;
+    this.loader.show();
 
     // Auto-backup current data before overwriting
     this.dataService.downloadExport({ exportType: 'full', exportScope: 'full' });
@@ -1285,13 +1303,34 @@ export class AdminComponent implements OnInit {
     this.dataService.saveData(mergedData).subscribe({
       next: () => {
         this.isImporting = false;
+        this.loader.hide();
         this.toaster.success('Backup imported successfully!');
         this.backupHistory = this.dataService.getBackupHistory();
         this.closeImportModal();
-        this.loadData();
+
+        // Re-fetch from server so in-memory state matches what was persisted,
+        // then navigate to the most-recent date in the imported data so the
+        // user immediately sees the imported content instead of an empty
+        // "today" edition that would otherwise be auto-created.
+        this.dataService.loadData().subscribe({
+          next: () => {
+            this.availableDates = this.dataService.getAvailableDates();
+            if (this.availableDates.length > 0) {
+              this.selectedDate = this.availableDates[0]; // most recent imported date
+            } else if (!this.availableDates.includes(this.selectedDate)) {
+              this.availableDates.unshift(this.selectedDate);
+            }
+            this.selectedEditionNumber = 1;
+            this.loadCurrentEdition();
+            this.loadSettings();
+            this.cdr.detectChanges();
+          },
+          error: (err) => console.error('Error reloading after import:', err)
+        });
       },
       error: (err) => {
         this.isImporting = false;
+        this.loader.hide();
         console.error('Import failed:', err);
         this.toaster.error('Failed to import: ' + (err.message || 'Unknown error'));
       }
@@ -1375,6 +1414,7 @@ export class AdminComponent implements OnInit {
     if (input.files && input.files[0]) {
       this.fullImageFile = input.files[0];
       const fileName = this.fullImageFile.name || `page_full_${Date.now()}.jpg`;
+      this.loader.show();
       this.uploadMediaFile(this.fullImageFile, fileName)
         .then((url) => {
           this.pageForm.fullImage = url;
@@ -1385,7 +1425,8 @@ export class AdminComponent implements OnInit {
         .catch((error) => {
           console.error('Error uploading full image:', error);
           this.toaster.error('Failed to upload full image');
-        });
+        })
+        .finally(() => this.loader.hide());
     }
   }
 
@@ -1398,6 +1439,7 @@ export class AdminComponent implements OnInit {
     if (input.files && input.files[0]) {
       this.fullImageHiResFile = input.files[0];
       const fileName = this.fullImageHiResFile.name || `page_full_hires_${Date.now()}.jpg`;
+      this.loader.show();
       this.uploadMediaFile(this.fullImageHiResFile, fileName)
         .then((url) => {
           this.pageForm.fullImageHiRes = url;
@@ -1407,7 +1449,8 @@ export class AdminComponent implements OnInit {
         .catch((error) => {
           console.error('Error uploading high-res image:', error);
           this.toaster.error('Failed to upload high-res image');
-        });
+        })
+        .finally(() => this.loader.hide());
     }
   }
 
@@ -1424,6 +1467,7 @@ export class AdminComponent implements OnInit {
     if (input.files && input.files[0]) {
       this.thumbnailFile = input.files[0];
       const fileName = this.thumbnailFile.name || `page_thumb_${Date.now()}.jpg`;
+      this.loader.show();
       this.uploadMediaFile(this.thumbnailFile, fileName)
         .then((url) => {
           this.pageForm.thumbnail = url;
@@ -1433,7 +1477,8 @@ export class AdminComponent implements OnInit {
         .catch((error) => {
           console.error('Error uploading thumbnail:', error);
           this.toaster.error('Failed to upload thumbnail');
-        });
+        })
+        .finally(() => this.loader.hide());
     }
   }
 
@@ -1539,6 +1584,7 @@ export class AdminComponent implements OnInit {
       this.logoFile = input.files[0];
       const ext = this.logoFile.name.split('.').pop()?.toLowerCase() || 'jpg';
       const fileName = `logo_${Date.now()}.${ext}`;
+      this.loader.show();
       this.uploadMediaFile(this.logoFile, fileName)
         .then((url) => {
           if (this.settingsForm.logo) {
@@ -1550,7 +1596,8 @@ export class AdminComponent implements OnInit {
         .catch((error) => {
           console.error('Error uploading logo:', error);
           this.toaster.error('Failed to upload logo');
-        });
+        })
+        .finally(() => this.loader.hide());
     }
   }
 }

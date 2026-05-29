@@ -1036,6 +1036,12 @@ HTML;
       return new WP_REST_Response(['error' => 'Invalid payload'], 400);
     }
 
+    // Strip the export metadata envelope so it is never persisted in the
+    // WordPress option.  The Angular app may accidentally send the full
+    // ExportPayload (with a "meta" key) instead of a plain NewspaperData
+    // object; removing it here keeps the stored structure clean.
+    unset($payload['meta']);
+
     $this->save_data($payload);
 
     // Start cache warming immediately via a signed loopback request so the

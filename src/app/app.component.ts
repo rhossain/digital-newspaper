@@ -2,15 +2,17 @@ import { Component, OnInit, Inject } from '@angular/core';
 import { DOCUMENT } from '@angular/common';
 import { RouterOutlet } from '@angular/router';
 import { ToasterComponent } from './toaster/toaster.component';
+import { LoaderComponent } from './components/loader/loader.component';
 import { NewspaperDataService } from './services/newspaper-data.service';
 
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [RouterOutlet, ToasterComponent],
+  imports: [RouterOutlet, ToasterComponent, LoaderComponent],
   template: `
     <router-outlet></router-outlet>
     <app-toaster></app-toaster>
+    <app-loader></app-loader>
   `,
   styles: []
 })
