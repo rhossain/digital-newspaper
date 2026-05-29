@@ -7,4 +7,4 @@
  */
 
 /** WordPress site root (no trailing slash). */
-export const WP_BASE_URL = 'https://epaper.dailysangram.com/wp/';
+export const WP_BASE_URL = 'https://epaper.dailysangram.com/wp';

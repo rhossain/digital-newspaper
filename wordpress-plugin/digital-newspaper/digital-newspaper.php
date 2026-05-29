@@ -146,6 +146,23 @@ class Digital_Newspaper_API {
     if (!is_array($data)) {
       $data = self::default_data();
     }
+    // Rewrite old nepaper URLs to epaper URLs for backward compatibility
+    $data = $this->rewrite_old_urls($data);
+    return $data;
+  }
+
+  /**
+   * Recursively rewrite old nepaper.dailysangram.com URLs to epaper.dailysangram.com
+   * This handles data that was saved with the old domain before the fix.
+   */
+  private function rewrite_old_urls($data) {
+    if (is_array($data)) {
+      return array_map([$this, 'rewrite_old_urls'], $data);
+    }
+    if (is_string($data)) {
+      // Replace nepaper with epaper in URLs
+      return str_replace('https://nepaper.dailysangram.com', 'https://epaper.dailysangram.com', $data);
+    }
     return $data;
   }
 
