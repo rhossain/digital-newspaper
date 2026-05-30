@@ -689,6 +689,10 @@ export class AdminComponent implements OnInit {
       }
 
       this.sectionForm.id = normalizedSectionId;
+
+      // Sync bidirectional links: ensure every section linked from A also links back to A,
+      // and every section no longer linked from A removes A from its links.
+      this.syncBidirectionalLinks(normalizedSectionId, section.linkedSectionIds || []);
       
       // Update local pages immediately from service (no network call)
       const edition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);
@@ -1779,6 +1783,41 @@ export class AdminComponent implements OnInit {
   }
 
   // Linked Sections Helper
+
+  /** Keeps linked sections in sync bidirectionally.
+   *  When section A links to B, B is automatically updated to link back to A.
+   *  When section A removes a link to B, B's back-link to A is also removed.
+   */
+  private syncBidirectionalLinks(currentSectionId: string, currentLinkedIds: string[]): void {
+    const edition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);
+    if (!edition) return;
+
+    edition.pages.forEach(page => {
+      page.sections.forEach(otherSection => {
+        if (otherSection.id === currentSectionId) return;
+
+        const shouldBeLinked = currentLinkedIds.includes(otherSection.id);
+        const isAlreadyLinked = otherSection.linkedSectionIds?.includes(currentSectionId) ?? false;
+
+        if (shouldBeLinked && !isAlreadyLinked) {
+          // Add back-link
+          const updated: NewsSection = {
+            ...otherSection,
+            linkedSectionIds: [...(otherSection.linkedSectionIds || []), currentSectionId]
+          };
+          this.dataService.updateSection(page.id, otherSection.id, updated, this.selectedDate, this.selectedEditionNumber);
+        } else if (!shouldBeLinked && isAlreadyLinked) {
+          // Remove back-link
+          const updated: NewsSection = {
+            ...otherSection,
+            linkedSectionIds: (otherSection.linkedSectionIds || []).filter(id => id !== currentSectionId)
+          };
+          this.dataService.updateSection(page.id, otherSection.id, updated, this.selectedDate, this.selectedEditionNumber);
+        }
+      });
+    });
+  }
+
   getAvailableSections(): NewsSection[] {
     const sections: NewsSection[] = [];
     this.pages.forEach(page => {
