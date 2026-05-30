@@ -1016,14 +1016,59 @@ small {
   justify-content: center;
 }
 
+/* Wrapper sized exactly to the image so % overlays align correctly */
+.lightbox-img-wrap {
+  position: relative;
+  display: inline-block;
+  line-height: 0;
+}
+
 .lightbox-content img {
-  max-width: 100%;
+  max-width: 90vw;
   max-height: 90vh;
-  object-fit: contain;
+  display: block;
   border-radius: 8px;
   box-shadow: 0 8px 48px rgba(0, 0, 0, 0.6);
-  display: block;
   user-select: none;
+}
+
+/* ── Preview section overlays ─────────────────────────────────────── */
+.preview-section-box {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px solid var(--color-primary, #1976d2);
+  background: rgba(25, 118, 210, 0.12);
+  border-radius: 2px;
+  pointer-events: all;
+  cursor: default;
+  transition: background 0.15s, border-color 0.15s;
+  overflow: hidden;
+}
+.preview-section-box:hover {
+  background: rgba(25, 118, 210, 0.22);
+  border-color: #42a5f5;
+}
+.preview-sec-label {
+  position: absolute;
+  top: 3px; left: 4px; right: 4px;
+  font-size: 0.6rem; font-weight: 700;
+  color: #fff;
+  background: rgba(25, 118, 210, 0.85);
+  border-radius: 3px;
+  padding: 1px 5px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.6);
+  pointer-events: none;
+}
+.preview-sec-actions {
+  position: absolute; bottom: 4px; right: 4px; left: 4px;
+  display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 3px;
+  opacity: 0; transition: opacity 0.18s;
+  pointer-events: none;
+}
+.preview-section-box:hover .preview-sec-actions {
+  opacity: 1;
+  pointer-events: all;
 }
 
 .lightbox-close {
@@ -1164,120 +1209,319 @@ small {
   margin-left: auto;
 }
 
-/* Image Cropper */
+/* ═══════════════════════════════════════════════════════════════════
+   Premium Image Cropper
+═══════════════════════════════════════════════════════════════════ */
+
+/* Overlay backdrop */
 .cropper-overlay {
-  background: rgba(0, 0, 0, 0.8);
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(4px);
 }
 
-.modal-header.cropper-toolbar {
-  padding: 0.4rem 1rem;
+/* Modal shell */
+.cropper-modal {
+  display: flex;
+  flex-direction: column;
+  max-height: 95vh;
+  width: min(1260px, 97vw);
+  padding: 0;
+  overflow: hidden;
+  border-radius: 14px;
+  box-shadow: 0 24px 80px rgba(0,0,0,0.55);
+}
+
+/* ── Toolbar ─────────────────────────────────────────────────────── */
+.cropper-toolbar {
+  display: flex;
+  align-items: center;
   gap: 0.75rem;
-  flex-wrap: nowrap;
-  min-height: unset;
-}
-
-.modal-header.cropper-toolbar h2 {
-  font-size: 1rem;
-  white-space: nowrap;
+  padding: 0.55rem 1rem;
+  background: linear-gradient(135deg, #1a1f2e 0%, #232b3e 100%);
+  border-bottom: 1px solid rgba(255,255,255,0.07);
   flex-shrink: 0;
+  flex-wrap: wrap;
 }
 
-.cropper-hint {
-  font-size: 0.75rem;
-  color: var(--color-primary-darker);
-  white-space: nowrap;
-  flex-shrink: 0;
-  opacity: 0.85;
-}
-
-.cropper-toolbar .cropper-zoom {
+.cropper-toolbar-left {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  flex: 1;
-  min-width: 0;
-}
-
-.cropper-toolbar .cropper-zoom label {
-  font-size: 0.75rem;
-  white-space: nowrap;
   flex-shrink: 0;
 }
-
-.cropper-toolbar .cropper-zoom input[type="range"] {
-  flex: 1;
-  min-width: 80px;
-  max-width: 180px;
-  height: 4px;
-  cursor: pointer;
+.cropper-title-icon { font-size: 1.1rem; }
+.cropper-title-block { display: flex; flex-direction: column; line-height: 1.2; }
+.cropper-title { font-size: 0.875rem; font-weight: 700; color: #e2e8f0; white-space: nowrap; }
+.cropper-section-badge {
+  font-size: 0.65rem; color: #94a3b8;
+  background: rgba(255,255,255,0.06);
+  border-radius: 4px; padding: 1px 5px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 140px;
 }
 
-.cropper-toolbar .zoom-buttons {
-  display: flex;
-  gap: 0.25rem;
+/* Aspect ratio group */
+.cropper-aspect-group {
+  display: flex; align-items: center; gap: 3px;
+  background: rgba(255,255,255,0.05);
+  border-radius: 7px; padding: 3px 6px;
   flex-shrink: 0;
 }
-
-.cropper-toolbar .zoom-buttons .btn {
-  padding: 0.1rem 0.4rem;
-  font-size: 0.8rem;
-  line-height: 1.2;
-  min-width: 22px;
+.group-label {
+  font-size: 0.6rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.05em; color: #64748b; margin-right: 2px;
+}
+.aspect-btn {
+  padding: 2px 7px; font-size: 0.7rem; font-weight: 600;
+  background: transparent; border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 5px; color: #94a3b8; cursor: pointer;
+  transition: all 0.15s;
+}
+.aspect-btn:hover { background: rgba(255,255,255,0.1); color: #e2e8f0; }
+.aspect-btn.active {
+  background: var(--color-primary, #1976d2);
+  border-color: var(--color-primary, #1976d2);
+  color: #fff;
 }
 
-.cropper-body {
-  padding: 0.5rem;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
+/* Tools group */
+.cropper-tools {
+  display: flex; align-items: center; gap: 4px; flex-shrink: 0;
+}
+.tool-btn {
+  display: flex; align-items: center; gap: 4px;
+  padding: 3px 9px; font-size: 0.7rem; font-weight: 600;
+  background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 6px; color: #94a3b8; cursor: pointer; transition: all 0.15s;
+}
+.tool-btn:hover:not([disabled]) { background: rgba(255,255,255,0.14); color: #e2e8f0; }
+.tool-btn.active { background: rgba(25,118,210,0.3); border-color: rgba(25,118,210,0.5); color: #90caf9; }
+.tool-btn[disabled] { opacity: 0.35; cursor: not-allowed; }
+
+/* Zoom group */
+.cropper-zoom {
+  display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0;
+}
+.zoom-step-btn {
+  width: 22px; height: 22px; border-radius: 50%;
+  background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12);
+  color: #e2e8f0; font-size: 1rem; line-height: 1; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: background 0.15s;
+}
+.zoom-step-btn:hover { background: rgba(255,255,255,0.18); }
+.zoom-pct { font-size: 0.7rem; font-weight: 700; color: #94a3b8; white-space: nowrap; min-width: 32px; text-align: center; }
+.cropper-zoom input[type="range"] {
+  flex: 1; min-width: 60px; max-width: 150px; height: 4px;
+  cursor: pointer; accent-color: var(--color-primary, #1976d2);
 }
 
-.cropper-container {
-  position: relative;
-  display: block;
-  width: 100%;
-  background: var(--color-bg-muted);
-  border-radius: 8px;
-  overflow: auto;
+/* Close */
+.cropper-modal .btn-close {
+  margin-left: auto; flex-shrink: 0;
+  background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 6px; color: #94a3b8; font-size: 1.2rem;
+  width: 28px; height: 28px; display: flex; align-items: center; justify-content: center;
+  cursor: pointer; transition: all 0.15s;
+}
+.cropper-modal .btn-close:hover { background: rgba(220,38,38,0.25); color: #fca5a5; }
+
+/* ── Hint bar ─────────────────────────────────────────────────────── */
+.cropper-hint-bar {
+  display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+  padding: 5px 14px; background: rgba(0,0,0,0.25);
+  font-size: 0.68rem; color: #64748b;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  flex-shrink: 0;
+}
+.hint-sep { color: rgba(255,255,255,0.15); }
+
+/* ── Layout: canvas + side panel ─────────────────────────────────── */
+.cropper-layout {
+  display: flex; flex: 1; min-height: 0; overflow: hidden;
 }
 
+/* Canvas area */
+.cropper-canvas-wrap {
+  flex: 1; min-width: 0; overflow: auto;
+  background: #0f1420;
+}
 .cropper-stage {
   position: relative;
-  display: block;
-  width: 100%;
+  display: inline-block;
   transform-origin: top left;
-  overflow: visible;
-  border: 1.5px solid #d1d5db;
-  border-radius: 4px;
+  line-height: 0;
+  flex-shrink: 0;
 }
 
-.cropper-container img {
-  width: 100%;
-  height: auto;
-  display: block;
-  user-select: none;
-  position: relative;
-  z-index: 1;
+/* ── Dim mask ─────────────────────────────────────────────────────── */
+.crop-dim-top, .crop-dim-bottom, .crop-dim-left, .crop-dim-right {
+  position: absolute; background: rgba(0,0,0,0.5); pointer-events: none; z-index: 2;
 }
 
-.crop-overlay {
+/* ── Grid lines ───────────────────────────────────────────────────── */
+.crop-global-grid {
+  position: absolute; inset: 0; pointer-events: none; z-index: 5;
+}
+.grid-line {
   position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  cursor: crosshair;
-  z-index: 2;
+  background: var(--color-primary, #1976d2);
+  opacity: 0.75;
+  box-shadow: 0 0 4px rgba(0, 0, 0, 0.6);
+}
+.grid-v { top: 0; bottom: 0; width: 2px; }
+.grid-h { left: 0; right: 0; height: 2px; }
+
+/* ── Existing section overlays ────────────────────────────────────── */
+.existing-section-box {
+  position: absolute;
+  border: 1.5px solid rgba(180, 180, 180, 0.55);
+  background: rgba(30, 30, 30, 0.35);
+  pointer-events: all;
+  z-index: 4; /* sits above overlay (z-index 3) → blocks new-draw in locked areas */
+  box-sizing: border-box;
+  transition: background 0.15s, border-color 0.15s;
+  overflow: hidden;
+  /* Subtle cross-hatch pattern to reinforce "locked / disabled" feel */
+  background-image: repeating-linear-gradient(
+    135deg,
+    rgba(255,255,255,0.03) 0px, rgba(255,255,255,0.03) 1px,
+    transparent 1px, transparent 8px
+  );
+}
+/* During an active crop drag the section boxes must be transparent so
+   mousemove continues to reach the crop-overlay beneath them. */
+.existing-section-box.dragging { pointer-events: none; }
+.existing-section-box:hover {
+  border-color: rgba(220, 220, 220, 0.8);
+  background: rgba(50, 50, 50, 0.5);
+  background-image: none;
+}
+.section-box-label {
+  position: absolute; top: 2px; left: 3px; right: 3px;
+  font-size: 0.6rem; font-weight: 700; color: #d1d5db;
+  background: rgba(0,0,0,0.65); border-radius: 3px;
+  padding: 1px 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  pointer-events: none;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.9);
+}
+.section-box-actions {
+  position: absolute; bottom: 4px; right: 4px; left: 4px;
+  display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 3px;
+  opacity: 0; transition: opacity 0.18s;
+}
+.existing-section-box:hover .section-box-actions { opacity: 1; }
+.sec-btn {
+  display: flex; align-items: center; gap: 3px;
+  padding: 4px 4px; font-size: 0.67rem; font-weight: 700;
+  border-radius: 5px; cursor: pointer; border: 1px solid transparent;
+  transition: all 0.15s; line-height: 1; white-space: nowrap;
+  flex-shrink: 0;
+}
+.sec-btn svg { flex-shrink: 0; }
+.sec-edit-btn {
+  background: rgba(37, 99, 235, 0.9);
+  border-color: rgba(96, 165, 250, 0.5);
+  color: #fff;
+}
+.sec-edit-btn:hover { background: #1d4ed8; border-color: #93c5fd; }
+.sec-del-btn {
+  background: rgba(185, 28, 28, 0.9);
+  border-color: rgba(252, 165, 165, 0.4);
+  color: #fff;
+}
+.sec-del-btn:hover { background: #991b1b; border-color: #fca5a5; }
+
+/* ── Main interaction overlay ─────────────────────────────────────── */
+.crop-overlay {
+  position: absolute; inset: 0; z-index: 3;
 }
 
+/* ── Active crop selection box ────────────────────────────────────── */
 .crop-selection {
   position: absolute;
-  border: 1px solid var(--color-crop);
-  background: var(--color-crop-bg);
+  border: 2px solid rgba(255,255,255,0.9);
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.5);
   pointer-events: none;
-  z-index: 3;
+  z-index: 6;
   box-sizing: border-box;
 }
+
+/* Thirds inside selection */
+.crop-sel-thirds { position: absolute; inset: 0; overflow: hidden; }
+.sel-line {
+  position: absolute;
+  background: var(--color-primary, #1976d2);
+  opacity: 0.8;
+  box-shadow: 0 0 4px rgba(0, 0, 0, 0.5);
+}
+.sel-v { top: 0; bottom: 0; width: 2px; }
+.sel-h { left: 0; right: 0; height: 2px; }
+
+/* Corner L-brackets */
+.crop-corner {
+  position: absolute; width: 14px; height: 14px;
+  border-color: #fff; border-style: solid; box-sizing: border-box;
+}
+.crop-corner-tl { top: -1px; left: -1px; border-width: 3px 0 0 3px; }
+.crop-corner-tr { top: -1px; right: -1px; border-width: 3px 3px 0 0; }
+.crop-corner-bl { bottom: -1px; left: -1px; border-width: 0 0 3px 3px; }
+.crop-corner-br { bottom: -1px; right: -1px; border-width: 0 3px 3px 0; }
+
+/* ── Resize handles ───────────────────────────────────────────────── */
+.resize-handle {
+  position: absolute;
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid var(--color-primary, #1976d2);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.5);
+  z-index: 9;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  box-sizing: border-box;
+}
+/* Cardinal handles (edge midpoints) are slightly smaller */
+.rh-n, .rh-s, .rh-e, .rh-w { width: 8px; height: 8px; border-radius: 3px; }
+
+/* ── Footer ───────────────────────────────────────────────────────── */
+.cropper-footer {
+  display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+  padding: 8px 14px;
+  background: #131a28;
+  border-top: 1px solid rgba(255,255,255,0.06);
+  flex-shrink: 0;
+}
+.crop-info-row {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap; flex: 1;
+}
+.info-chip {
+  display: flex; align-items: center; gap: 4px;
+  background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 5px; padding: 3px 8px; font-size: 0.72rem;
+}
+.chip-k {
+  font-size: 0.6rem; font-weight: 800; text-transform: uppercase;
+  color: #fff; background: var(--color-primary, #1976d2);
+  padding: 1px 5px; border-radius: 3px; letter-spacing: 0.04em;
+}
+.chip-v { color: #e2e8f0; font-family: monospace; font-weight: 600; }
+.info-chip-px .chip-k { background: #0891b2; }
+.info-chip-mode .chip-k { background: #7c3aed; }
+.crop-no-sel { flex: 1; font-size: 0.78rem; color: #475569; font-style: italic; }
+
+.cropper-footer-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.cropper-footer-actions .btn { display: flex; align-items: center; gap: 5px; }
+
+/* Responsive */
+@media (max-width: 900px) {
+  .cropper-aspect-group { display: none; }
+}
+@media (max-width: 600px) {
+  .cropper-hint-bar { display: none; }
+  .cropper-tools { display: none; }
+}
+
+/* Legacy selectors kept for section-crop-preview used outside cropper */
 
 .crop-info {
   display: flex;

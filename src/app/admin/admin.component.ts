@@ -1,4 +1,4 @@
-import { Component, OnInit, ViewChild, ElementRef, ChangeDetectorRef } from '@angular/core';
+import { Component, OnInit, ViewChild, ElementRef, ChangeDetectorRef, HostListener } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
@@ -174,7 +174,7 @@ export class AdminComponent implements OnInit {
   // ─── Backup history
   backupHistory: BackupHistoryEntry[] = [];
 
-  // Image Cropper
+  // Image Cropper – base state
   cropperImageLoaded = false;
   cropperStartX = 0;
   cropperStartY = 0;
@@ -185,16 +185,51 @@ export class AdminComponent implements OnInit {
   imageNaturalHeight = 0;
   cropperZoom = 1;
 
+  // Enhanced Cropper – interaction
+  cropMode: 'idle' | 'drawing' | 'moving' | 'resizing' = 'idle';
+  activeResizeHandle: string | null = null;
+  dragStartMouseX = 0;
+  dragStartMouseY = 0;
+  dragStartBox = { x1: 0, y1: 0, x2: 0, y2: 0 };
+  cropperCursor = 'crosshair';
+  // Enhanced Cropper – options
+  cropAspectRatio: number | null = null;
+  showCropGrid = false;
+  // Enhanced Cropper – undo/redo
+  cropUndoStack: Array<{ sx: number; sy: number; ex: number; ey: number }> = [];
+  cropRedoStack: Array<{ sx: number; sy: number; ex: number; ey: number }> = [];
+
   // Image preview lightbox
   previewPageUrl: string | null = null;
+  previewPage: any = null;
 
   openPagePreview(page: any, event: MouseEvent) {
     event.stopPropagation();
+    this.previewPage = page;
     this.previewPageUrl = page.fullImage || page.thumbnail || null;
   }
 
   closePagePreview() {
     this.previewPageUrl = null;
+    this.previewPage = null;
+  }
+
+  previewEditSection(sec: NewsSection) {
+    this.selectPage(this.previewPage);
+    this.editSection(sec);
+    this.closePagePreview();
+    this.cdr.detectChanges();
+  }
+
+  previewDeleteSection(sec: NewsSection) {
+    if (!confirm(`Delete section "${sec.title}"?`)) return;
+    this.dataService.deleteSection(this.previewPage.id, sec.id, this.selectedDate, this.selectedEditionNumber);
+    const edition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);
+    if (edition) this.pages = edition.pages;
+    this.previewPage = this.pages.find((p: any) => p.id === this.previewPage?.id) ?? null;
+    if (!this.previewPage) { this.closePagePreview(); return; }
+    this.toaster.success('Section deleted.');
+    this.cdr.detectChanges();
   }
 
   constructor(
@@ -262,6 +297,7 @@ export class AdminComponent implements OnInit {
         } else {
           this.authError = `Login failed (HTTP ${err.status}). Check that the Digital Newspaper plugin is active and WordPress Permalinks are set to "Post name".`;
         }
+        this.cdr.detectChanges();
         this.toaster.error(this.authError);
       }
     });
@@ -709,7 +745,8 @@ export class AdminComponent implements OnInit {
     };
   }
 
-  // Image Cropper
+  // ─── Image Cropper ──────────────────────────────────────────────
+
   openImageCropper() {
     if (!this.selectedPage?.fullImage) {
       alert('Please save the page with a full image URL first');
@@ -718,6 +755,16 @@ export class AdminComponent implements OnInit {
     this.showImageCropper = true;
     this.cropperImageLoaded = false;
     this.cropperZoom = 1;
+    this.cropMode = 'idle';
+    this.activeResizeHandle = null;
+    this.cropUndoStack = [];
+    this.cropRedoStack = [];
+    this.cropperCursor = 'crosshair';
+    // Box will be restored in onCropperImageLoad from sectionForm
+    this.cropperStartX = 0;
+    this.cropperStartY = 0;
+    this.cropperEndX = 0;
+    this.cropperEndY = 0;
   }
 
   onCropperImageLoad(event: Event) {
@@ -725,81 +772,437 @@ export class AdminComponent implements OnInit {
     this.imageNaturalWidth = img.naturalWidth;
     this.imageNaturalHeight = img.naturalHeight;
     this.cropperImageLoaded = true;
-    this.cdr.detectChanges();
+    this.cdr.detectChanges(); // render side-panel / stage first
+    // Defer reading clientWidth until the layout has settled after detectChanges.
+    // We prefer clientWidth (CSS layout, same as the draw coordinate space) and
+    // fall back to naturalWidth (always available immediately after load).
+    requestAnimationFrame(() => {
+      if ((this.sectionForm.width ?? 0) > 0 && (this.sectionForm.height ?? 0) > 0) {
+        const w = img.clientWidth  || img.naturalWidth;
+        const h = img.clientHeight || img.naturalHeight;
+        if (w > 0 && h > 0) {
+          // Convert stored float percentages back to display-pixel positions.
+          // Using the same reference (clientWidth) that calculateCropCoordinates
+          // used when saving, so the round-trip is lossless.
+          this.cropperStartX = ((this.sectionForm.x ?? 0) / 100) * w;
+          this.cropperStartY = ((this.sectionForm.y ?? 0) / 100) * h;
+          this.cropperEndX   = (((this.sectionForm.x ?? 0) + (this.sectionForm.width  ?? 0)) / 100) * w;
+          this.cropperEndY   = (((this.sectionForm.y ?? 0) + (this.sectionForm.height ?? 0)) / 100) * h;
+          this.cdr.detectChanges();
+        }
+      }
+    });
   }
 
   onCropperMouseDown(event: MouseEvent) {
-    if (!this.cropperImageRef) {
-      return;
+    if (!this.cropperImageRef) return;
+    const mx = event.offsetX ?? 0;
+    const my = event.offsetY ?? 0;
+
+    if (this.hasCropBox()) {
+      const handle = this.getHandleAtPoint(mx, my);
+      if (handle) {
+        this.pushCropUndo();
+        this.cropMode = 'resizing';
+        this.activeResizeHandle = handle;
+        this.dragStartMouseX = mx;
+        this.dragStartMouseY = my;
+        const norm = this.getCropNormalized();
+        this.dragStartBox = { x1: norm.x1, y1: norm.y1, x2: norm.x2, y2: norm.y2 };
+        this.cdr.detectChanges();
+        return;
+      }
+      if (this.isInsideCropBox(mx, my)) {
+        this.pushCropUndo();
+        this.cropMode = 'moving';
+        this.dragStartMouseX = mx;
+        this.dragStartMouseY = my;
+        const norm = this.getCropNormalized();
+        this.dragStartBox = { x1: norm.x1, y1: norm.y1, x2: norm.x2, y2: norm.y2 };
+        this.cdr.detectChanges();
+        return;
+      }
     }
-    
-    const zoom = this.cropperZoom || 1;
-    this.cropperStartX = event.offsetX ?? 0;
-    this.cropperStartY = event.offsetY ?? 0;
-    this.cropperEndX = this.cropperStartX;
-    this.cropperEndY = this.cropperStartY;
+
+    this.pushCropUndo();
+    this.cropMode = 'drawing';
     this.isDrawing = true;
-    
+    this.cropperStartX = mx;
+    this.cropperStartY = my;
+    this.cropperEndX = mx;
+    this.cropperEndY = my;
     this.cdr.detectChanges();
   }
 
   onCropperMouseMove(event: MouseEvent) {
-    if (!this.isDrawing || !this.cropperImageRef) return;
-    
-    const zoom = this.cropperZoom || 1;
-    this.cropperEndX = event.offsetX ?? 0;
-    this.cropperEndY = event.offsetY ?? 0;
-    
-    
-    // Only calculate coordinates in real-time, don't generate image yet
-    this.calculateCropCoordinates();
+    if (!this.cropperImageRef) return;
+    const mx = event.offsetX ?? 0;
+    const my = event.offsetY ?? 0;
+
+    if (this.cropMode === 'drawing') {
+      this.cropperEndX = mx;
+      this.cropperEndY = my;
+      if (this.cropAspectRatio) this.applyAspectRatioConstraint();
+      this.calculateCropCoordinates();
+    } else if (this.cropMode === 'moving') {
+      const img = this.cropperImageRef.nativeElement;
+      const imgW = img.clientWidth;
+      const imgH = img.clientHeight;
+      const dx = mx - this.dragStartMouseX;
+      const dy = my - this.dragStartMouseY;
+      const bw = this.dragStartBox.x2 - this.dragStartBox.x1;
+      const bh = this.dragStartBox.y2 - this.dragStartBox.y1;
+      this.cropperStartX = Math.max(0, Math.min(this.dragStartBox.x1 + dx, imgW - bw));
+      this.cropperStartY = Math.max(0, Math.min(this.dragStartBox.y1 + dy, imgH - bh));
+      this.cropperEndX = this.cropperStartX + bw;
+      this.cropperEndY = this.cropperStartY + bh;
+      this.calculateCropCoordinates();
+    } else if (this.cropMode === 'resizing') {
+      this.handleResize(mx, my);
+    } else {
+      this.updateCropCursor(mx, my);
+    }
     this.cdr.detectChanges();
   }
 
   onCropperMouseUp() {
-    if (!this.isDrawing) return;
+    if (this.cropMode === 'idle') return;
+    this.cropMode = 'idle';
     this.isDrawing = false;
+    this.activeResizeHandle = null;
     this.calculateCropCoordinates();
     this.cdr.detectChanges();
   }
 
+  onCropperMouseLeave() {
+    if (this.cropMode !== 'idle') this.onCropperMouseUp();
+  }
+
+  onCropperTouchStart(event: TouchEvent) {
+    event.preventDefault();
+    const touch = event.touches[0];
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    const zoom = this.cropperZoom || 1;
+    this.onCropperMouseDown({ offsetX: (touch.clientX - rect.left) / zoom, offsetY: (touch.clientY - rect.top) / zoom } as unknown as MouseEvent);
+  }
+
+  onCropperTouchMove(event: TouchEvent) {
+    event.preventDefault();
+    const touch = event.touches[0];
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    const zoom = this.cropperZoom || 1;
+    this.onCropperMouseMove({ offsetX: (touch.clientX - rect.left) / zoom, offsetY: (touch.clientY - rect.top) / zoom } as unknown as MouseEvent);
+  }
+
+  onCropperTouchEnd(event: TouchEvent) {
+    event.preventDefault();
+    this.onCropperMouseUp();
+  }
+
   calculateCropCoordinates() {
     if (!this.cropperImageRef) return;
-    
     const img = this.cropperImageRef.nativeElement;
-    const imgWidth = img.clientWidth;
-    const imgHeight = img.clientHeight;
-    
-    // Normalize coordinates
+    // Use clientWidth (= naturalWidth for inline-block stage) for coordinate
+    // normalisation. Fall back to naturalWidth in case layout hasn't settled.
+    const imgWidth  = img.clientWidth  || img.naturalWidth;
+    const imgHeight = img.clientHeight || img.naturalHeight;
+    if (!imgWidth || !imgHeight) return;
     const x1 = Math.min(this.cropperStartX, this.cropperEndX);
     const y1 = Math.min(this.cropperStartY, this.cropperEndY);
     const x2 = Math.max(this.cropperStartX, this.cropperEndX);
     const y2 = Math.max(this.cropperStartY, this.cropperEndY);
-    
-    // Convert to percentages and ensure sectionForm is updated
-    const newX = Math.round((x1 / imgWidth) * 100);
-    const newY = Math.round((y1 / imgHeight) * 100);
-    const newWidth = Math.round(((x2 - x1) / imgWidth) * 100);
-    const newHeight = Math.round(((y2 - y1) / imgHeight) * 100);
-    
-    // Update sectionForm coordinates only
+    // Store as high-precision floats (4 d.p.) to avoid rounding drift on restore.
+    // For a 3000-px image, 4 d.p. = 0.003 px error — effectively lossless.
+    const round4 = (v: number) => parseFloat(v.toFixed(4));
     this.sectionForm = {
       ...this.sectionForm,
-      x: newX,
-      y: newY,
-      width: newWidth,
-      height: newHeight
+      x:      round4(Math.max(0, (x1 / imgWidth)  * 100)),
+      y:      round4(Math.max(0, (y1 / imgHeight) * 100)),
+      width:  round4(Math.min(100, ((x2 - x1) / imgWidth)  * 100)),
+      height: round4(Math.min(100, ((y2 - y1) / imgHeight) * 100))
     };
-    
+  }
+
+  // ─── Crop helper methods ───────────────────────────────────────────
+
+  getCropNormalized(): { x1: number; y1: number; x2: number; y2: number; w: number; h: number } {
+    const x1 = Math.min(this.cropperStartX, this.cropperEndX);
+    const y1 = Math.min(this.cropperStartY, this.cropperEndY);
+    const x2 = Math.max(this.cropperStartX, this.cropperEndX);
+    const y2 = Math.max(this.cropperStartY, this.cropperEndY);
+    return { x1, y1, x2, y2, w: x2 - x1, h: y2 - y1 };
+  }
+
+  hasCropBox(): boolean {
+    return Math.abs(this.cropperEndX - this.cropperStartX) > 5 &&
+           Math.abs(this.cropperEndY - this.cropperStartY) > 5;
+  }
+
+  private getHandleAtPoint(mx: number, my: number): string | null {
+    if (!this.hasCropBox()) return null;
+    const { x1, y1, x2, y2 } = this.getCropNormalized();
+    const cx = (x1 + x2) / 2;
+    const cy = (y1 + y2) / 2;
+    const R = 8;
+    const handles = [
+      { id: 'nw', x: x1, y: y1 }, { id: 'n', x: cx, y: y1 }, { id: 'ne', x: x2, y: y1 },
+      { id: 'e', x: x2, y: cy },
+      { id: 'se', x: x2, y: y2 }, { id: 's', x: cx, y: y2 }, { id: 'sw', x: x1, y: y2 },
+      { id: 'w', x: x1, y: cy },
+    ];
+    for (const h of handles) {
+      if (Math.abs(mx - h.x) <= R && Math.abs(my - h.y) <= R) return h.id;
+    }
+    return null;
+  }
+
+  private isInsideCropBox(mx: number, my: number): boolean {
+    if (!this.hasCropBox()) return false;
+    const { x1, y1, x2, y2 } = this.getCropNormalized();
+    return mx > x1 + 8 && mx < x2 - 8 && my > y1 + 8 && my < y2 - 8;
+  }
+
+  private updateCropCursor(mx: number, my: number) {
+    const handle = this.getHandleAtPoint(mx, my);
+    if (handle) {
+      const cursors: Record<string, string> = {
+        nw: 'nw-resize', n: 'n-resize', ne: 'ne-resize',
+        e: 'e-resize', se: 'se-resize', s: 's-resize',
+        sw: 'sw-resize', w: 'w-resize'
+      };
+      this.cropperCursor = cursors[handle] ?? 'pointer';
+    } else if (this.isInsideCropBox(mx, my)) {
+      this.cropperCursor = 'move';
+    } else {
+      this.cropperCursor = 'crosshair';
+    }
+  }
+
+  private handleResize(mx: number, my: number) {
+    if (!this.activeResizeHandle || !this.cropperImageRef) return;
+    const img = this.cropperImageRef.nativeElement;
+    const imgW = img.clientWidth;
+    const imgH = img.clientHeight;
+    const dx = mx - this.dragStartMouseX;
+    const dy = my - this.dragStartMouseY;
+    const { x1, y1, x2, y2 } = this.dragStartBox;
+    const MIN = 10;
+    let nx1 = x1, ny1 = y1, nx2 = x2, ny2 = y2;
+
+    switch (this.activeResizeHandle) {
+      case 'nw': nx1 = Math.max(0, Math.min(x1 + dx, x2 - MIN)); ny1 = Math.max(0, Math.min(y1 + dy, y2 - MIN)); break;
+      case 'n':  ny1 = Math.max(0, Math.min(y1 + dy, y2 - MIN)); break;
+      case 'ne': nx2 = Math.min(imgW, Math.max(x2 + dx, x1 + MIN)); ny1 = Math.max(0, Math.min(y1 + dy, y2 - MIN)); break;
+      case 'e':  nx2 = Math.min(imgW, Math.max(x2 + dx, x1 + MIN)); break;
+      case 'se': nx2 = Math.min(imgW, Math.max(x2 + dx, x1 + MIN)); ny2 = Math.min(imgH, Math.max(y2 + dy, y1 + MIN)); break;
+      case 's':  ny2 = Math.min(imgH, Math.max(y2 + dy, y1 + MIN)); break;
+      case 'sw': nx1 = Math.max(0, Math.min(x1 + dx, x2 - MIN)); ny2 = Math.min(imgH, Math.max(y2 + dy, y1 + MIN)); break;
+      case 'w':  nx1 = Math.max(0, Math.min(x1 + dx, x2 - MIN)); break;
+    }
+    if (this.cropAspectRatio && ['nw', 'ne', 'se', 'sw'].includes(this.activeResizeHandle)) {
+      const newW = nx2 - nx1;
+      const targetH = newW / this.cropAspectRatio;
+      if (this.activeResizeHandle === 'nw' || this.activeResizeHandle === 'ne') {
+        ny1 = Math.max(0, ny2 - targetH);
+      } else {
+        ny2 = Math.min(imgH, ny1 + targetH);
+      }
+    }
+    this.cropperStartX = nx1; this.cropperStartY = ny1;
+    this.cropperEndX = nx2; this.cropperEndY = ny2;
+    this.calculateCropCoordinates();
+  }
+
+  private applyAspectRatioConstraint() {
+    if (!this.cropAspectRatio) return;
+    const w = Math.abs(this.cropperEndX - this.cropperStartX);
+    const h = w / this.cropAspectRatio;
+    const dirY = this.cropperEndY >= this.cropperStartY ? 1 : -1;
+    this.cropperEndY = this.cropperStartY + dirY * h;
+  }
+
+  pushCropUndo() {
+    this.cropUndoStack.push({
+      sx: this.cropperStartX, sy: this.cropperStartY,
+      ex: this.cropperEndX, ey: this.cropperEndY
+    });
+    if (this.cropUndoStack.length > 30) this.cropUndoStack.shift();
+    this.cropRedoStack = [];
+  }
+
+  undoCrop() {
+    if (!this.cropUndoStack.length) return;
+    this.cropRedoStack.push({ sx: this.cropperStartX, sy: this.cropperStartY, ex: this.cropperEndX, ey: this.cropperEndY });
+    const prev = this.cropUndoStack.pop()!;
+    this.cropperStartX = prev.sx; this.cropperStartY = prev.sy;
+    this.cropperEndX = prev.ex; this.cropperEndY = prev.ey;
+    this.calculateCropCoordinates();
+    this.cdr.detectChanges();
+  }
+
+  redoCrop() {
+    if (!this.cropRedoStack.length) return;
+    this.cropUndoStack.push({ sx: this.cropperStartX, sy: this.cropperStartY, ex: this.cropperEndX, ey: this.cropperEndY });
+    const next = this.cropRedoStack.pop()!;
+    this.cropperStartX = next.sx; this.cropperStartY = next.sy;
+    this.cropperEndX = next.ex; this.cropperEndY = next.ey;
+    this.calculateCropCoordinates();
+    this.cdr.detectChanges();
+  }
+
+  setCropAspectRatio(ratio: number | null) { this.cropAspectRatio = ratio; }
+
+  moveCropBox(dx: number, dy: number, imgW: number, imgH: number) {
+    if (!this.hasCropBox()) return;
+    const { x1, y1, w, h } = this.getCropNormalized();
+    const nx1 = Math.max(0, Math.min(x1 + dx, imgW - w));
+    const ny1 = Math.max(0, Math.min(y1 + dy, imgH - h));
+    this.cropperStartX = nx1; this.cropperStartY = ny1;
+    this.cropperEndX = nx1 + w; this.cropperEndY = ny1 + h;
+    this.calculateCropCoordinates();
+    this.cdr.detectChanges();
+  }
+
+  getCropPixelDimensions(): { w: number; h: number } {
+    if (!this.cropperImageRef?.nativeElement || !this.hasCropBox() || !this.imageNaturalWidth) return { w: 0, h: 0 };
+    const img = this.cropperImageRef.nativeElement;
+    const scaleX = this.imageNaturalWidth / img.clientWidth;
+    const scaleY = this.imageNaturalHeight / img.clientHeight;
+    const { w, h } = this.getCropNormalized();
+    return { w: Math.round(w * scaleX), h: Math.round(h * scaleY) };
+  }
+
+  getResizeHandleStyle(handle: string): { [key: string]: string } {
+    if (!this.hasCropBox()) return { display: 'none' };
+    const { x1, y1, x2, y2 } = this.getCropNormalized();
+    const cx = (x1 + x2) / 2;
+    const cy = (y1 + y2) / 2;
+    const pos: Record<string, [number, number]> = {
+      nw: [x1, y1], n: [cx, y1], ne: [x2, y1],
+      e: [x2, cy], se: [x2, y2], s: [cx, y2],
+      sw: [x1, y2], w: [x1, cy],
+    };
+    const [left, top] = pos[handle] ?? [0, 0];
+    return { left: `${left}px`, top: `${top}px` };
+  }
+
+  getExistingSectionsForCropper(): NewsSection[] {
+    if (!this.selectedPage) return [];
+    return this.selectedPage.sections.filter(s =>
+      s.id !== this.sectionForm.id && (s.width ?? 0) > 0 && (s.height ?? 0) > 0
+    );
+  }
+
+  getExistingSectionBoxStyle(section: NewsSection): { [key: string]: string } {
+    if (!this.cropperImageRef?.nativeElement) return { display: 'none' };
+    const img = this.cropperImageRef.nativeElement;
+    const w = img.clientWidth; const h = img.clientHeight;
+    if (!w || !h) return { display: 'none' };
+    return {
+      left: `${(section.x / 100) * w}px`,
+      top: `${(section.y / 100) * h}px`,
+      width: `${(section.width / 100) * w}px`,
+      height: `${(section.height / 100) * h}px`,
+    };
+  }
+
+  getSectionThumbStyle(section: NewsSection): { [key: string]: string } {
+    const imageUrl = this.selectedPage?.fullImageHiRes || this.selectedPage?.fullImage || '';
+    if (!imageUrl || !section.width || !section.height) return { background: 'var(--color-bg-muted)' };
+    const tW = 44; const tH = 56;
+    return {
+      'background-image': `url(${imageUrl})`,
+      'background-size': `${Math.round(tW * 100 / section.width)}px ${Math.round(tH * 100 / section.height)}px`,
+      'background-position': `${-Math.round(tW * section.x / section.width)}px ${-Math.round(tH * section.y / section.height)}px`,
+      'background-repeat': 'no-repeat',
+    };
+  }
+
+  jumpToCropSection(section: NewsSection) {
+    if (this.sectionForm.id && this.sectionForm.title) this.saveSection(false);
+    this.isEditingSection = true;
+    this.selectedSection = section;
+    this.sectionForm = { ...section, id: this.normalizeSectionId(section.id) };
+    this.imageSourceOption = !section.imageUrl || section.imageUrl.trim() === '' ? 'auto-crop' :
+      section.imageUrl.startsWith('assets/cropped/') ? 'upload' : 'external-url';
+    if (this.cropperImageRef?.nativeElement && (section.width ?? 0) > 0) {
+      const img = this.cropperImageRef.nativeElement;
+      const iw = img.clientWidth; const ih = img.clientHeight;
+      this.cropperStartX = (section.x / 100) * iw;
+      this.cropperStartY = (section.y / 100) * ih;
+      this.cropperEndX = ((section.x + section.width) / 100) * iw;
+      this.cropperEndY = ((section.y + section.height) / 100) * ih;
+    } else {
+      this.cropperStartX = this.cropperStartY = this.cropperEndX = this.cropperEndY = 0;
+    }
+    this.cropUndoStack = []; this.cropRedoStack = [];
+    this.cdr.detectChanges();
+  }
+
+  deleteFromCropper(section: NewsSection) {
+    if (!this.selectedPage || !confirm(`Delete section "${section.title}"?`)) return;
+    this.dataService.deleteSection(this.selectedPage.id, section.id, this.selectedDate, this.selectedEditionNumber);
+    const edition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);
+    if (edition) this.pages = edition.pages;
+    this.selectedPage = this.pages.find(p => p.id === this.selectedPage?.id) ?? null;
+    this.toaster.success('Section deleted.');
+    this.cdr.detectChanges();
+  }
+
+  /**
+   * Mousedown on an existing-section overlay box.
+   * - Lets Edit / Delete buttons handle their own clicks unobstructed.
+   * - Forwards the event to the main crop handler ONLY when the pointer is
+   *   on a resize handle or inside the current crop-box (move/resize intent).
+   * - Swallows the event in all other cases, preventing a new draw from
+   *   being started on top of a saved section.
+   */
+  onExistingSectionMouseDown(event: MouseEvent, section: NewsSection) {
+    // Let the action buttons handle their own clicks
+    if ((event.target as HTMLElement).closest('.section-box-actions')) return;
+    event.preventDefault();
+    if (!this.cropperImageRef?.nativeElement) return;
+    // Convert viewport coords to stage layout coords (undo the CSS zoom transform)
+    const imgRect = this.cropperImageRef.nativeElement.getBoundingClientRect();
+    const zoom = this.cropperZoom || 1;
+    const mx = (event.clientX - imgRect.left) / zoom;
+    const my = (event.clientY - imgRect.top) / zoom;
+    // Only allow move / resize of the active crop box — never start a new draw
+    if (this.hasCropBox()) {
+      const handle = this.getHandleAtPoint(mx, my);
+      if (handle || this.isInsideCropBox(mx, my)) {
+        this.onCropperMouseDown({ offsetX: mx, offsetY: my } as MouseEvent);
+      }
+    }
+    // Otherwise: event is swallowed — drawing is blocked on this section area
+  }
+
+  @HostListener('document:keydown', ['$event'])
+  onCropperKeyDown(event: KeyboardEvent) {
+    if (!this.showImageCropper || !this.cropperImageRef?.nativeElement) return;
+    const img = this.cropperImageRef.nativeElement;
+    const step = event.shiftKey ? 10 : 1;
+    switch (event.key) {
+      case 'ArrowLeft':  event.preventDefault(); this.moveCropBox(-step, 0, img.clientWidth, img.clientHeight); break;
+      case 'ArrowRight': event.preventDefault(); this.moveCropBox(step, 0, img.clientWidth, img.clientHeight); break;
+      case 'ArrowUp':    event.preventDefault(); this.moveCropBox(0, -step, img.clientWidth, img.clientHeight); break;
+      case 'ArrowDown':  event.preventDefault(); this.moveCropBox(0, step, img.clientWidth, img.clientHeight); break;
+      case 'z': case 'Z':
+        if (event.ctrlKey || event.metaKey) { event.preventDefault(); event.shiftKey ? this.redoCrop() : this.undoCrop(); }
+        break;
+      case 'Escape': this.closeCropper(); break;
+    }
   }
 
   async generateAndUploadCroppedImageFromFullSize(fullImageUrl: string) {
+    this.loader.show();
     try {
       const proxyUrl = `${this.dataService.getApiBaseUrl()}/wp-json/digital-newspaper/v1/proxy?url=${encodeURIComponent(fullImageUrl)}`;
       
       // Fetch the full-size image
       const response = await fetch(proxyUrl);
       if (!response.ok) {
+        this.loader.hide();
         throw new Error(`Proxy fetch failed (${response.status})`);
       }
       const contentType = response.headers.get('content-type') || '';
@@ -822,6 +1225,7 @@ export class AdminComponent implements OnInit {
           
           if (!ctx) {
             this.toaster.error('Failed to create crop canvas');
+            this.loader.hide();
             URL.revokeObjectURL(objectUrl);
             return;
           }
@@ -871,12 +1275,14 @@ export class AdminComponent implements OnInit {
         } catch (error) {
           console.error('Error in canvas operations:', error);
           this.toaster.error('Failed to process cropped image');
+          this.loader.hide();
           URL.revokeObjectURL(objectUrl);
         }
       };
       
       img.onerror = () => {
         this.toaster.error('Failed to load full-size image for cropping');
+        this.loader.hide();
         URL.revokeObjectURL(objectUrl);
       };
       
@@ -885,12 +1291,13 @@ export class AdminComponent implements OnInit {
     } catch (error) {
       console.error('Error fetching full-size image:', error);
       this.toaster.error('Failed to fetch image: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      this.loader.hide();
     }
   }
 
   uploadCroppedImage(imageData: string, fileName: string) {
     const file = this.dataUrlToFile(imageData, `${fileName}.jpg`);
-    this.loader.show();
+    // loader already shown by generateAndUploadCroppedImageFromFullSize
     this.uploadMediaFile(file, `${fileName}.jpg`)
       .then((url) => {
         this.sectionForm = {
@@ -1144,8 +1551,7 @@ export class AdminComponent implements OnInit {
   }
 
   applyCrop() {
-    // Ensure the crop coordinates are calculated one final time
-    if (this.cropperEndX > 0 && this.cropperEndY > 0 && this.cropperImageRef && this.selectedPage) {
+    if (this.hasCropBox() && this.cropperImageRef && this.selectedPage) {
       this.calculateCropCoordinates();
       
       // Only generate cropped image if auto-crop is selected and imageUrl is empty
@@ -1162,10 +1568,12 @@ export class AdminComponent implements OnInit {
 
   closeCropper() {
     this.showImageCropper = false;
-    this.cropperStartX = 0;
-    this.cropperStartY = 0;
-    this.cropperEndX = 0;
-    this.cropperEndY = 0;
+    this.cropperStartX = 0; this.cropperStartY = 0;
+    this.cropperEndX = 0; this.cropperEndY = 0;
+    this.cropMode = 'idle';
+    this.activeResizeHandle = null;
+    this.cropUndoStack = []; this.cropRedoStack = [];
+    this.cropperCursor = 'crosshair';
   }
 
   // Data Management

@@ -226,7 +226,35 @@
     <div class="lightbox-overlay" *ngIf="previewPageUrl" (click)="closePagePreview()">
       <div class="lightbox-content" (click)="$event.stopPropagation()">
         <button class="lightbox-close" (click)="closePagePreview()" title="Close">&times;</button>
-        <img [src]="previewPageUrl" alt="Full page preview" />
+        <div class="lightbox-img-wrap">
+          <img [src]="previewPageUrl" alt="Full page preview" />
+          <!-- Section overlays (only for sections that have been cropped) -->
+          <ng-container *ngIf="previewPage?.sections?.length">
+            <ng-container *ngFor="let sec of previewPage.sections">
+              <div
+                *ngIf="sec.width > 0"
+                class="preview-section-box"
+                [style.left.%]="sec.x"
+                [style.top.%]="sec.y"
+                [style.width.%]="sec.width"
+                [style.height.%]="sec.height"
+                [title]="sec.title"
+              >
+                <span class="preview-sec-label">{{ sec.title }}</span>
+                <div class="preview-sec-actions">
+                  <button class="sec-btn sec-edit-btn" (click)="previewEditSection(sec)" title="Edit section">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5l3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                    Edit
+                  </button>
+                  <button class="sec-btn sec-del-btn" (click)="previewDeleteSection(sec)" title="Delete section">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+                    Delete
+                  </button>
+                </div>
+              </div>
+            </ng-container>
+          </ng-container>
+        </div>
       </div>
     </div>
 
@@ -449,9 +477,9 @@
             </div>
           </div>
 
-          <div class="form-group">            <label>Position & Size</label>
+          <div class="form-group">            <label>Crop the news section Image</label>
             <div class="crop-controls">
-              <div class="form-row">
+              <!-- <div class="form-row">
                 <div class="form-group-sm">
                   <label>X (%)</label>
                   <input type="number" [(ngModel)]="sectionForm.x" min="0" max="100" class="form-control" />
@@ -468,8 +496,8 @@
                   <label>Height (%)</label>
                   <input type="number" [(ngModel)]="sectionForm.height" min="0" max="100" class="form-control" />
                 </div>
-              </div>
-              <button class="btn btn-primary btn-full" (click)="openImageCropper()">
+              </div> -->
+              <button class="btn btn-primary btn-full" style="margin-top: 0;" (click)="openImageCropper()">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
                   <circle cx="12" cy="13" r="4"></circle>
@@ -1076,68 +1104,211 @@
   </div>
 </div>
 
-<!-- Image Cropper Modal -->
+<!-- Image Cropper Modal (Enhanced) -->
 <div class="modal-overlay cropper-overlay" *ngIf="showImageCropper">
-  <div class="modal modal-large">
-    <div class="modal-header cropper-toolbar">
-      <h2>✂️ Visual Crop Selector</h2>
-      <span class="cropper-hint">📍 Click &amp; drag to select area</span>
+  <div class="modal modal-large cropper-modal">
+
+    <!-- ── Toolbar ──────────────────────────────────────────────────── -->
+    <div class="cropper-toolbar">
+      <div class="cropper-toolbar-left">
+        <span class="cropper-title-icon">✂️</span>
+        <div class="cropper-title-block">
+          <span class="cropper-title">Visual Crop Selector</span>
+          <span class="cropper-section-badge" *ngIf="sectionForm.title">{{ sectionForm.title }}</span>
+        </div>
+      </div>
+
+      <!-- Aspect ratio -->
+      <div class="cropper-aspect-group">
+        <span class="group-label">Ratio</span>
+        <button class="aspect-btn" [class.active]="cropAspectRatio === null"   (click)="setCropAspectRatio(null)"   title="Free crop">Free</button>
+        <button class="aspect-btn" [class.active]="cropAspectRatio === 1.7778" (click)="setCropAspectRatio(1.7778)" title="16:9">16:9</button>
+        <button class="aspect-btn" [class.active]="cropAspectRatio === 1.3333" (click)="setCropAspectRatio(1.3333)" title="4:3">4:3</button>
+        <button class="aspect-btn" [class.active]="cropAspectRatio === 1.5"    (click)="setCropAspectRatio(1.5)"    title="3:2">3:2</button>
+        <button class="aspect-btn" [class.active]="cropAspectRatio === 1"      (click)="setCropAspectRatio(1)"      title="1:1">1:1</button>
+        <button class="aspect-btn" [class.active]="cropAspectRatio === 0.6667" (click)="setCropAspectRatio(0.6667)" title="2:3">2:3</button>
+      </div>
+
+      <!-- Tools -->
+      <div class="cropper-tools">
+        <button class="tool-btn" [class.active]="showCropGrid" (click)="showCropGrid = !showCropGrid" title="Toggle rule-of-thirds grid">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <rect x="3" y="3" width="18" height="18" rx="1"/>
+            <line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/>
+            <line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/>
+          </svg>
+          Grid
+        </button>
+        <button class="tool-btn" [disabled]="cropUndoStack.length === 0" (click)="undoCrop()" title="Undo (Ctrl+Z)">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>
+          </svg>
+          Undo
+        </button>
+        <button class="tool-btn" [disabled]="cropRedoStack.length === 0" (click)="redoCrop()" title="Redo (Ctrl+Shift+Z)">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <path d="M15 14l5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/>
+          </svg>
+          Redo
+        </button>
+      </div>
+
+      <!-- Zoom -->
       <div class="cropper-zoom">
-        <label>Zoom: {{ (cropperZoom * 100) | number:'1.0-0' }}%</label>
-        <input type="range" min="0.25" max="3" step="0.05" [(ngModel)]="cropperZoom" />
-        <div class="zoom-buttons">
-          <button class="btn btn-sm btn-secondary" (click)="zoomOut()">-</button>
-          <button class="btn btn-sm btn-secondary" (click)="zoomIn()">+</button>
-        </div>
+        <button class="zoom-step-btn" (click)="zoomOut()" title="Zoom out">−</button>
+        <span class="zoom-pct">{{ (cropperZoom * 100) | number:'1.0-0' }}%</span>
+        <input type="range" min="0.25" max="3" step="0.05" [(ngModel)]="cropperZoom" title="Drag to zoom" />
+        <button class="zoom-step-btn" (click)="zoomIn()" title="Zoom in">+</button>
       </div>
-      <button class="btn-close" (click)="closeCropper()">&times;</button>
+
+      <button class="btn-close" (click)="closeCropper()" title="Close (Esc)">&times;</button>
     </div>
-    <div class="modal-body cropper-body">
-      <div class="cropper-container">
-        <div class="cropper-stage" [style.transform]="'scale(' + cropperZoom + ')'">
-          <img 
-            #cropperImage
-            [src]="selectedPage?.fullImageHiRes || selectedPage?.fullImage" 
-            alt="Full page"
-            (load)="onCropperImageLoad($event)"
-          />
-          <div 
-            class="crop-overlay"
-            (mousedown)="onCropperMouseDown($event)"
-            (mousemove)="onCropperMouseMove($event)"
-            (mouseup)="onCropperMouseUp()"
-            (mouseleave)="onCropperMouseUp()"
-          ></div>
-          <div 
-            class="crop-selection"
-            [style.left]="getCropStyle().left"
-            [style.top]="getCropStyle().top"
-            [style.width]="getCropStyle().width"
-            [style.height]="getCropStyle().height"
-            [style.display]="(isDrawing || (cropperEndX > 0 && cropperEndY > 0)) ? 'block' : 'none'"
-          ></div>
-        </div>
-      </div>
+
+    <!-- ── Hint bar ─────────────────────────────────────────────────── -->
+    <div class="cropper-hint-bar">
+      <span>🖱 Drag to draw</span>
+      <span class="hint-sep">│</span>
+      <span>↔ Drag handles to resize</span>
+      <span class="hint-sep">│</span>
+      <span>✋ Drag inside to move</span>
+      <span class="hint-sep">│</span>
+      <span>⌨ Arrow keys nudge • Shift+Arrow = 10px • Ctrl+Z undo • Esc close</span>
     </div>
-    <div class="modal-footer modal-image-selection">
-      <div class="crop-info" *ngIf="sectionForm && (sectionForm.width ?? 0) > 0">
-        <div class="info-item">
-          <strong>X:</strong> {{ sectionForm.x }}%
+
+    <!-- ── Body ────────────────────────────────────────────────────── -->
+    <div class="cropper-layout">
+
+      <!-- Canvas -->
+      <div class="cropper-canvas-wrap">
+        <div class="cropper-stage"
+               [style.transform]="'scale(' + cropperZoom + ')'"
+               [style.transform-origin]="'top left'">
+
+            <img
+              #cropperImage
+              [src]="selectedPage?.fullImageHiRes || selectedPage?.fullImage"
+              alt="Full page"
+              (load)="onCropperImageLoad($event)"
+              draggable="false"
+              style="display:block;width:100%;height:auto;user-select:none;"
+            />
+
+            <!-- Rule-of-thirds grid over full image -->
+            <div class="crop-global-grid" *ngIf="showCropGrid && cropperImageLoaded">
+              <div class="grid-line grid-v" style="left:33.333%"></div>
+              <div class="grid-line grid-v" style="left:66.666%"></div>
+              <div class="grid-line grid-h" style="top:33.333%"></div>
+              <div class="grid-line grid-h" style="top:66.666%"></div>
+            </div>
+
+            <!-- Existing sections overlay (other sections on this page) -->
+            <ng-container *ngIf="cropperImageLoaded">
+              <div
+                *ngFor="let sec of getExistingSectionsForCropper()"
+                class="existing-section-box"
+                [class.dragging]="cropMode !== 'idle'"
+                [ngStyle]="getExistingSectionBoxStyle(sec)"
+                (mousedown)="onExistingSectionMouseDown($event, sec)"
+              >
+                <span class="section-box-label">{{ sec.title }}</span>
+                <div class="section-box-actions" *ngIf="sec.id === sectionForm.id">
+                  <button class="sec-btn sec-edit-btn"  (click)="jumpToCropSection(sec)" title="Edit this section's crop">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5l3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                    Edit
+                  </button>
+                  <button class="sec-btn sec-del-btn" (click)="deleteFromCropper(sec)" title="Delete this section">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+                    Delete
+                  </button>
+                </div>
+              </div>
+            </ng-container>
+
+            <!-- Main interaction overlay (catches all mouse/touch events) -->
+            <div
+              class="crop-overlay"
+              [style.cursor]="cropperCursor"
+              (mousedown)="onCropperMouseDown($event)"
+              (mousemove)="onCropperMouseMove($event)"
+              (mouseup)="onCropperMouseUp()"
+              (mouseleave)="onCropperMouseLeave()"
+              (touchstart)="onCropperTouchStart($event)"
+              (touchmove)="onCropperTouchMove($event)"
+              (touchend)="onCropperTouchEnd($event)"
+            ></div>
+
+            <!-- Dimming mask around crop area -->
+            <ng-container *ngIf="hasCropBox()">
+              <div class="crop-dim-top"    [ngStyle]="{top:'0',left:'0',right:'0',height:getCropStyle().top}"></div>
+              <div class="crop-dim-bottom" [ngStyle]="{top:'calc('+getCropStyle().top+' + '+getCropStyle().height+')',left:'0',right:'0',bottom:'0'}"></div>
+              <div class="crop-dim-left"   [ngStyle]="{top:getCropStyle().top,left:'0',width:getCropStyle().left,height:getCropStyle().height}"></div>
+              <div class="crop-dim-right"  [ngStyle]="{top:getCropStyle().top,left:'calc('+getCropStyle().left+' + '+getCropStyle().width+')',right:'0',height:getCropStyle().height}"></div>
+            </ng-container>
+
+            <!-- Active crop selection box -->
+            <div
+              class="crop-selection"
+              [style.left]="getCropStyle().left"
+              [style.top]="getCropStyle().top"
+              [style.width]="getCropStyle().width"
+              [style.height]="getCropStyle().height"
+              [style.display]="hasCropBox() ? 'block' : 'none'"
+            >
+              <!-- Thirds inside selection -->
+              <div class="crop-sel-thirds" *ngIf="showCropGrid">
+                <div class="sel-line sel-v" style="left:33.333%"></div>
+                <div class="sel-line sel-v" style="left:66.666%"></div>
+                <div class="sel-line sel-h" style="top:33.333%"></div>
+                <div class="sel-line sel-h" style="top:66.666%"></div>
+              </div>
+              <!-- Corner markers -->
+              <div class="crop-corner crop-corner-tl"></div>
+              <div class="crop-corner crop-corner-tr"></div>
+              <div class="crop-corner crop-corner-bl"></div>
+              <div class="crop-corner crop-corner-br"></div>
+            </div>
+
+            <!-- Resize handles (visual only, z-index above overlay) -->
+            <ng-container *ngIf="hasCropBox() && cropperImageLoaded">
+              <div *ngFor="let h of ['nw','n','ne','e','se','s','sw','w']"
+                class="resize-handle"
+                [class]="'rh-' + h"
+                [ngStyle]="getResizeHandleStyle(h)"
+              ></div>
+            </ng-container>
+
+        </div><!-- /cropper-stage -->
+      </div><!-- /canvas-wrap -->
+
+    </div><!-- /cropper-layout -->
+
+    <!-- ── Footer ──────────────────────────────────────────────────── -->
+    <div class="cropper-footer">
+      <div class="crop-info-row" *ngIf="hasCropBox(); else noCropInfo">
+        <div class="info-chip"><span class="chip-k">X</span><span class="chip-v">{{ sectionForm.x | number:'1.0-1' }}%</span></div>
+        <div class="info-chip"><span class="chip-k">Y</span><span class="chip-v">{{ sectionForm.y | number:'1.0-1' }}%</span></div>
+        <div class="info-chip"><span class="chip-k">W</span><span class="chip-v">{{ sectionForm.width | number:'1.0-1' }}%</span></div>
+        <div class="info-chip"><span class="chip-k">H</span><span class="chip-v">{{ sectionForm.height | number:'1.0-1' }}%</span></div>
+        <div class="info-chip info-chip-px" *ngIf="getCropPixelDimensions().w > 0">
+          <span class="chip-k">PX</span>
+          <span class="chip-v">{{ getCropPixelDimensions().w }} × {{ getCropPixelDimensions().h }}</span>
         </div>
-        <div class="info-item">
-          <strong>Y:</strong> {{ sectionForm.y }}%
-        </div>
-        <div class="info-item">
-          <strong>Width:</strong> {{ sectionForm.width }}%
-        </div>
-        <div class="info-item">
-          <strong>Height:</strong> {{ sectionForm.height }}%
+        <div class="info-chip info-chip-mode" *ngIf="cropAspectRatio">
+          <span class="chip-k">⛓</span>
+          <span class="chip-v">Locked</span>
         </div>
       </div>
-      <div class="actions">
+      <ng-template #noCropInfo>
+        <div class="crop-no-sel">Draw a selection on the image above</div>
+      </ng-template>
+      <div class="cropper-footer-actions">
         <button class="btn btn-secondary" (click)="closeCropper()">Cancel</button>
-        <button class="btn btn-primary" (click)="applyCrop()" [disabled]="(sectionForm.width ?? 0) === 0">Apply Selection</button>
+        <button class="btn btn-primary" (click)="applyCrop()" [disabled]="!hasCropBox()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="20 6 9 17 4 12"/></svg>
+          Apply Crop
+        </button>
       </div>
     </div>
+
   </div>
 </div>
