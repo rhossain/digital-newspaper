@@ -173,7 +173,35 @@
     </div>
   </div>
 
-  <div class="admin-body" *ngIf="isAuthenticated && activeMainTab === 'content'">
+  <div class="admin-body" [class.maximized]="isBodyMaximized" *ngIf="isAuthenticated && activeMainTab === 'content'">
+    <!-- Floating maximize button (visible only in normal mode) -->
+    <button
+      *ngIf="!isBodyMaximized"
+      class="maximize-btn floating-maximize-btn"
+      (click)="isBodyMaximized = true"
+      title="Maximize panel"
+    >
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polyline points="15 3 21 3 21 9"></polyline>
+        <polyline points="9 21 3 21 3 15"></polyline>
+        <line x1="21" y1="3" x2="14" y2="10"></line>
+        <line x1="3" y1="21" x2="10" y2="14"></line>
+      </svg>
+    </button>
+    <!-- Floating minimize button (visible only in maximized mode) -->
+    <button
+      *ngIf="isBodyMaximized"
+      class="maximize-btn floating-minimize-btn"
+      (click)="isBodyMaximized = false"
+      title="Minimize panel"
+    >
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polyline points="4 14 10 14 10 20"></polyline>
+        <polyline points="20 10 14 10 14 4"></polyline>
+        <line x1="10" y1="14" x2="3" y2="21"></line>
+        <line x1="21" y1="3" x2="14" y2="10"></line>
+      </svg>
+    </button>
     <!-- Sidebar -->
     <aside class="sidebar">
       <div class="sidebar-header">
@@ -620,7 +648,35 @@
   </div>
 
   <!-- Global Settings Panel -->
-  <div class="admin-body settings-panel" *ngIf="isAuthenticated && activeMainTab === 'settings'">
+  <div class="admin-body settings-panel" [class.maximized]="isBodyMaximized" *ngIf="isAuthenticated && activeMainTab === 'settings'">
+    <!-- Floating maximize button (visible only in normal mode) -->
+    <button
+      *ngIf="!isBodyMaximized"
+      class="maximize-btn floating-maximize-btn"
+      (click)="isBodyMaximized = true"
+      title="Maximize panel"
+    >
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polyline points="15 3 21 3 21 9"></polyline>
+        <polyline points="9 21 3 21 3 15"></polyline>
+        <line x1="21" y1="3" x2="14" y2="10"></line>
+        <line x1="3" y1="21" x2="10" y2="14"></line>
+      </svg>
+    </button>
+    <!-- Floating minimize button (visible only in maximized mode) -->
+    <button
+      *ngIf="isBodyMaximized"
+      class="maximize-btn floating-minimize-btn"
+      (click)="isBodyMaximized = false"
+      title="Minimize panel"
+    >
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polyline points="4 14 10 14 10 20"></polyline>
+        <polyline points="20 10 14 10 14 4"></polyline>
+        <line x1="10" y1="14" x2="3" y2="21"></line>
+        <line x1="21" y1="3" x2="14" y2="10"></line>
+      </svg>
+    </button>
     <div class="settings-container">
       <div class="settings-header">
         <h2>⚙️ Global Settings</h2>

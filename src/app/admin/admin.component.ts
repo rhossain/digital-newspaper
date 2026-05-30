@@ -41,6 +41,7 @@ export class AdminComponent implements OnInit {
   isEditingPage = false;
   isEditingSection = false;
   showImageCropper = false;
+  isBodyMaximized = false;
   
   // Form Data
   pageForm: Partial<NewspaperPage> = {
