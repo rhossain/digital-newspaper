@@ -1005,6 +1005,13 @@ export class NewspaperComponent implements OnInit, OnDestroy {
       const pageB = b.pageId || 0;
       return pageA - pageB;
     });
+
+    // Trigger canvas cropping for linked sections that don't have their own imageUrl
+    for (const linked of this.linkedSections) {
+      if (!linked.imageUrl) {
+        this.cropLinkedSectionImage(linked);
+      }
+    }
   }
 
   selectLinkedSection(linkedSection: NewsSection) {
@@ -1019,9 +1026,61 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     if (section.imageUrl) {
       return section.imageUrl;
     }
-    // For sections without imageUrl, we'll need to crop dynamically
-    // This is a simplified version - in production you'd want to cache these
-    return null;
+    // Check if we have a cached crop for this section
+    const cacheKey = `${section.pageId}:${section.id}`;
+    return this.cropCache.get(cacheKey) ?? null;
+  }
+
+  private cropLinkedSectionImage(section: NewsSection): void {
+    if (!section.pageId || section.imageUrl) return;
+
+    const cacheKey = `${section.pageId}:${section.id}`;
+    if (this.cropCache.has(cacheKey)) {
+      this.cdr.detectChanges();
+      return;
+    }
+
+    const page = this.pages.find(p => p.id === section.pageId);
+    const fullImageUrl = page?.fullImage;
+    if (!fullImageUrl) return;
+
+    const isExternalUrl = fullImageUrl.startsWith('http://') || fullImageUrl.startsWith('https://');
+    const wpBaseUrl = this.dataService.getApiBaseUrl();
+    const srcUrl = isExternalUrl
+      ? `${wpBaseUrl}/wp-json/digital-newspaper/v1/proxy?url=${encodeURIComponent(fullImageUrl)}`
+      : fullImageUrl;
+
+    const img = new Image();
+    if (isExternalUrl) img.crossOrigin = 'anonymous';
+
+    img.onload = () => {
+      const cropX = Math.round((section.x / 100) * img.naturalWidth);
+      const cropY = Math.round((section.y / 100) * img.naturalHeight);
+      const cropWidth = Math.round((section.width / 100) * img.naturalWidth);
+      const cropHeight = Math.round((section.height / 100) * img.naturalHeight);
+
+      if (cropWidth <= 0 || cropHeight <= 0) return;
+
+      const canvas = document.createElement('canvas');
+      canvas.width = cropWidth;
+      canvas.height = cropHeight;
+      const ctx = canvas.getContext('2d', { willReadFrequently: false });
+      if (!ctx) return;
+
+      // Disable image smoothing to preserve source pixel fidelity
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(img, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+      try {
+        // Use PNG (lossless) to avoid double JPEG compression artifacts and color shift
+        const dataUrl = canvas.toDataURL('image/png');
+        this.cropCache.set(cacheKey, dataUrl);
+        this.cdr.detectChanges();
+      } catch (error) {
+        console.error('Failed to crop linked section image:', error);
+      }
+    };
+
+    img.src = srcUrl;
   }
 
   private cropSectionImage() {
@@ -1080,22 +1139,25 @@ export class NewspaperComponent implements OnInit, OnDestroy {
       const naturalWidth = img.naturalWidth;
       const naturalHeight = img.naturalHeight;
 
-      const cropX = (section.x / 100) * naturalWidth;
-      const cropY = (section.y / 100) * naturalHeight;
-      const cropWidth = (section.width / 100) * naturalWidth;
-      const cropHeight = (section.height / 100) * naturalHeight;
+      const cropX = Math.round((section.x / 100) * naturalWidth);
+      const cropY = Math.round((section.y / 100) * naturalHeight);
+      const cropWidth = Math.round((section.width / 100) * naturalWidth);
+      const cropHeight = Math.round((section.height / 100) * naturalHeight);
 
       const canvas = document.createElement('canvas');
       canvas.width = cropWidth;
       canvas.height = cropHeight;
 
-      const ctx = canvas.getContext('2d');
+      const ctx = canvas.getContext('2d', { willReadFrequently: false });
       if (!ctx) return;
 
+      // Disable image smoothing to preserve source pixel fidelity
+      ctx.imageSmoothingEnabled = false;
       ctx.drawImage(img, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
 
       try {
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+        // Use PNG (lossless) to avoid double JPEG compression artifacts and color shift
+        const dataUrl = canvas.toDataURL('image/png');
         this.cropCache.set(cacheKey, dataUrl);
         this.croppedSectionImage = dataUrl;
         this.sectionImageLoading = false;

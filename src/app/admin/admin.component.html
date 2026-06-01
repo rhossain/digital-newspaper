@@ -4,13 +4,13 @@
     <div class="header-content">
       <h1>📰 Newspaper Admin Panel</h1>
       <div class="header-actions">
-        <button class="btn btn-secondary" (click)="goToViewer()">
+        <button class="btn btn-secondary" (click)="goToViewer()" [disabled]="isSavingCrop" [title]="isSavingCrop ? 'Please wait — cropped image is being saved…' : ''">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M15 18l-6-6 6-6"/>
           </svg>
           Back to Viewer
         </button>
-        <button class="btn btn-success" (click)="saveAllData()">
+        <button class="btn btn-success" (click)="saveAllData()" [disabled]="isSavingCrop" [title]="isSavingCrop ? 'Please wait — cropped image is being saved…' : ''">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
             <polyline points="17 21 17 13 7 13 7 21"></polyline>
@@ -448,9 +448,11 @@
             class="section-card"
           >
             <div class="section-preview" *ngIf="section.imageUrl">
-              <img [src]="section.imageUrl" [alt]="section.title" />
+              <img [src]="resolveImageUrl(section.imageUrl)" [alt]="section.title" />
             </div>
-            <div class="section-preview placeholder" *ngIf="!section.imageUrl">
+            <div class="section-preview" *ngIf="!section.imageUrl && section.width && section.height" [ngStyle]="getSectionCardPreviewStyle(section)">
+            </div>
+            <div class="section-preview placeholder" *ngIf="!section.imageUrl && (!section.width || !section.height)">
               <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                 <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
                 <circle cx="8.5" cy="8.5" r="1.5"></circle>
@@ -490,7 +492,7 @@
       <div class="content-panel" *ngIf="isEditingSection">
         <div class="panel-header">
           <h2>{{ selectedSection ? 'Edit' : 'New' }} Section</h2>
-          <button class="btn btn-secondary" (click)="cancelSectionEdit()">Cancel</button>
+          <button class="btn btn-secondary" (click)="cancelSectionEdit()" [disabled]="isSavingCrop" [title]="isSavingCrop ? 'Please wait — cropped image is being saved…' : ''">Cancel</button>
         </div>
 
         <div class="section-form">
@@ -625,8 +627,12 @@
           </div>
 
           <div class="form-actions">
-            <button class="btn btn-secondary" (click)="cancelSectionEdit()">Cancel</button>
-            <button class="btn btn-primary" (click)="saveSection()">Save Section</button>
+            <button class="btn btn-secondary" (click)="cancelSectionEdit()" [disabled]="isSavingCrop" [title]="isSavingCrop ? 'Please wait — cropped image is being saved…' : ''">Cancel</button>
+            <button class="btn btn-primary" (click)="saveSection()" [disabled]="isSavingCrop" [title]="isSavingCrop ? 'Please wait — cropped image is being saved…' : ''">Save Section</button>
+          </div>
+          <div class="crop-saving-notice" *ngIf="isSavingCrop">
+            <div class="crop-saving-spinner"></div>
+            <span>Saving cropped image… please wait</span>
           </div>
         </div>
       </div>
@@ -1367,4 +1373,6 @@
     </div>
 
   </div>
+
+
 </div>

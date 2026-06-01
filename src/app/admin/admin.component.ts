@@ -42,6 +42,7 @@ export class AdminComponent implements OnInit {
   isEditingSection = false;
   showImageCropper = false;
   isBodyMaximized = false;
+  isSavingCrop = false;
   
   // Form Data
   pageForm: Partial<NewspaperPage> = {
@@ -1123,6 +1124,21 @@ export class AdminComponent implements OnInit {
     };
   }
 
+  getSectionCardPreviewStyle(section: NewsSection): { [key: string]: string } {
+    const imageUrl = this.selectedPage?.fullImageHiRes || this.selectedPage?.fullImage || '';
+    if (!imageUrl || !section.width || !section.height) return { background: 'var(--color-bg-muted)' };
+    const resolvedUrl = this.resolveImageUrl(imageUrl);
+    const previewH = 180; // matches .section-preview height in CSS
+    // Compute natural width from section aspect ratio to avoid any stretching
+    const previewW = Math.round(previewH * (section.width / section.height));
+    return {
+      'background-image': `url(${resolvedUrl})`,
+      'background-size': `${Math.round(previewW * 100 / section.width)}px ${Math.round(previewH * 100 / section.height)}px`,
+      'background-position': `${-Math.round(previewW * section.x / section.width)}px ${-Math.round(previewH * section.y / section.height)}px`,
+      'background-repeat': 'no-repeat',
+    };
+  }
+
   jumpToCropSection(section: NewsSection) {
     if (this.sectionForm.id && this.sectionForm.title) this.saveSection(false);
     this.isEditingSection = true;
@@ -1201,12 +1217,15 @@ export class AdminComponent implements OnInit {
 
   async generateAndUploadCroppedImageFromFullSize(fullImageUrl: string) {
     this.loader.show();
+    this.isSavingCrop = true;
+    this.cdr.detectChanges();
     try {
       const proxyUrl = `${this.dataService.getApiBaseUrl()}/wp-json/digital-newspaper/v1/proxy?url=${encodeURIComponent(fullImageUrl)}`;
       
       // Fetch the full-size image
       const response = await fetch(proxyUrl);
       if (!response.ok) {
+        this.isSavingCrop = false;
         this.loader.hide();
         throw new Error(`Proxy fetch failed (${response.status})`);
       }
@@ -1230,6 +1249,7 @@ export class AdminComponent implements OnInit {
           
           if (!ctx) {
             this.toaster.error('Failed to create crop canvas');
+            this.isSavingCrop = false;
             this.loader.hide();
             URL.revokeObjectURL(objectUrl);
             return;
@@ -1280,6 +1300,7 @@ export class AdminComponent implements OnInit {
         } catch (error) {
           console.error('Error in canvas operations:', error);
           this.toaster.error('Failed to process cropped image');
+          this.isSavingCrop = false;
           this.loader.hide();
           URL.revokeObjectURL(objectUrl);
         }
@@ -1287,6 +1308,7 @@ export class AdminComponent implements OnInit {
       
       img.onerror = () => {
         this.toaster.error('Failed to load full-size image for cropping');
+        this.isSavingCrop = false;
         this.loader.hide();
         URL.revokeObjectURL(objectUrl);
       };
@@ -1296,6 +1318,7 @@ export class AdminComponent implements OnInit {
     } catch (error) {
       console.error('Error fetching full-size image:', error);
       this.toaster.error('Failed to fetch image: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      this.isSavingCrop = false;
       this.loader.hide();
     }
   }
@@ -1329,7 +1352,7 @@ export class AdminComponent implements OnInit {
         this.imageSourceOption = 'auto-crop';
         this.cdr.detectChanges();
       })
-      .finally(() => this.loader.hide());
+      .finally(() => { this.isSavingCrop = false; this.loader.hide(); this.cdr.detectChanges(); });
   }
 
   onImageFileSelected(event: Event) {
@@ -1527,7 +1550,7 @@ export class AdminComponent implements OnInit {
     const previewH = 135; // must match .section-crop-preview height in CSS
 
     return {
-      'background-image': `url(${imageUrl})`,
+      'background-image': `url(${this.resolveImageUrl(imageUrl)})`,
       'background-size': `${Math.round(previewW * 100 / w)}px ${Math.round(previewH * 100 / h)}px`,
       'background-position': `${-Math.round(previewW * x / w)}px ${-Math.round(previewH * y / h)}px`,
       'background-repeat': 'no-repeat',
@@ -1779,7 +1802,18 @@ export class AdminComponent implements OnInit {
   }
 
   // Navigation
+  @HostListener('window:beforeunload', ['$event'])
+  onBeforeUnload(event: BeforeUnloadEvent): void {
+    if (this.isSavingCrop) {
+      event.preventDefault();
+    }
+  }
+
   goToViewer() {
+    if (this.isSavingCrop) {
+      this.toaster.warning('Please wait — the cropped image is still being saved.');
+      return;
+    }
     this.router.navigate(['/']);
   }
 
@@ -2047,5 +2081,22 @@ export class AdminComponent implements OnInit {
         })
         .finally(() => this.loader.hide());
     }
+  }
+
+  resolveImageUrl(url: string): string {
+    if (!url || typeof url !== 'string') return '';
+    if (url.startsWith('data:') || url.startsWith('blob:')) return url;
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      if (url.includes('/wp-content/uploads/')) {
+        try {
+          const wpOrigin = new URL(this.dataService.getApiBaseUrl()).origin;
+          const pathMatch = url.match(/^https?:\/\/[^/]+(\/.*)$/);
+          return pathMatch ? wpOrigin + pathMatch[1] : url;
+        } catch { return url; }
+      }
+      return url;
+    }
+    const base = this.dataService.getApiBaseUrl();
+    return url.startsWith('/') ? `${base}${url}` : `${base}/${url}`;
   }
 }

@@ -2094,3 +2094,32 @@ small {
   border-radius: 8px;
   border: 1.5px dashed var(--color-border-ui);
 }
+
+/* ─── Crop Saving Inline Notice ──────────────────────────────────────────── */
+.crop-saving-notice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 10px 14px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #1d4ed8;
+}
+
+.crop-saving-spinner {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  border: 2.5px solid #bfdbfe;
+  border-top-color: #2563eb;
+  border-radius: 50%;
+  animation: crop-spin 0.7s linear infinite;
+}
+
+@keyframes crop-spin {
+  to { transform: rotate(360deg); }
+}
