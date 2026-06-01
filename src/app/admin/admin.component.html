@@ -793,6 +793,36 @@
           </div>
         </div>
 
+        <!-- Under Maintenance -->
+        <div class="settings-section settings-section--maintenance" [class.settings-section--maintenance-active]="settingsForm.underMaintenance">
+          <h3>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:6px;">
+              <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+              <line x1="12" y1="9" x2="12" y2="13"></line>
+              <line x1="12" y1="17" x2="12.01" y2="17"></line>
+            </svg>
+            Under Maintenance
+          </h3>
+          <div class="form-group">
+            <label class="toggle-label">
+              <input type="checkbox" [(ngModel)]="settingsForm.underMaintenance" />
+              <span>Enable Maintenance Mode</span>
+            </label>
+            <p class="hint-text">
+              When enabled, visitors will see a maintenance page instead of the newspaper. The header will show only the logo. <strong>Save All</strong> to apply.
+            </p>
+          </div>
+          <div class="form-group" *ngIf="settingsForm.underMaintenance">
+            <label>Maintenance Message</label>
+            <textarea
+              [(ngModel)]="settingsForm.maintenanceMessage"
+              class="form-control"
+              rows="4"
+              placeholder="We are currently performing scheduled maintenance. We'll be back shortly. Thank you for your patience."></textarea>
+            <p class="hint-text">Leave empty to use the default message.</p>
+          </div>
+        </div>
+
         <!-- Viewer UI Settings -->
         <div class="settings-section">
           <h3>Viewer Options</h3>

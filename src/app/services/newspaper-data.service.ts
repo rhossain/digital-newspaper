@@ -75,6 +75,10 @@ export interface GlobalSettings {
   language?: 'en' | 'bn';
   showPagePagination?: boolean;
   showBetaBadge?: boolean;
+  /** When true, the viewer shows an Under Maintenance page instead of normal content. */
+  underMaintenance?: boolean;
+  /** Custom message displayed on the Under Maintenance page. */
+  maintenanceMessage?: string;
   /** Raw HTML string of <script> / <noscript> tags to inject into <head> (e.g. Google Analytics). */
   headScripts?: string;
 }

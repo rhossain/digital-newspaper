@@ -2123,3 +2123,19 @@ small {
 @keyframes crop-spin {
   to { transform: rotate(360deg); }
 }
+
+/* ===== MAINTENANCE SECTION ===== */
+.settings-section--maintenance {
+  border: 2px solid #e5e7eb;
+  transition: border-color 0.2s ease, background-color 0.2s ease;
+}
+
+.settings-section--maintenance-active {
+  border-color: #f59e0b;
+  background-color: #fffbeb;
+}
+
+.settings-section--maintenance-active h3 {
+  color: #b45309;
+}
+/* ===== END MAINTENANCE SECTION ===== */
