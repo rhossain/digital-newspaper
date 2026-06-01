@@ -57,6 +57,8 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   thumbnailsLoading: { [key: number]: boolean } = {};
   /** Pre-resolved thumbnail src for each page (thumbnail → fullImage fallback). */
   pageThumbnailSrcs: { [pageId: number]: string } = {};
+  /** Queue of pages whose thumbnails have not yet been requested (sequential loading). */
+  private thumbnailLoadQueue: NewspaperPage[] = [];
   sectionImageLoading = false;
   sectionImageError = false;
   
@@ -255,17 +257,19 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     const edition = this.dataService.getCurrentEdition(this.selectedEditionNumber);
     if (edition) {
       this.pages = edition.pages;
-      // Pre-resolve thumbnail sources once, handling PHP [] → '' coercion and
-      // falling back from thumbnail → fullImage.
+      // Sequential thumbnail loading: resolve one page at a time so the
+      // browser only fetches one thumbnail per round-trip instead of
+      // hammering all of them simultaneously.
       this.thumbnailsLoading = {};
       this.pageThumbnailSrcs = {};
-      this.pages.forEach(page => {
-        const thumb = typeof page.thumbnail === 'string' ? page.thumbnail.trim() : '';
-        const full  = typeof page.fullImage  === 'string' ? page.fullImage.trim()  : '';
-        const src   = this.resolveImageUrl(thumb || full);
-        this.pageThumbnailSrcs[page.id] = src;
-        this.thumbnailsLoading[page.id] = !!src;
-      });
+      this.thumbnailLoadQueue = [];
+      // Mark every page as pending (skeleton shows)
+      this.pages.forEach(page => { this.thumbnailsLoading[page.id] = true; });
+      if (this.pages.length > 0) {
+        // Kick off page 1 immediately; the rest wait in the queue
+        this.thumbnailLoadQueue = this.pages.slice(1);
+        this.seedThumbnail(this.pages[0]);
+      }
       if (this.pages.length > 0) {
         // Resolve target page from pending page slug (default: first page)
         let targetPage = this.pages[0];
@@ -547,6 +551,27 @@ export class NewspaperComponent implements OnInit, OnDestroy {
 
   onThumbnailLoad(pageId: number) {
     this.thumbnailsLoading[pageId] = false;
+    this.loadNextThumbnail();
+  }
+
+  /** Resolve and assign the src for a single page thumbnail. */
+  private seedThumbnail(page: NewspaperPage): void {
+    const thumb = typeof page.thumbnail === 'string' ? page.thumbnail.trim() : '';
+    const full  = typeof page.fullImage  === 'string' ? page.fullImage.trim()  : '';
+    const src   = this.resolveImageUrl(thumb || full);
+    this.pageThumbnailSrcs[page.id] = src;
+    if (!src) {
+      // No image for this page — mark done and immediately load the next
+      this.thumbnailsLoading[page.id] = false;
+      this.loadNextThumbnail();
+    }
+  }
+
+  /** Dequeue and start loading the next pending thumbnail. */
+  private loadNextThumbnail(): void {
+    if (this.thumbnailLoadQueue.length === 0) return;
+    const next = this.thumbnailLoadQueue.shift()!;
+    this.seedThumbnail(next);
   }
 
   onImageLoad() {
