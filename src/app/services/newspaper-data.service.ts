@@ -1,7 +1,7 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { Observable, BehaviorSubject } from 'rxjs';
-import { tap, map, catchError, timeout } from 'rxjs/operators';
+import { Observable, BehaviorSubject, timer } from 'rxjs';
+import { tap, map, catchError, timeout, retry } from 'rxjs/operators';
 import { AuthService } from './auth.service';
 import { WP_BASE_URL } from '../config';
 
@@ -214,9 +214,37 @@ export class NewspaperDataService {
 
   // Data loading with backwards compatibility (no caching)
   loadData(): Observable<NewspaperData> {
-    return this.http.get<NewspaperData | { pages: NewspaperPage[] }>(this.apiUrl).pipe(
-      timeout(5000),
-      catchError(() => this.http.get<NewspaperData | { pages: NewspaperPage[] }>(this.assetsUrl)),
+    // Cache-buster query param prevents CDN / LiteSpeed / browser from serving
+    // a stale cached version of the API response without triggering a CORS
+    // preflight (custom request headers like Cache-Control would require the
+    // server to add them to Access-Control-Allow-Headers).
+    const cacheBuster = `?_t=${Date.now()}`;
+    return this.http.get<NewspaperData | { pages: NewspaperPage[] }>(
+      this.apiUrl + cacheBuster
+    ).pipe(
+      // 20 s — WordPress on shared hosting can take 5-15 s on a cold boot.
+      // The previous 5 s limit was too aggressive and caused silent fallback
+      // to the stale local newspaper-data.json file.
+      timeout(20000),
+      // Retry the live API before giving up. A slow cold-start (timeout) or a
+      // transient network/5xx error should not immediately surface the local
+      // fallback — that was causing months-old bundled data to be displayed as
+      // if it were current. 2 retries with a short backoff (≈1.5 s, 3 s).
+      retry({
+        count: 2,
+        delay: (_err, retryCount) => timer(retryCount * 1500),
+      }),
+      catchError((err) => {
+        // The live API is genuinely unreachable after retries. Fall back to the
+        // bundled asset, which is now an EMPTY-but-valid dataset (no stale news,
+        // no base64 images). The UI shows an empty state rather than presenting
+        // months-old content as today's edition.
+        console.warn(
+          '[NewspaperDataService] Live API unreachable after retries — '
+          + 'serving empty fallback dataset. Reason:', err?.message ?? err
+        );
+        return this.http.get<NewspaperData | { pages: NewspaperPage[] }>(this.assetsUrl);
+      }),
       map((data): NewspaperData => {
         // Backwards compatibility: convert old format to new format
         if ('pages' in data && !('editions' in data)) {

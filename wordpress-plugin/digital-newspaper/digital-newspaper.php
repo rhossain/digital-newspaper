@@ -1025,6 +1025,12 @@ HTML;
   public function get_data_endpoint(
     WP_REST_Request $request
   ): WP_REST_Response {
+    // Explicitly forbid any CDN / LiteSpeed / proxy from caching this
+    // endpoint. Stale cached responses were causing the Angular app to show
+    // old data even after new editions had been uploaded.
+    header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+    header('Pragma: no-cache');
+    header('Expires: 0');
     return rest_ensure_response($this->get_data());
   }
 
