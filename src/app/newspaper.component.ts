@@ -790,12 +790,13 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   }
 
   private getPrintDocument(contentHtml: string, styles: string = ''): string {
-    // <thead>/<tfoot> repeat on every printed page natively — no JS padding tricks needed.
-    return `<!DOCTYPE html><html><head><title></title><style>${this.getPrintStyles()}${styles}</style></head><body><table class="print-table"><thead><tr><td><div class="print-header"><div class="print-header-left"></div><span class="print-header-date"></span></div></td></tr></thead><tbody><tr><td><main class="print-content">${contentHtml}</main></td></tr></tbody><tfoot><tr><td><div class="print-footer"></div></td></tr></tfoot></table></body></html>`;
+    // <thead> repeats at top of every page (no overlap). <tfoot> spacer bounds tbody so it
+    // cannot flow under the position:fixed footer. The visible footer is outside the table.
+    return `<!DOCTYPE html><html><head><title></title><style>${this.getPrintStyles()}${styles}</style></head><body><table class="print-table"><thead><tr><td><div class="print-header"><div class="print-header-left"></div><span class="print-header-date"></span></div></td></tr></thead><tbody><tr><td><main class="print-content">${contentHtml}</main></td></tr></tbody><tfoot><tr><td><div class="print-footer-spacer"></div></td></tr></tfoot></table><div class="print-footer"></div></body></html>`;
   }
 
   private getPrintStyles(): string {
-    return `*{box-sizing:border-box;}html,body{margin:0;padding:0;background:white;color:#000;font-family:sans-serif;font-size:16px;line-height:1.7;}.print-table{width:100%;border-collapse:collapse;border-spacing:0;}.print-table thead td,.print-table tfoot td{padding:0;margin:0;}.print-table tbody td{padding:0;vertical-align:top;}.print-header{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 20px;border-bottom:2px solid #ccc;background:white;font-family:sans-serif;}.print-header-left{display:flex;align-items:center;gap:12px;min-width:0;}.logo-img{height:40px;width:auto;max-width:220px;object-fit:contain;}.logo-text{font-size:20px;font-weight:600;overflow-wrap:anywhere;}.print-header-date{font-size:14px;color:#444;white-space:nowrap;}.print-content{padding:16px 20px;}.print-footer{padding:12px 20px;border-top:2px solid #ccc;font-size:14px;line-height:1.5;color:#555;background:white;font-family:sans-serif;}.footer-editor{font-weight:bold;display:block;margin-bottom:4px;}.footer-detail{display:block;overflow-wrap:anywhere;}h1{font-size:22px;line-height:1.3;margin:0 0 14px;}article{font-family:serif;overflow-wrap:anywhere;}article p{margin:0 0 10px;}img{max-width:100%;height:auto;}@media print{*{-webkit-print-color-adjust:exact;print-color-adjust:exact;}@page{margin:15mm;}h1,img{break-inside:avoid;page-break-inside:avoid;}img{max-height:185mm;width:auto;}}`;
+    return `*{box-sizing:border-box;}html,body{margin:0;padding:0;background:white;color:#000;font-family:sans-serif;font-size:16px;line-height:1.7;}.print-table{width:100%;border-collapse:collapse;border-spacing:0;}.print-table thead td,.print-table tfoot td{padding:0;margin:0;}.print-table tbody td{padding:0;vertical-align:top;}.print-header{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 20px;border-bottom:2px solid #ccc;background:white;font-family:sans-serif;}.print-header-left{display:flex;align-items:center;gap:12px;min-width:0;}.logo-img{height:40px;width:auto;max-width:220px;object-fit:contain;}.logo-text{font-size:20px;font-weight:600;overflow-wrap:anywhere;}.print-header-date{font-size:14px;color:#444;white-space:nowrap;}.print-content{padding:16px 20px;}.print-footer{padding:12px 20px;border-top:2px solid #ccc;font-size:14px;line-height:1.5;color:#555;background:white;font-family:sans-serif;}.footer-editor{font-weight:bold;display:block;margin-bottom:4px;}.footer-detail{display:block;overflow-wrap:anywhere;}h1{font-size:22px;line-height:1.3;margin:0 0 14px;}article{font-family:serif;overflow-wrap:anywhere;}article p{margin:0 0 10px;}img{max-width:100%;height:auto;}@media print{*{-webkit-print-color-adjust:exact;print-color-adjust:exact;}@page{margin:15mm;}.print-footer{position:fixed;bottom:0;left:0;right:0;z-index:100;}.print-footer-spacer{display:block;}h1,img{break-inside:avoid;page-break-inside:avoid;}img{max-height:185mm;width:auto;}}`;
   }
 
   printContent(content: string, title: string): void {
@@ -809,11 +810,18 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     const h1El = win.document.querySelector('h1');
     if (h1El) h1El.textContent = title;
     const articleEl = win.document.querySelector('article');
-    if (articleEl) {
-      articleEl.innerHTML = this.normalizeContent(content);
-      this.applyPrintContentPadding(win);
-      win.print();
-      win.close();
+    if (!articleEl) return;
+    articleEl.innerHTML = this.normalizeContent(content);
+
+    // Defer print until the header logo image has loaded; otherwise the logo is
+    // blank because win.print() fires before the network request completes.
+    const doPrint = () => { this.applyPrintContentPadding(win); win.print(); win.close(); };
+    const logoImg = win.document.querySelector('.logo-img') as HTMLImageElement | null;
+    if (logoImg && !logoImg.complete) {
+      logoImg.onload  = doPrint;
+      logoImg.onerror = doPrint; // still print even if logo fails to load
+    } else {
+      doPrint();
     }
   }
 
@@ -880,10 +888,24 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     }
   }
 
-  /** No-op: the HTML table structure (<thead>/<tfoot>) repeats the header/footer on every
-   *  printed page natively, so no JS padding injection is required. */
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  private applyPrintContentPadding(_win: Window): void { /* table layout — no padding needed */ }
+  /** Measures the footer at A4 content width (680 px ≈ 180 mm) and sets the <tfoot> spacer
+   *  to the same height so <tbody> content is always bounded above the position:fixed footer. */
+  private applyPrintContentPadding(win: Window): void {
+    const body = win.document.body;
+    const savedWidth    = body.style.width;
+    const savedOverflow = body.style.overflow;
+    body.style.width    = '680px';
+    body.style.overflow = 'hidden';
+
+    const footerEl = win.document.querySelector('.print-footer') as HTMLElement | null;
+    const footerH  = (footerEl?.offsetHeight ?? 90) + 12; // 12 px breathing room
+
+    body.style.width    = savedWidth;
+    body.style.overflow = savedOverflow;
+
+    const spacerEl = win.document.querySelector('.print-footer-spacer') as HTMLElement | null;
+    if (spacerEl) spacerEl.style.height = footerH + 'px';
+  }
 
   private populatePrintHeaderFooter(win: Window): void {
     const headerLeft = win.document.querySelector('.print-header-left')!;
