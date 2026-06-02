@@ -1,10 +1,16 @@
+import { environment } from '../environments/environment';
+
 /**
  * Application-wide configuration constants.
  *
- * ⚠️  IMPORTANT: Set WP_BASE_URL to your WordPress site root.
- *     This is the ONLY place you need to set it — every service reads from here.
- *     Example: 'https://your-wordpress-site.com'  (no trailing slash)
+ * WP_BASE_URL is now driven by the Angular environment file so that:
+ *  - Development (`npm start`):  '/wp' — route requests through the Angular CLI
+ *    dev-server proxy configured in proxy.conf.js.
+ *  - Production build:  'https://epaper.dailysangram.com/wp' — same origin as
+ *    the Angular app, so no CORS either.
+ *
+ * To deploy to a different WordPress host, update src/environments/environment.prod.ts.
  */
 
 /** WordPress site root (no trailing slash). */
-export const WP_BASE_URL = 'https://epaper.dailysangram.com/wp';
+export const WP_BASE_URL = environment.wpBaseUrl;

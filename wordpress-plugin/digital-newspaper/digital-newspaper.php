@@ -12,13 +12,16 @@ if (!defined('ABSPATH')) {
 
 class Digital_Newspaper_API {
   const OPTION_KEY = 'dn_data';
+  const OPTION_BACKUPS = 'dn_data_backups';
   const OPTION_ORIGINS = 'dn_allowed_origins';
   const OPTION_ALLOW_CREDENTIALS = 'dn_allow_credentials';
+  const SECTION_POST_TYPE = 'dn_section';
   const TOKEN_TTL = 86400; // 24 hours
   const INTERNAL_WARM_CACHE_TTL = 300; // 5 minutes
 
   public function __construct() {
     add_action('init', [$this, 'handle_cors_preflight'], 1);
+    add_action('init', [$this, 'register_section_post_type']);
     add_action('rest_api_init', [$this, 'register_routes']);
     add_filter('rest_authentication_errors', [$this, 'authenticate_rest_request']);
     add_action('admin_menu', [$this, 'register_settings_page']);
@@ -141,6 +144,26 @@ class Digital_Newspaper_API {
     return implode(', ', $parts);
   }
 
+  public function register_section_post_type(): void {
+    register_post_type(self::SECTION_POST_TYPE, [
+      'labels' => [
+        'name'          => 'Newspaper Sections',
+        'singular_name' => 'Newspaper Section',
+        'menu_name'     => 'Newspaper Sections',
+      ],
+      'public'              => false,
+      'show_ui'             => true,
+      'show_in_menu'        => 'tools.php',
+      'show_in_rest'        => false,
+      'exclude_from_search' => true,
+      'publicly_queryable'  => false,
+      'supports'            => ['title', 'editor', 'revisions'],
+      'capability_type'     => 'post',
+      'map_meta_cap'        => true,
+      'menu_icon'           => 'dashicons-media-document',
+    ]);
+  }
+
   public function get_data(): array {
     $data = get_option(self::OPTION_KEY);
     if (!is_array($data)) {
@@ -167,7 +190,271 @@ class Digital_Newspaper_API {
   }
 
   public function save_data(array $data): void {
+    $this->snapshot_current_data_before_save();
     update_option(self::OPTION_KEY, $data, false);
+    $this->sync_section_posts_from_data($data);
+  }
+
+  private function snapshot_current_data_before_save(): void {
+    $current = get_option(self::OPTION_KEY);
+    if (!is_array($current)) {
+      return;
+    }
+
+    $backups = get_option(self::OPTION_BACKUPS, []);
+    if (!is_array($backups)) {
+      $backups = [];
+    }
+
+    array_unshift($backups, [
+      'createdAt' => gmdate('c'),
+      'data'      => $current,
+    ]);
+
+    $backups = array_slice($backups, 0, 20);
+    update_option(self::OPTION_BACKUPS, $backups, false);
+  }
+
+  private function count_pages(array $data): int {
+    $count = 0;
+    foreach (($data['editions'] ?? []) as $edition) {
+      if (is_array($edition) && isset($edition['pages']) && is_array($edition['pages'])) {
+        $count += count($edition['pages']);
+      }
+    }
+    return $count;
+  }
+
+  private function count_sections(array $data): int {
+    $count = 0;
+    foreach (($data['editions'] ?? []) as $edition) {
+      foreach (($edition['pages'] ?? []) as $page) {
+        if (is_array($page) && isset($page['sections']) && is_array($page['sections'])) {
+          $count += count($page['sections']);
+        }
+      }
+    }
+    return $count;
+  }
+
+  private function backup_summary(array $backup, int $index): array {
+    $data = isset($backup['data']) && is_array($backup['data']) ? $backup['data'] : [];
+    $dates = [];
+    foreach (($data['editions'] ?? []) as $edition) {
+      if (is_array($edition) && !empty($edition['date'])) {
+        $dates[] = (string) $edition['date'];
+      }
+    }
+    $dates = array_values(array_unique($dates));
+    rsort($dates);
+
+    return [
+      'index'        => $index,
+      'createdAt'    => (string) ($backup['createdAt'] ?? ''),
+      'editionCount' => is_array($data['editions'] ?? null) ? count($data['editions']) : 0,
+      'pageCount'    => $this->count_pages($data),
+      'sectionCount' => $this->count_sections($data),
+      'latestDates'  => array_slice($dates, 0, 10),
+    ];
+  }
+
+  private function get_data_backups(): array {
+    $backups = get_option(self::OPTION_BACKUPS, []);
+    return is_array($backups) ? $backups : [];
+  }
+
+  private function section_key(string $date, int $editionNumber, int $pageId, string $sectionId): string {
+    return $date . ':' . $editionNumber . ':' . $pageId . ':' . $sectionId;
+  }
+
+  private function find_section_post_id(string $key): int {
+    $posts = get_posts([
+      'post_type'      => self::SECTION_POST_TYPE,
+      'post_status'    => ['publish', 'draft', 'private', 'pending'],
+      'posts_per_page' => 1,
+      'fields'         => 'ids',
+      'meta_key'       => '_dn_section_key',
+      'meta_value'     => $key,
+      'no_found_rows'  => true,
+    ]);
+
+    return $posts ? (int) $posts[0] : 0;
+  }
+
+  private function get_all_section_post_ids(): array {
+    $posts = get_posts([
+      'post_type'      => self::SECTION_POST_TYPE,
+      'post_status'    => ['publish', 'draft', 'private', 'pending'],
+      'posts_per_page' => -1,
+      'fields'         => 'ids',
+      'no_found_rows'  => true,
+    ]);
+
+    return array_map('intval', $posts ?: []);
+  }
+
+  private function sync_section_posts_from_data(array $data): void {
+    if (empty($data['editions']) || !is_array($data['editions']) || $this->count_sections($data) === 0) {
+      return;
+    }
+
+    $seenKeys = [];
+    $keyToPostId = [];
+
+    foreach ($data['editions'] as $editionIndex => $edition) {
+      if (!is_array($edition)) continue;
+      $date = sanitize_text_field((string) ($edition['date'] ?? ''));
+      if ($date === '') continue;
+      $editionNumber = max(1, (int) ($edition['edition'] ?? 1));
+      $editionLabels = is_array($edition['editionLabels'] ?? null) ? $edition['editionLabels'] : [];
+
+      foreach (($edition['pages'] ?? []) as $pageIndex => $page) {
+        if (!is_array($page)) continue;
+        $pageId = max(1, (int) ($page['id'] ?? ($pageIndex + 1)));
+        $pageLabels = is_array($page['pageLabels'] ?? null) ? $page['pageLabels'] : [];
+
+        foreach (($page['sections'] ?? []) as $sectionIndex => $section) {
+          if (!is_array($section)) continue;
+          $sectionId = sanitize_text_field((string) ($section['id'] ?? ''));
+          if ($sectionId === '') continue;
+
+          $key = $this->section_key($date, $editionNumber, $pageId, $sectionId);
+          $seenKeys[$key] = true;
+
+          $postId = $this->upsert_section_post(
+            $key,
+            $date,
+            $editionNumber,
+            $editionLabels,
+            $editionIndex,
+            $page,
+            $pageId,
+            $pageLabels,
+            $pageIndex,
+            $section,
+            $sectionIndex
+          );
+
+          if ($postId > 0) {
+            $keyToPostId[$key] = $postId;
+          }
+        }
+      }
+    }
+
+    $this->sync_linked_section_post_ids($data, $keyToPostId);
+    $this->trash_stale_section_posts(array_keys($seenKeys));
+  }
+
+  private function upsert_section_post(
+    string $key,
+    string $date,
+    int $editionNumber,
+    array $editionLabels,
+    int $editionIndex,
+    array $page,
+    int $pageId,
+    array $pageLabels,
+    int $pageIndex,
+    array $section,
+    int $sectionIndex
+  ): int {
+    $sectionId = sanitize_text_field((string) ($section['id'] ?? ''));
+    $title = sanitize_text_field((string) ($section['title'] ?? $sectionId));
+    $content = wp_kses_post((string) ($section['content'] ?? ''));
+    $postId = $this->find_section_post_id($key);
+
+    $postData = [
+      'post_type'    => self::SECTION_POST_TYPE,
+      'post_status'  => 'publish',
+      'post_title'   => $title !== '' ? $title : $sectionId,
+      'post_content' => $content,
+      'post_name'    => sanitize_title($key),
+    ];
+
+    if ($postId > 0) {
+      $postData['ID'] = $postId;
+      $result = wp_update_post($postData, true);
+    } else {
+      $result = wp_insert_post($postData, true);
+    }
+
+    if (is_wp_error($result)) {
+      error_log('Digital Newspaper section mirror failed: ' . $result->get_error_message());
+      return 0;
+    }
+
+    $postId = (int) $result;
+    $linkedSectionIds = is_array($section['linkedSectionIds'] ?? null) ? array_values(array_map('strval', $section['linkedSectionIds'])) : [];
+
+    $meta = [
+      '_dn_section_key'       => $key,
+      'dn_newspaper_date'     => $date,
+      'dn_edition_number'     => $editionNumber,
+      'dn_edition_order'      => $editionIndex,
+      'dn_edition_labels'     => wp_json_encode($editionLabels),
+      'dn_page_id'            => $pageId,
+      'dn_page_order'         => $pageIndex,
+      'dn_page_labels'        => wp_json_encode($pageLabels),
+      'dn_page_thumbnail'     => esc_url_raw((string) ($page['thumbnail'] ?? '')),
+      'dn_page_full_image'    => esc_url_raw((string) ($page['fullImage'] ?? '')),
+      'dn_page_full_hires'    => esc_url_raw((string) ($page['fullImageHiRes'] ?? '')),
+      'dn_section_id'         => $sectionId,
+      'dn_section_order'      => $sectionIndex,
+      'dn_crop_x'             => (string) (float) ($section['x'] ?? 0),
+      'dn_crop_y'             => (string) (float) ($section['y'] ?? 0),
+      'dn_crop_w'             => (string) (float) ($section['width'] ?? 0),
+      'dn_crop_h'             => (string) (float) ($section['height'] ?? 0),
+      'dn_cropped_image_url'  => esc_url_raw((string) ($section['imageUrl'] ?? '')),
+      'dn_linked_section_ids' => wp_json_encode($linkedSectionIds),
+      'dn_section_payload'    => wp_json_encode($section),
+    ];
+
+    foreach ($meta as $metaKey => $metaValue) {
+      update_post_meta($postId, $metaKey, $metaValue);
+    }
+
+    return $postId;
+  }
+
+  private function sync_linked_section_post_ids(array $data, array $keyToPostId): void {
+    foreach ($data['editions'] ?? [] as $edition) {
+      if (!is_array($edition)) continue;
+      $date = (string) ($edition['date'] ?? '');
+      $editionNumber = max(1, (int) ($edition['edition'] ?? 1));
+
+      foreach (($edition['pages'] ?? []) as $page) {
+        if (!is_array($page)) continue;
+        $pageId = max(1, (int) ($page['id'] ?? 1));
+
+        foreach (($page['sections'] ?? []) as $section) {
+          if (!is_array($section)) continue;
+          $sectionId = (string) ($section['id'] ?? '');
+          $key = $this->section_key($date, $editionNumber, $pageId, $sectionId);
+          $postId = $keyToPostId[$key] ?? 0;
+          if (!$postId) continue;
+
+          $linkedPostIds = [];
+          foreach (($section['linkedSectionIds'] ?? []) as $linkedSectionId) {
+            $linkedKey = $this->section_key($date, $editionNumber, $pageId, (string) $linkedSectionId);
+            if (!empty($keyToPostId[$linkedKey])) {
+              $linkedPostIds[] = (int) $keyToPostId[$linkedKey];
+            }
+          }
+          update_post_meta($postId, 'dn_linked_wp_post_ids', wp_json_encode(array_values(array_unique($linkedPostIds))));
+        }
+      }
+    }
+  }
+
+  private function trash_stale_section_posts(array $activeKeys): void {
+    $active = array_fill_keys($activeKeys, true);
+    foreach ($this->get_all_section_post_ids() as $postId) {
+      $key = (string) get_post_meta($postId, '_dn_section_key', true);
+      if ($key !== '' && empty($active[$key])) {
+        wp_trash_post($postId);
+      }
+    }
   }
 
   public function register_routes(): void {
@@ -180,6 +467,30 @@ class Digital_Newspaper_API {
       [
         'methods' => 'POST',
         'callback' => [$this, 'post_data_endpoint'],
+        'permission_callback' => [$this, 'auth_required']
+      ]
+    ]);
+
+    register_rest_route('digital-newspaper/v1', '/data/backups', [
+      [
+        'methods' => 'GET',
+        'callback' => [$this, 'list_data_backups_endpoint'],
+        'permission_callback' => [$this, 'auth_required']
+      ]
+    ]);
+
+    register_rest_route('digital-newspaper/v1', '/data/restore', [
+      [
+        'methods' => 'POST',
+        'callback' => [$this, 'restore_data_backup_endpoint'],
+        'permission_callback' => [$this, 'auth_required']
+      ]
+    ]);
+
+    register_rest_route('digital-newspaper/v1', '/data/rebuild-from-sections', [
+      [
+        'methods' => 'POST',
+        'callback' => [$this, 'rebuild_data_from_sections_endpoint'],
         'permission_callback' => [$this, 'auth_required']
       ]
     ]);
@@ -1034,12 +1345,179 @@ HTML;
     return rest_ensure_response($this->get_data());
   }
 
+  public function list_data_backups_endpoint(WP_REST_Request $request): WP_REST_Response {
+    $backups = $this->get_data_backups();
+    $items = [];
+    foreach ($backups as $index => $backup) {
+      if (is_array($backup)) {
+        $items[] = $this->backup_summary($backup, (int) $index);
+      }
+    }
+    return rest_ensure_response(['backups' => $items]);
+  }
+
+  public function restore_data_backup_endpoint(WP_REST_Request $request): WP_REST_Response {
+    $params = $request->get_json_params();
+    $index = isset($params['index']) ? (int) $params['index'] : -1;
+    $backups = $this->get_data_backups();
+
+    if ($index < 0 || !isset($backups[$index]) || !is_array($backups[$index]) || !is_array($backups[$index]['data'] ?? null)) {
+      return new WP_REST_Response(['error' => 'Backup not found'], 404);
+    }
+
+    $this->snapshot_current_data_before_save();
+    update_option(self::OPTION_KEY, $backups[$index]['data'], false);
+    $this->sync_section_posts_from_data($backups[$index]['data']);
+
+    return rest_ensure_response([
+      'success'  => true,
+      'restored' => $this->backup_summary($backups[$index], $index),
+    ]);
+  }
+
+  public function rebuild_data_from_sections_endpoint(WP_REST_Request $request): WP_REST_Response {
+    $current = $this->get_data();
+    $rebuilt = $this->build_data_from_section_posts($current['settings'] ?? []);
+
+    if ($this->count_sections($rebuilt) === 0) {
+      return new WP_REST_Response(['error' => 'No mirrored section posts were found to rebuild from.'], 404);
+    }
+
+    $this->save_data($rebuilt);
+
+    return rest_ensure_response([
+      'success'      => true,
+      'editionCount' => is_array($rebuilt['editions'] ?? null) ? count($rebuilt['editions']) : 0,
+      'pageCount'    => $this->count_pages($rebuilt),
+      'sectionCount' => $this->count_sections($rebuilt),
+    ]);
+  }
+
+  private function build_data_from_section_posts(array $settings): array {
+    $posts = get_posts([
+      'post_type'      => self::SECTION_POST_TYPE,
+      'post_status'    => ['publish', 'draft', 'private', 'pending'],
+      'posts_per_page' => -1,
+      'orderby'        => 'meta_value',
+      'meta_key'       => 'dn_newspaper_date',
+      'order'          => 'DESC',
+      'no_found_rows'  => true,
+    ]);
+
+    $editionMap = [];
+    foreach ($posts as $post) {
+      $date = sanitize_text_field((string) get_post_meta($post->ID, 'dn_newspaper_date', true));
+      if ($date === '') continue;
+      $editionNumber = max(1, (int) get_post_meta($post->ID, 'dn_edition_number', true));
+      $pageId = max(1, (int) get_post_meta($post->ID, 'dn_page_id', true));
+      $editionKey = $date . ':' . $editionNumber;
+      $pageKey = (string) $pageId;
+
+      if (!isset($editionMap[$editionKey])) {
+        $editionLabels = json_decode((string) get_post_meta($post->ID, 'dn_edition_labels', true), true);
+        $editionMap[$editionKey] = [
+          'date' => $date,
+          'edition' => $editionNumber,
+          'editionLabels' => is_array($editionLabels) ? $editionLabels : [],
+          '_pages' => [],
+        ];
+      }
+
+      if (!isset($editionMap[$editionKey]['_pages'][$pageKey])) {
+        $pageLabels = json_decode((string) get_post_meta($post->ID, 'dn_page_labels', true), true);
+        $page = [
+          'id' => $pageId,
+          'thumbnail' => (string) get_post_meta($post->ID, 'dn_page_thumbnail', true),
+          'fullImage' => (string) get_post_meta($post->ID, 'dn_page_full_image', true),
+          'sections' => [],
+          '_order' => (int) get_post_meta($post->ID, 'dn_page_order', true),
+        ];
+        $fullHiRes = (string) get_post_meta($post->ID, 'dn_page_full_hires', true);
+        if ($fullHiRes !== '') {
+          $page['fullImageHiRes'] = $fullHiRes;
+        }
+        if (is_array($pageLabels) && $pageLabels) {
+          $page['pageLabels'] = $pageLabels;
+        }
+        $editionMap[$editionKey]['_pages'][$pageKey] = $page;
+      }
+
+      $payload = json_decode((string) get_post_meta($post->ID, 'dn_section_payload', true), true);
+      if (!is_array($payload)) {
+        $linkedSectionIds = json_decode((string) get_post_meta($post->ID, 'dn_linked_section_ids', true), true);
+        $payload = [
+          'id' => (string) get_post_meta($post->ID, 'dn_section_id', true),
+          'title' => $post->post_title,
+          'x' => (float) get_post_meta($post->ID, 'dn_crop_x', true),
+          'y' => (float) get_post_meta($post->ID, 'dn_crop_y', true),
+          'width' => (float) get_post_meta($post->ID, 'dn_crop_w', true),
+          'height' => (float) get_post_meta($post->ID, 'dn_crop_h', true),
+          'content' => $post->post_content,
+          'imageUrl' => (string) get_post_meta($post->ID, 'dn_cropped_image_url', true),
+          'pageId' => $pageId,
+          'linkedSectionIds' => is_array($linkedSectionIds) ? $linkedSectionIds : [],
+          'showCaption' => true,
+        ];
+      }
+      $payload['_order'] = (int) get_post_meta($post->ID, 'dn_section_order', true);
+      $editionMap[$editionKey]['_pages'][$pageKey]['sections'][] = $payload;
+    }
+
+    $editions = array_values($editionMap);
+    foreach ($editions as &$edition) {
+      $pages = array_values($edition['_pages']);
+      usort($pages, function ($a, $b) {
+        $orderDiff = ((int) ($a['_order'] ?? 0)) <=> ((int) ($b['_order'] ?? 0));
+        return $orderDiff !== 0 ? $orderDiff : ((int) ($a['id'] ?? 0)) <=> ((int) ($b['id'] ?? 0));
+      });
+
+      foreach ($pages as &$page) {
+        usort($page['sections'], function ($a, $b) {
+          return ((int) ($a['_order'] ?? 0)) <=> ((int) ($b['_order'] ?? 0));
+        });
+        foreach ($page['sections'] as &$section) {
+          unset($section['_order']);
+        }
+        unset($page['_order']);
+      }
+
+      $edition['pages'] = $pages;
+      unset($edition['_pages']);
+      if (empty($edition['editionLabels'])) {
+        unset($edition['editionLabels']);
+      }
+    }
+    unset($edition);
+
+    usort($editions, function ($a, $b) {
+      $dateDiff = strcmp((string) ($b['date'] ?? ''), (string) ($a['date'] ?? ''));
+      return $dateDiff !== 0 ? $dateDiff : ((int) ($a['edition'] ?? 1)) <=> ((int) ($b['edition'] ?? 1));
+    });
+
+    return [
+      'settings' => $settings ?: self::default_data()['settings'],
+      'editions' => $editions,
+    ];
+  }
+
   public function post_data_endpoint(
     WP_REST_Request $request
   ): WP_REST_Response {
     $payload = $request->get_json_params();
     if (!is_array($payload)) {
       return new WP_REST_Response(['error' => 'Invalid payload'], 400);
+    }
+
+    $force = $request->get_param('force') === '1' || $request->get_param('force') === 'true';
+    $current = $this->get_data();
+    $currentPageCount = $this->count_pages($current);
+    $incomingPageCount = $this->count_pages($payload);
+    if (!$force && $currentPageCount > 0 && $incomingPageCount === 0) {
+      return new WP_REST_Response([
+        'error' => 'Refusing to overwrite existing newspaper pages with an empty page dataset. Restore from backup or retry with force=1 if this is intentional.',
+        'currentPageCount' => $currentPageCount,
+        'incomingPageCount' => $incomingPageCount,
+      ], 409);
     }
 
     // Strip the export metadata envelope so it is never persisted in the
@@ -1068,6 +1546,9 @@ HTML;
 
   public function login(WP_REST_Request $request) {
     $params = $request->get_json_params();
+    if (!is_array($params) || empty($params)) {
+      $params = $request->get_body_params();
+    }
     $username = $params['username'] ?? '';
     $password = $params['password'] ?? '';
 
@@ -1125,6 +1606,33 @@ HTML;
     $scheme = $parsed['scheme'] ?? '';
     if (!in_array($scheme, ['http', 'https'], true)) {
       return new WP_REST_Response(['error' => 'Invalid URL scheme'], 400);
+    }
+
+    $local_path = $this->dn_uploads_url_to_path($url);
+    if ($local_path !== '') {
+      $upload = wp_upload_dir();
+      $uploads_base = realpath($upload['basedir']);
+      $real_path = realpath($local_path);
+      if ($uploads_base && $real_path && strpos($real_path, $uploads_base) === 0 && is_readable($real_path)) {
+        $type = wp_check_filetype($real_path);
+        $content_type = $type['type'] ?? '';
+        if (!$content_type || strpos($content_type, 'image/') !== 0) {
+          $content_type = function_exists('mime_content_type') ? (string) mime_content_type($real_path) : '';
+        }
+        if (!$content_type || strpos($content_type, 'image/') !== 0) {
+          return new WP_REST_Response(['error' => 'Not an image'], 415);
+        }
+
+        $body = file_get_contents($real_path);
+        if ($body === false) {
+          return new WP_REST_Response(['error' => 'Failed to read image'], 500);
+        }
+
+        return new WP_REST_Response($body, 200, [
+          'Content-Type' => $content_type,
+          'Cache-Control' => 'public, max-age=86400'
+        ]);
+      }
     }
 
     $response = wp_remote_get($url, [
@@ -1402,11 +1910,19 @@ HTML;
   }
 
   private function get_allowed_origins(): array {
+    $defaults = [
+      'https://epaper.dailysangram.com',
+      'https://www.epaper.dailysangram.com',
+      'http://localhost:4200',
+      'http://127.0.0.1:4200',
+    ];
+
     $raw = (string) get_option(self::OPTION_ORIGINS, '');
     if (!$raw) {
-      return [];
+      return $defaults;
     }
-    return array_values(array_filter(array_map('trim', explode(',', $raw))));
+    $configured = array_values(array_filter(array_map('trim', explode(',', $raw))));
+    return array_values(array_unique(array_merge($defaults, $configured)));
   }
 
   private function get_bearer_token(WP_REST_Request $request): ?string {

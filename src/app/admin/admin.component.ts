@@ -43,6 +43,8 @@ export class AdminComponent implements OnInit {
   showImageCropper = false;
   isBodyMaximized = false;
   isSavingCrop = false;
+  hasUnsavedChanges = false;
+  private hasUnsavedSettingsChanges = false;
   
   // Form Data
   pageForm: Partial<NewspaperPage> = {
@@ -228,6 +230,7 @@ export class AdminComponent implements OnInit {
   previewDeleteSection(sec: NewsSection) {
     if (!confirm(`Delete section "${sec.title}"?`)) return;
     this.dataService.deleteSection(this.previewPage.id, sec.id, this.selectedDate, this.selectedEditionNumber);
+    this.markUnsavedChanges();
     const edition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);
     if (edition) this.pages = edition.pages;
     this.previewPage = this.pages.find((p: any) => p.id === this.previewPage?.id) ?? null;
@@ -252,6 +255,22 @@ export class AdminComponent implements OnInit {
     this.availableDates = this.selectedDate ? [this.selectedDate] : [];
     this.backupHistory = this.dataService.getBackupHistory();
     this.verifyAuth();
+  }
+
+  private markUnsavedChanges(): void {
+    this.hasUnsavedChanges = true;
+    this.cdr.detectChanges();
+  }
+
+  onSettingsFormChanged(): void {
+    this.hasUnsavedSettingsChanges = true;
+    this.markUnsavedChanges();
+  }
+
+  private markSaved(): void {
+    this.hasUnsavedChanges = false;
+    this.hasUnsavedSettingsChanges = false;
+    this.cdr.detectChanges();
   }
 
   get isAuthenticated(): boolean {
@@ -296,6 +315,8 @@ export class AdminComponent implements OnInit {
           this.authError = 'Invalid username or password. Please try again.';
         } else if (err.status === 403) {
           this.authError = 'Access denied. Your WordPress account may not have the Administrator role.';
+        } else if (err?.message?.includes('did not include a token')) {
+          this.authError = 'WordPress did not return a login token. The request is likely being blocked by Imunify360 before it reaches the Digital Newspaper plugin.';
         } else if (isParseError) {
           this.authError = 'WordPress returned an unexpected response. Please check: (1) WordPress Permalinks are set to "Post name", (2) the Digital Newspaper plugin is active, and (3) the WordPress URL in the app configuration is correct.';
         } else {
@@ -329,6 +350,7 @@ export class AdminComponent implements OnInit {
         }
         this.loadCurrentEdition();
         this.loadSettings();
+        this.markSaved();
         this.cdr.detectChanges(); // Explicitly trigger change detection
       },
       error: (error) => console.error('Error loading data:', error)
@@ -380,6 +402,7 @@ export class AdminComponent implements OnInit {
     const nextEditionNumber = editionNumbers.length > 0 ? Math.max(...editionNumbers) + 1 : 2;
 
     this.dataService.getOrCreateEdition(this.selectedDate, nextEditionNumber);
+    this.markUnsavedChanges();
     this.selectedEditionNumber = nextEditionNumber;
     this.loadCurrentEdition();
     this.toaster.success(`Edition ${nextEditionNumber} created!`);
@@ -407,6 +430,7 @@ export class AdminComponent implements OnInit {
         : e
     );
     this.dataService['dataSubject'].next({ ...data, editions });
+    this.markUnsavedChanges();
     this.editingEditionLabel = null;
     this.loadCurrentEdition();
     this.toaster.success('Edition labels saved!');
@@ -461,6 +485,7 @@ export class AdminComponent implements OnInit {
     if (newDate && /^\d{4}-\d{2}-\d{2}$/.test(newDate)) {
       this.selectedDate = newDate;
       this.dataService.getOrCreateEdition(newDate);
+      this.markUnsavedChanges();
       if (!this.availableDates.includes(newDate)) {
         this.availableDates.unshift(newDate);
         this.availableDates.sort().reverse();
@@ -575,6 +600,7 @@ export class AdminComponent implements OnInit {
       } else {
         this.dataService.addPage(page, this.selectedDate, this.selectedEditionNumber);
       }
+      this.markUnsavedChanges();
       
       // Update local pages immediately from service (no network call)
       const edition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);
@@ -595,6 +621,7 @@ export class AdminComponent implements OnInit {
   deletePage(page: NewspaperPage) {
     if (confirm(`Delete page ${page.id}?`)) {
       this.dataService.deletePage(page.id, this.selectedDate, this.selectedEditionNumber);
+      this.markUnsavedChanges();
       if (this.selectedPage?.id === page.id) {
         this.selectedPage = null;
       }
@@ -691,6 +718,7 @@ export class AdminComponent implements OnInit {
       } else {
         this.dataService.addSection(this.selectedPage.id, section, this.selectedDate, this.selectedEditionNumber);
       }
+      this.markUnsavedChanges();
 
       this.sectionForm.id = normalizedSectionId;
 
@@ -724,6 +752,7 @@ export class AdminComponent implements OnInit {
   deleteSection(section: NewsSection) {
     if (this.selectedPage && confirm(`Delete section "${section.title}"?`)) {
       this.dataService.deleteSection(this.selectedPage.id, section.id, this.selectedDate, this.selectedEditionNumber);
+      this.markUnsavedChanges();
       
       // Update local pages immediately from service (no network call)
       const edition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);
@@ -1165,6 +1194,7 @@ export class AdminComponent implements OnInit {
   deleteFromCropper(section: NewsSection) {
     if (!this.selectedPage || !confirm(`Delete section "${section.title}"?`)) return;
     this.dataService.deleteSection(this.selectedPage.id, section.id, this.selectedDate, this.selectedEditionNumber);
+    this.markUnsavedChanges();
     const edition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);
     if (edition) this.pages = edition.pages;
     this.selectedPage = this.pages.find(p => p.id === this.selectedPage?.id) ?? null;
@@ -1222,14 +1252,24 @@ export class AdminComponent implements OnInit {
     this.isSavingCrop = true;
     this.cdr.detectChanges();
     try {
+      const fullImageHref = new URL(fullImageUrl, window.location.href).href;
       const proxyUrl = `${this.dataService.getApiBaseUrl()}/wp-json/digital-newspaper/v1/proxy?url=${encodeURIComponent(fullImageUrl)}`;
+      const fetchUrls = new URL(fullImageHref).origin === window.location.origin
+        ? [fullImageHref, proxyUrl]
+        : [proxyUrl];
       
       // Fetch the full-size image
-      const response = await fetch(proxyUrl);
-      if (!response.ok) {
+      let response: Response | null = null;
+      let lastFetchError = '';
+      for (const imageUrl of fetchUrls) {
+        response = await fetch(imageUrl);
+        if (response.ok) break;
+        lastFetchError = `${imageUrl === proxyUrl ? 'Proxy' : 'Image'} fetch failed (${response.status})`;
+      }
+      if (!response?.ok) {
         this.isSavingCrop = false;
         this.loader.hide();
-        throw new Error(`Proxy fetch failed (${response.status})`);
+        throw new Error(lastFetchError || 'Image fetch failed');
       }
       const contentType = response.headers.get('content-type') || '';
       if (!contentType.startsWith('image/')) {
@@ -1284,15 +1324,7 @@ export class AdminComponent implements OnInit {
           // Convert to data URL
           const croppedImageData = canvas.toDataURL('image/jpeg', 0.9);
           
-          // Generate filename: DD_MM_YYYY_NNNN_sectionId
-          const datePrefix = this.formatDateForFilename(
-            this.selectedDate || this.dataService.getTodayDate()
-          );
-          const headers = this.authService.getAuthHeaders();
-          const sequence = await this.getNextCropSequence(datePrefix, headers);
-          const sequenceStr = sequence.toString().padStart(4, '0');
-          const sectionId = (this.sectionForm.id || 'unknown').toString();
-          const fileName = `${datePrefix}_${sequenceStr}_${sectionId}`;
+          const fileName = this.buildSectionImageFilename('jpg');
           
           // Upload to backend
           this.uploadCroppedImage(croppedImageData, fileName);
@@ -1326,9 +1358,10 @@ export class AdminComponent implements OnInit {
   }
 
   uploadCroppedImage(imageData: string, fileName: string) {
-    const file = this.dataUrlToFile(imageData, `${fileName}.jpg`);
+    const file = this.dataUrlToFile(imageData, fileName);
+    const previousImageUrl = this.sectionForm.imageUrl || '';
     // loader already shown by generateAndUploadCroppedImageFromFullSize
-    this.uploadMediaFile(file, `${fileName}.jpg`)
+    this.uploadMediaFile(file, fileName)
       .then((url) => {
         this.sectionForm = {
           ...this.sectionForm,
@@ -1342,6 +1375,7 @@ export class AdminComponent implements OnInit {
         // without closing the section form — the user stays on the edit page.
         this.saveSection(false);
         this.saveAllData();
+        this.deletePreviousGeneratedPostCrop(previousImageUrl, url);
         this.toaster.success('Cropped image saved!');
       })
       .catch((error) => {
@@ -1382,7 +1416,8 @@ export class AdminComponent implements OnInit {
     const reader = new FileReader();
     reader.onload = () => {
       const imageData = reader.result as string;
-      const fileName = this.sectionForm.title?.replace(/\s+/g, '_').toLowerCase() || 'uploaded';
+      const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
+      const fileName = this.buildSectionImageFilename(ext);
       this.uploadImageFile(imageData, fileName);
     };
     reader.onerror = () => {
@@ -1392,9 +1427,9 @@ export class AdminComponent implements OnInit {
   }
 
   uploadImageFile(imageData: string, fileName: string) {
-    const file = this.dataUrlToFile(imageData, `${fileName}.jpg`);
+    const file = this.dataUrlToFile(imageData, fileName);
     this.loader.show();
-    this.uploadMediaFile(file, `${fileName}.jpg`)
+    this.uploadMediaFile(file, fileName)
       .then((url) => {
         this.sectionForm = {
           ...this.sectionForm,
@@ -1460,11 +1495,51 @@ export class AdminComponent implements OnInit {
     return data.source_url || data.guid?.rendered || '';
   }
 
-  /** Convert YYYY-MM-DD → DD_MM_YYYY for use in media filenames. */
+  /** Convert YYYY-MM-DD → DD-MM-YYYY for use in media filenames. */
   private formatDateForFilename(dateStr: string): string {
     const parts = dateStr.split('-');
     if (parts.length !== 3) return dateStr;
-    return `${parts[2]}_${parts[1]}_${parts[0]}`;
+    return `${parts[2]}-${parts[1]}-${parts[0]}`;
+  }
+
+  private buildPageImageFilename(ext: string, variant: 'full' | 'hires' | 'thumb' = 'full'): string {
+    const pageNumber = this.pad2(this.pageForm.id || this.dataService.getNextPageId(this.selectedDate, this.selectedEditionNumber));
+    const editionNumber = this.pad2(this.selectedEditionNumber || 1);
+    const date = this.formatDateForFilename(this.selectedDate || this.dataService.getTodayDate());
+    const suffix = variant === 'full' ? '' : `-${variant}`;
+    return `page-${pageNumber}-e-${editionNumber}-${date}${suffix}.${this.cleanExtension(ext)}`;
+  }
+
+  private buildSectionImageFilename(ext: string): string {
+    const pageNumber = this.pad2(this.selectedPage?.id || this.pageForm.id || 1);
+    const editionNumber = this.pad2(this.selectedEditionNumber || 1);
+    const postId = this.formatSectionIdForFilename(this.sectionForm.id || 'unknown');
+    const date = this.formatDateForFilename(this.selectedDate || this.dataService.getTodayDate());
+    const x = this.formatCoordinate(this.sectionForm.x ?? 0);
+    const y = this.formatCoordinate(this.sectionForm.y ?? 0);
+    const w = this.formatCoordinate(this.sectionForm.width ?? 0);
+    const h = this.formatCoordinate(this.sectionForm.height ?? 0);
+    return `page-${pageNumber}-e-${editionNumber}-${date}-post-${postId}-${x}-${y}-${w}-${h}.${this.cleanExtension(ext)}`;
+  }
+
+  private pad2(value: number | string): string {
+    const numericValue = typeof value === 'number' ? value : Number.parseInt(value, 10);
+    return Number.isFinite(numericValue) ? String(numericValue).padStart(2, '0') : String(value).padStart(2, '0');
+  }
+
+  private formatSectionIdForFilename(sectionId: string): string {
+    const trailingNumber = sectionId.match(/(\d+)$/)?.[1];
+    if (trailingNumber) return this.pad2(trailingNumber);
+    return sectionId.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'unknown';
+  }
+
+  private formatCoordinate(value: number): string {
+    return Number(value || 0).toFixed(4);
+  }
+
+  private cleanExtension(ext: string): string {
+    const clean = ext.toLowerCase().replace(/[^a-z0-9]/g, '');
+    return clean || 'jpg';
   }
 
   /**
@@ -1540,6 +1615,24 @@ export class AdminComponent implements OnInit {
     }
   }
 
+  private deletePreviousGeneratedPostCrop(previousUrl: string, newUrl: string): void {
+    if (!previousUrl || previousUrl === newUrl || !this.isGeneratedPostCropUrl(previousUrl)) {
+      return;
+    }
+
+    const previousFilename = decodeURIComponent(previousUrl.split('/').pop() || '');
+    if (!previousFilename) {
+      return;
+    }
+
+    const headers = this.authService.getAuthHeaders();
+    this.findExistingMedia(previousFilename, headers)
+      .then((existing) => existing ? this.deleteMedia(existing.id, headers) : undefined)
+      .catch((error) => {
+        console.warn('Previous cropped post image could not be deleted:', error);
+      });
+  }
+
   getSectionCropPreviewStyle(): { [key: string]: string } {
     const x = this.sectionForm.x ?? 0;
     const y = this.sectionForm.y ?? 0;
@@ -1583,9 +1676,8 @@ export class AdminComponent implements OnInit {
   applyCrop() {
     if (this.hasCropBox() && this.cropperImageRef && this.selectedPage) {
       this.calculateCropCoordinates();
-      
-      // Only generate cropped image if auto-crop is selected and imageUrl is empty
-      if (this.imageSourceOption === 'auto-crop' && (!this.sectionForm.imageUrl || this.sectionForm.imageUrl.trim() === '')) {
+
+      if (this.shouldGenerateCroppedPostImage()) {
         // Use percentage coordinates to crop from full-size image
         const fullImageUrl = this.selectedPage.fullImage;
         this.generateAndUploadCroppedImageFromFullSize(fullImageUrl);
@@ -1594,6 +1686,17 @@ export class AdminComponent implements OnInit {
       }
     }
     this.closeCropper();
+  }
+
+  private shouldGenerateCroppedPostImage(): boolean {
+    const imageUrl = this.sectionForm.imageUrl || '';
+    return this.imageSourceOption === 'auto-crop'
+      || this.isGeneratedPostCropUrl(imageUrl);
+  }
+
+  private isGeneratedPostCropUrl(url: string): boolean {
+    const filename = decodeURIComponent(url.split('/').pop() || '').toLowerCase();
+    return /^page-\d{1,2}-e-\d{1,2}-\d{1,2}-\d{1,2}-\d{4}-post-/.test(filename);
   }
 
   closeCropper() {
@@ -1608,6 +1711,15 @@ export class AdminComponent implements OnInit {
 
   // Data Management
   saveAllData() {
+    if (this.hasUnsavedSettingsChanges) {
+      this.commitSettingsFormToData();
+    }
+
+    if (!this.hasUnsavedChanges) {
+      this.toaster.info('No changes to save.');
+      return;
+    }
+
     // Get the latest data from service to ensure we have all changes
     const currentData = this.dataService.getData();
     
@@ -1620,11 +1732,16 @@ export class AdminComponent implements OnInit {
     
     // Show immediate feedback
     this.toaster.success('Saving data...');
-    
+
+    this.persistAllData(currentData);
+  }
+
+  private persistAllData(currentData: any) {
     // Save asynchronously without blocking UI
     this.dataService.saveData(currentData).subscribe({
       next: (response) => {
         console.log('Save successful:', response);
+        this.markSaved();
         this.toaster.success('All data saved successfully!');
         // NO RELOAD - data is already updated locally
         // Just ensure selected page reference is current
@@ -1634,9 +1751,43 @@ export class AdminComponent implements OnInit {
       },
       error: (error) => {
         console.error('Error saving data:', error);
+        if (this.isRecoveredDataSaveBlocked(error)) {
+          const proceed = confirm(
+            'This data was rebuilt temporarily from WordPress Media Library and may not include your cropped sections/content.\n\n' +
+            'Only continue if you intentionally want to save this recovered/rebuilt dataset as the new canonical newspaper data.\n\n' +
+            'Click OK to save anyway, or Cancel to stop and restore a backup first.'
+          );
+          if (proceed) {
+            this.persistRecoveredData(currentData);
+            return;
+          }
+        }
         this.toaster.error(error.message || 'Failed to save data');
       }
     });
+  }
+
+  private persistRecoveredData(currentData: any) {
+    this.toaster.warning('Saving recovered data by explicit confirmation...');
+    this.dataService.saveData(currentData, { allowRecoveredData: true }).subscribe({
+      next: (response) => {
+        console.log('Recovered data save successful:', response);
+        this.markSaved();
+        this.toaster.success('Recovered data saved successfully!');
+        if (this.selectedPage) {
+          this.selectedPage = this.pages.find(p => p.id === this.selectedPage?.id) || null;
+        }
+      },
+      error: (error) => {
+        console.error('Error saving recovered data:', error);
+        this.toaster.error(error.message || 'Failed to save recovered data');
+      }
+    });
+  }
+
+  private isRecoveredDataSaveBlocked(error: any): boolean {
+    const message = error?.message || error?.error?.message || String(error || '');
+    return message.includes('temporarily recovered from WordPress Media Library');
   }
 
   // ─── Export ──────────────────────────────────────────────────────
@@ -1744,6 +1895,7 @@ export class AdminComponent implements OnInit {
         this.loader.hide();
         this.toaster.success('Backup imported successfully!');
         this.backupHistory = this.dataService.getBackupHistory();
+        this.markSaved();
         this.closeImportModal();
 
         // Re-fetch from server so in-memory state matches what was persisted,
@@ -1771,6 +1923,45 @@ export class AdminComponent implements OnInit {
         this.loader.hide();
         console.error('Import failed:', err);
         this.toaster.error('Failed to import: ' + (err.message || 'Unknown error'));
+      }
+    });
+  }
+
+  rebuildFromSectionPosts() {
+    const proceed = confirm(
+      'This will rebuild the main newspaper JSON from mirrored WordPress section posts.\n\n' +
+      'A server-side snapshot of the current JSON will be kept before replacement. Continue?'
+    );
+    if (!proceed) return;
+
+    this.loader.show();
+    this.dataService.rebuildDataFromSectionPosts().subscribe({
+      next: (result) => {
+        this.toaster.success(
+          `Rebuilt ${result.editionCount} edition(s), ${result.pageCount} page(s), ${result.sectionCount} section(s).`
+        );
+        this.dataService.loadData().subscribe({
+          next: () => {
+            this.availableDates = this.dataService.getAvailableDates();
+            if (this.availableDates.length > 0) {
+              this.selectedDate = this.availableDates[0];
+            }
+            this.loadCurrentEdition();
+            this.loader.hide();
+            this.markSaved();
+            this.cdr.detectChanges();
+          },
+          error: (error) => {
+            this.loader.hide();
+            console.error('Error reloading rebuilt data:', error);
+            this.toaster.error('Rebuild succeeded, but reloading data failed. Please refresh.');
+          }
+        });
+      },
+      error: (error) => {
+        this.loader.hide();
+        console.error('Error rebuilding from section posts:', error);
+        this.toaster.error(error?.error?.error || error?.message || 'Failed to rebuild from section posts');
       }
     });
   }
@@ -1897,7 +2088,8 @@ export class AdminComponent implements OnInit {
     const input = event.target as HTMLInputElement;
     if (input.files && input.files[0]) {
       this.fullImageFile = input.files[0];
-      const fileName = this.fullImageFile.name || `page_full_${Date.now()}.jpg`;
+      const ext = this.fullImageFile.name.split('.').pop()?.toLowerCase() || 'jpg';
+      const fileName = this.buildPageImageFilename(ext, 'full');
       this.loader.show();
       this.uploadMediaFile(this.fullImageFile, fileName)
         .then((url) => {
@@ -1922,7 +2114,8 @@ export class AdminComponent implements OnInit {
     const input = event.target as HTMLInputElement;
     if (input.files && input.files[0]) {
       this.fullImageHiResFile = input.files[0];
-      const fileName = this.fullImageHiResFile.name || `page_full_hires_${Date.now()}.jpg`;
+      const ext = this.fullImageHiResFile.name.split('.').pop()?.toLowerCase() || 'jpg';
+      const fileName = this.buildPageImageFilename(ext, 'hires');
       this.loader.show();
       this.uploadMediaFile(this.fullImageHiResFile, fileName)
         .then((url) => {
@@ -1950,7 +2143,8 @@ export class AdminComponent implements OnInit {
     const input = event.target as HTMLInputElement;
     if (input.files && input.files[0]) {
       this.thumbnailFile = input.files[0];
-      const fileName = this.thumbnailFile.name || `page_thumb_${Date.now()}.jpg`;
+      const ext = this.thumbnailFile.name.split('.').pop()?.toLowerCase() || 'jpg';
+      const fileName = this.buildPageImageFilename(ext, 'thumb');
       this.loader.show();
       this.uploadMediaFile(this.thumbnailFile, fileName)
         .then((url) => {
@@ -2002,9 +2196,10 @@ export class AdminComponent implements OnInit {
       underMaintenance: settings.underMaintenance === true,
       maintenanceMessage: settings.maintenanceMessage ?? ''
     };
+    this.hasUnsavedSettingsChanges = false;
   }
 
-  saveSettings(): void {
+  private buildSettingsFromForm(): GlobalSettings {
     // Strip empty labels so we don't bloat saved data
     const editorLabels = this.settingsForm.editorLabels || {};
     const cleanEditorLabels = { en: (editorLabels['en'] || '').trim(), bn: (editorLabels['bn'] || '').trim() };
@@ -2018,7 +2213,7 @@ export class AdminComponent implements OnInit {
     const cleanPhoneLabels = { en: (phoneLabels['en'] || '').trim(), bn: (phoneLabels['bn'] || '').trim() };
 
     // Ensure settings structure is complete
-    const completeSettings: GlobalSettings = {
+    return {
       logo: this.settingsForm.logo || { url: '', alt: 'Digital Newspaper' },
       socialLinks: this.settingsForm.socialLinks || {},
       defaultDateMode: this.settingsForm.defaultDateMode || 'current',
@@ -2043,10 +2238,20 @@ export class AdminComponent implements OnInit {
       underMaintenance: this.settingsForm.underMaintenance === true,
       maintenanceMessage: this.settingsForm.maintenanceMessage || ''
     };
-    
+  }
+
+  private commitSettingsFormToData(): GlobalSettings {
+    const completeSettings = this.buildSettingsFromForm();
+
     // Update settings in the data service
     this.dataService.updateSettings(completeSettings);
-    
+
+    return completeSettings;
+  }
+
+  saveSettings(): void {
+    const completeSettings = this.commitSettingsFormToData();
+
     // Get the updated data after settings change
     const currentData = this.dataService.getData();
     console.log('Saving settings:', completeSettings);
@@ -2056,6 +2261,7 @@ export class AdminComponent implements OnInit {
     this.dataService.saveData(currentData).subscribe({
       next: () => {
         console.log('Settings saved successfully');
+        this.markSaved();
         this.toaster.success('Settings saved successfully!');
         this.cdr.detectChanges();
       },
@@ -2078,6 +2284,7 @@ export class AdminComponent implements OnInit {
           if (this.settingsForm.logo) {
             this.settingsForm.logo.url = url;
           }
+          this.onSettingsFormChanged();
           this.cdr.detectChanges();
           this.toaster.success('Logo uploaded');
         })

@@ -10,13 +10,13 @@
           </svg>
           Back to Viewer
         </button>
-        <button class="btn btn-success" (click)="saveAllData()" [disabled]="isSavingCrop" [title]="isSavingCrop ? 'Please wait — cropped image is being saved…' : ''">
+        <button class="btn btn-success" (click)="saveAllData()" [disabled]="isSavingCrop || !hasUnsavedChanges" [title]="isSavingCrop ? 'Please wait — cropped image is being saved…' : (!hasUnsavedChanges ? 'No unsaved changes' : 'Save all unsaved newspaper data')">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
             <polyline points="17 21 17 13 7 13 7 21"></polyline>
             <polyline points="7 3 7 8 15 8"></polyline>
           </svg>
-          Save All
+          {{ hasUnsavedChanges ? 'Save All' : 'Saved' }}
         </button>
         <button class="btn btn-primary" *ngIf="isAuthenticated" (click)="openExportModal()" title="Export a JSON backup of WordPress data">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -40,6 +40,15 @@
             <line x1="12" y1="3" x2="12" y2="15"></line>
           </svg>
           Import Backup
+        </button>
+        <button class="btn btn-secondary" *ngIf="isAuthenticated" (click)="rebuildFromSectionPosts()" [disabled]="isSavingCrop" title="Rebuild JSON data from mirrored WordPress section posts">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="23 4 23 10 17 10"></polyline>
+            <polyline points="1 20 1 14 7 14"></polyline>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"></path>
+            <path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"></path>
+          </svg>
+          Rebuild From Posts
         </button>
         <button class="btn btn-danger" *ngIf="isAuthenticated" (click)="logout()">
           Logout
@@ -696,7 +705,7 @@
         </button>
       </div>
 
-      <div class="settings-content">
+      <div class="settings-content" (input)="onSettingsFormChanged()" (change)="onSettingsFormChanged()">
         <!-- Language Settings -->
         <div class="settings-section">
           <h3>Language / ভাষা</h3>

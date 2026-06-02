@@ -25,7 +25,16 @@ export class AuthService {
 
   login(username: string, password: string): Observable<LoginResponse> {
     const loginUrl = `${this.wpBaseUrl}/wp-json/digital-newspaper/v1/auth/login`;
-    return this.http.post<LoginResponse>(loginUrl, { username, password }).pipe(
+    const body = new URLSearchParams({ username, password }).toString();
+    return this.http.post<LoginResponse>(loginUrl, body, {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' }
+    }).pipe(
+      map((response) => {
+        if (!response?.token) {
+          throw new Error('WordPress login response did not include a token. The request may be blocked before it reaches WordPress.');
+        }
+        return response;
+      }),
       tap((response) => {
         if (response?.token) {
           localStorage.setItem(this.tokenKey, response.token);

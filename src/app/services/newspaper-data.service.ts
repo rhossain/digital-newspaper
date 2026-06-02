@@ -1,7 +1,7 @@
 import { Injectable } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
-import { Observable, BehaviorSubject, timer } from 'rxjs';
-import { tap, map, catchError, timeout, retry } from 'rxjs/operators';
+import { HttpClient, HttpResponse } from '@angular/common/http';
+import { Observable, BehaviorSubject, timer, forkJoin, of, throwError } from 'rxjs';
+import { tap, map, catchError, timeout, retry, switchMap } from 'rxjs/operators';
 import { AuthService } from './auth.service';
 import { WP_BASE_URL } from '../config';
 
@@ -88,6 +88,21 @@ export interface NewspaperData {
   editions: NewspaperEdition[];
 }
 
+interface WpMediaItem {
+  id: number;
+  date?: string;
+  source_url: string;
+  title?: { rendered?: string };
+  alt_text?: string;
+}
+
+interface MediaPageCandidate {
+  date: string;
+  pageNumber: number;
+  url: string;
+  label: string;
+}
+
 // ─── Export / Import types ───────────────────────────────────────────────────
 
 export const SCHEMA_VERSION = 2;
@@ -125,6 +140,20 @@ export interface BackupHistoryEntry {
   editionCount: number;
   sizeKb: number;
   sourceUrl: string;
+}
+
+export interface ServerDataBackupSummary {
+  index: number;
+  createdAt: string;
+  editionCount: number;
+  pageCount: number;
+  sectionCount: number;
+  latestDates: string[];
+}
+
+export interface SaveDataOptions {
+  allowRecoveredData?: boolean;
+  forceEmptyOverwrite?: boolean;
 }
 
 export interface ImportValidationResult {
@@ -165,6 +194,7 @@ export interface ImportOptions {
 export class NewspaperDataService {
   private static readonly SETTINGS_CACHE_KEY = 'dn_global_settings';
   private static readonly BACKUP_HISTORY_KEY = 'dn_backup_history';
+  private static readonly EMERGENCY_DRAFT_KEY = 'dn_emergency_local_draft';
   private static readonly MAX_HISTORY_ENTRIES = 20;
 
   private dataSubject!: BehaviorSubject<NewspaperData>;
@@ -177,6 +207,8 @@ export class NewspaperDataService {
   private assetsUrl = '/assets/newspaper-data.json';
   private readonly wpBaseUrl = WP_BASE_URL;
   private readonly apiUrl = `${WP_BASE_URL}/wp-json/digital-newspaper/v1/data`;
+  private readonly mediaApiUrl = `${WP_BASE_URL}/wp-json/wp/v2/media`;
+  private dataRecoveredFromMediaLibrary = false;
 
   constructor(private http: HttpClient, private auth: AuthService) {
     const cachedSettings = NewspaperDataService._readCachedSettings();
@@ -190,6 +222,7 @@ export class NewspaperDataService {
     this.currentDateSubject = new BehaviorSubject<string>(this.getTodayDate());
     this.currentDate$ = this.currentDateSubject.asObservable();
     this.data$ = this.dataSubject.asObservable();
+    this.dataSubject.subscribe(data => this.cacheEmergencyDraft(data));
   }
 
   // Date helper methods
@@ -223,7 +256,7 @@ export class NewspaperDataService {
     // preflight (custom request headers like Cache-Control would require the
     // server to add them to Access-Control-Allow-Headers).
     const cacheBuster = `?_t=${Date.now()}`;
-    return this.http.get<NewspaperData | { pages: NewspaperPage[] }>(
+    return this.http.get<unknown>(
       this.apiUrl + cacheBuster
     ).pipe(
       // 20 s — WordPress on shared hosting can take 5-15 s on a cold boot.
@@ -247,77 +280,343 @@ export class NewspaperDataService {
           '[NewspaperDataService] Live API unreachable after retries — '
           + 'serving empty fallback dataset. Reason:', err?.message ?? err
         );
-        return this.http.get<NewspaperData | { pages: NewspaperPage[] }>(this.assetsUrl);
+        return this.http.get<unknown>(this.assetsUrl);
       }),
-      map((data): NewspaperData => {
-        // Backwards compatibility: convert old format to new format
-        if ('pages' in data && !('editions' in data)) {
-          const todayDate = this.getTodayDate();
-          return {
-            settings: {
-              defaultDateMode: 'current',
-              socialLinks: {}
-            },
-            editions: [{
-              date: todayDate,
-              pages: data.pages
-            }]
-          };
-        }
-        // Ensure settings exist and are normalized
-        const result = data as NewspaperData;
-        if (!result.settings) {
-          result.settings = {
-            defaultDateMode: 'current',
-            socialLinks: {},
-            logo: { url: '', alt: 'Digital Newspaper' }
-          };
-        } else {
-          // PHP empty array [] serializes to JSON []; normalize to object {}
-          if (!result.settings.socialLinks || Array.isArray(result.settings.socialLinks)) {
-            result.settings.socialLinks = {};
-          }
-          // Ensure logo object always exists
-          if (!result.settings.logo) {
-            result.settings.logo = { url: '', alt: 'Digital Newspaper' };
-          }
-          // Ensure address object always exists
-          if (!result.settings.address) {
-            result.settings.address = {};
-          }
-          // Ensure editor field always exists
-          if (result.settings.editor === undefined) {
-            result.settings.editor = '';
-          }
-          // Ensure language field always exists
-          if (!result.settings.language) {
-            result.settings.language = 'en';
-          }
-        }
-        // Cache settings from the API for offline / quick-startup use
-        if (result.settings) {
-          this.cacheSettings(result.settings);
-        }
-        // Normalize page fields: PHP serializes empty/unset strings as [] (empty
-        // array) which is truthy in JS, causing *ngIf guards to pass while
-        // [src] bindings receive a non-string and silently resolve to "".
-        result.editions.forEach(edition => {
-          edition.pages = edition.pages.map(page => ({
-            ...page,
-            thumbnail: typeof page.thumbnail === 'string' ? page.thumbnail : '',
-            fullImage: typeof page.fullImage === 'string' ? page.fullImage : '',
-            sections: Array.isArray(page.sections) ? page.sections.map(section => ({
-              ...section,
-              imageUrl: typeof section.imageUrl === 'string' ? section.imageUrl : undefined,
-            })) : [],
-          }));
-        });
-        return result;
+      map((data): NewspaperData => this.normalizeData(this.assertValidNewspaperResponse(data))),
+      switchMap((data) => {
+        this.dataRecoveredFromMediaLibrary = false;
+        return this.hasAnyPages(data) ? of(data) : this.loadDataFromMediaLibrary(data);
       }),
+      catchError((err) => this.loadEmergencyDraftAfterApiFailure(err)),
       tap((data: NewspaperData) => {
         this.dataSubject.next(data);
       })
     );
+  }
+
+  private assertValidNewspaperResponse(data: unknown): NewspaperData | { pages: NewspaperPage[] } {
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+      throw new Error('Invalid newspaper API response: expected a JSON object.');
+    }
+
+    const candidate = data as Partial<NewspaperData> & { pages?: NewspaperPage[]; message?: unknown; error?: unknown };
+    if (Array.isArray(candidate.editions) || Array.isArray(candidate.pages)) {
+      return candidate as NewspaperData | { pages: NewspaperPage[] };
+    }
+
+    const serverMessage = typeof candidate.message === 'string'
+      ? candidate.message
+      : (typeof candidate.error === 'string' ? candidate.error : 'missing editions/pages');
+    throw new Error(`Invalid newspaper API response: ${serverMessage}`);
+  }
+
+  private loadEmergencyDraftAfterApiFailure(error: unknown): Observable<NewspaperData> {
+    const draft = this.readEmergencyDraft();
+    if (draft && this.hasAnyPages(draft)) {
+      console.warn(
+        '[NewspaperDataService] Live API returned an invalid response; using emergency browser-local draft. Reason:',
+        error instanceof Error ? error.message : error
+      );
+      return of(draft);
+    }
+
+    return throwError(() => error);
+  }
+
+  private cacheEmergencyDraft(data: NewspaperData): void {
+    if (this.dataRecoveredFromMediaLibrary) return;
+    if (!this.hasAnyPages(data)) return;
+    try {
+      localStorage.setItem(
+        NewspaperDataService.EMERGENCY_DRAFT_KEY,
+        JSON.stringify({ createdAt: new Date().toISOString(), data })
+      );
+    } catch (error) {
+      console.warn('[NewspaperDataService] Failed to cache emergency local draft:', error);
+    }
+  }
+
+  private readEmergencyDraft(): NewspaperData | null {
+    try {
+      const raw = localStorage.getItem(NewspaperDataService.EMERGENCY_DRAFT_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as { data?: unknown };
+      return this.normalizeData(this.assertValidNewspaperResponse(parsed.data));
+    } catch (error) {
+      console.warn('[NewspaperDataService] Failed to read emergency local draft:', error);
+      return null;
+    }
+  }
+
+  private normalizeData(data: NewspaperData | { pages: NewspaperPage[] }): NewspaperData {
+    // Backwards compatibility: convert old format to new format
+    if ('pages' in data && !('editions' in data)) {
+      const todayDate = this.getTodayDate();
+      return this.normalizeData({
+        settings: {
+          defaultDateMode: 'current',
+          socialLinks: {}
+        },
+        editions: [{
+          date: todayDate,
+          pages: data.pages
+        }]
+      });
+    }
+
+    // Ensure settings exist and are normalized
+    const result = data as NewspaperData;
+    if (!Array.isArray(result.editions)) {
+      result.editions = [];
+    }
+    if (!result.settings) {
+      result.settings = {
+        defaultDateMode: 'current',
+        socialLinks: {},
+        logo: { url: '', alt: 'Digital Newspaper' }
+      };
+    } else {
+      // PHP empty array [] serializes to JSON []; normalize to object {}
+      if (!result.settings.socialLinks || Array.isArray(result.settings.socialLinks)) {
+        result.settings.socialLinks = {};
+      }
+      // Ensure logo object always exists
+      if (!result.settings.logo) {
+        result.settings.logo = { url: '', alt: 'Digital Newspaper' };
+      }
+      // Ensure address object always exists
+      if (!result.settings.address) {
+        result.settings.address = {};
+      }
+      // Ensure editor field always exists
+      if (result.settings.editor === undefined) {
+        result.settings.editor = '';
+      }
+      // Ensure language field always exists
+      if (!result.settings.language) {
+        result.settings.language = 'en';
+      }
+    }
+    // Cache settings from the API for offline / quick-startup use
+    if (result.settings) {
+      this.cacheSettings(result.settings);
+    }
+    // Normalize page fields: PHP serializes empty/unset strings as [] (empty
+    // array) which is truthy in JS, causing *ngIf guards to pass while
+    // [src] bindings receive a non-string and silently resolve to "".
+    result.editions.forEach(edition => {
+      edition.pages = Array.isArray(edition.pages) ? edition.pages.map(page => ({
+        ...page,
+        thumbnail: typeof page.thumbnail === 'string' ? page.thumbnail : '',
+        fullImage: typeof page.fullImage === 'string' ? page.fullImage : '',
+        sections: Array.isArray(page.sections) ? page.sections.map(section => ({
+          ...section,
+          imageUrl: typeof section.imageUrl === 'string' ? section.imageUrl : undefined,
+        })) : [],
+      })) : [];
+    });
+    return result;
+  }
+
+  private hasAnyPages(data: NewspaperData): boolean {
+    return data.editions.some(edition => Array.isArray(edition.pages) && edition.pages.length > 0);
+  }
+
+  private loadDataFromMediaLibrary(baseData: NewspaperData): Observable<NewspaperData> {
+    return this.getAllWordPressMedia().pipe(
+      map((mediaItems) => this.buildDataFromMediaLibrary(baseData, mediaItems)),
+      catchError((err) => {
+        console.warn(
+          '[NewspaperDataService] Digital Newspaper API has no pages and Media Library recovery failed. Reason:',
+          err?.message ?? err
+        );
+        return of(baseData);
+      })
+    );
+  }
+
+  private getAllWordPressMedia(): Observable<WpMediaItem[]> {
+    const firstPageUrl = this.buildMediaUrl(1);
+    return this.http.get<WpMediaItem[]>(firstPageUrl, { observe: 'response' }).pipe(
+      timeout(20000),
+      switchMap((response: HttpResponse<WpMediaItem[]>) => {
+        const firstPageItems = response.body || [];
+        const totalPages = Number(response.headers.get('X-WP-TotalPages') || 1);
+        if (!Number.isFinite(totalPages) || totalPages <= 1) {
+          return of(firstPageItems);
+        }
+
+        const remainingRequests: Observable<WpMediaItem[]>[] = [];
+        for (let page = 2; page <= totalPages; page += 1) {
+          remainingRequests.push(this.http.get<WpMediaItem[]>(this.buildMediaUrl(page)).pipe(timeout(20000)));
+        }
+
+        return forkJoin(remainingRequests).pipe(
+          map((pages) => [firstPageItems, ...pages].flat())
+        );
+      })
+    );
+  }
+
+  private buildMediaUrl(page: number): string {
+    return `${this.mediaApiUrl}?media_type=image&per_page=100&page=${page}&orderby=date&order=desc&_fields=id,date,source_url,title,alt_text`;
+  }
+
+  private buildDataFromMediaLibrary(baseData: NewspaperData, mediaItems: WpMediaItem[]): NewspaperData {
+    const candidates = mediaItems
+      .map(item => this.toMediaPageCandidate(item))
+      .filter((candidate): candidate is MediaPageCandidate => candidate !== null);
+
+    if (candidates.length === 0) {
+      return baseData;
+    }
+
+    const grouped = new Map<string, MediaPageCandidate[]>();
+    candidates.forEach(candidate => {
+      const existing = grouped.get(candidate.date) || [];
+      existing.push(candidate);
+      grouped.set(candidate.date, existing);
+    });
+
+    const recoveredEditions: NewspaperEdition[] = Array.from(grouped.entries())
+      .map(([date, dateCandidates]) => {
+        const uniqueByPage = new Map<number, MediaPageCandidate>();
+        dateCandidates
+          .sort((a, b) => b.pageNumber - a.pageNumber)
+          .forEach(candidate => uniqueByPage.set(candidate.pageNumber, candidate));
+
+        return {
+          date,
+          edition: 1,
+          pages: Array.from(uniqueByPage.values())
+            .sort((a, b) => a.pageNumber - b.pageNumber)
+            .map((candidate, index): NewspaperPage => ({
+              id: index + 1,
+              thumbnail: candidate.url,
+              fullImage: candidate.url,
+              sections: [],
+              pageLabels: { en: candidate.label, bn: '' }
+            }))
+        };
+      })
+      .filter(edition => edition.pages.length > 0)
+      .sort((a, b) => b.date.localeCompare(a.date));
+
+    if (recoveredEditions.length === 0) {
+      return baseData;
+    }
+
+    console.warn(
+      `[NewspaperDataService] Digital Newspaper API returned no pages; recovered ${recoveredEditions.length} edition(s) from WordPress Media Library.`
+    );
+    this.dataRecoveredFromMediaLibrary = true;
+
+    return this.normalizeData({
+      ...baseData,
+      editions: recoveredEditions
+    });
+  }
+
+  private toMediaPageCandidate(item: WpMediaItem): MediaPageCandidate | null {
+    if (!item.source_url || !this.isSupportedImageUrl(item.source_url)) {
+      return null;
+    }
+
+    const filename = decodeURIComponent(item.source_url.split('/').pop() || '');
+    if (!this.isRecoverableFullPageImage(filename)) {
+      return null;
+    }
+
+    const date = this.parseNewspaperDate(filename);
+    const pageNumber = this.parsePageNumber(filename);
+    if (!date || !pageNumber) {
+      return null;
+    }
+
+    return {
+      date,
+      pageNumber,
+      url: item.source_url,
+      label: `Page ${pageNumber}`
+    };
+  }
+
+  private isRecoverableFullPageImage(filename: string): boolean {
+    const normalized = filename.toLowerCase();
+    if (
+      /^page-\d{1,2}-s-/.test(normalized)
+      || /^page-\d{1,2}-e-\d{1,2}-\d{1,2}-\d{1,2}-\d{4}-s-/.test(normalized)
+      || /^page-\d{1,2}-e-\d{1,2}-\d{1,2}-\d{1,2}-\d{4}-post-/.test(normalized)
+    ) {
+      return false;
+    }
+    if (/^page-\d{1,2}-e-/.test(normalized)) {
+      return true;
+    }
+
+    return normalized.includes('page')
+      && !normalized.includes('post-')
+      && !normalized.includes('_post')
+      && !normalized.includes('dn-social-resize');
+  }
+
+  private parseNewspaperDate(filename: string): string | null {
+    const matches = Array.from(filename.matchAll(/(?:^|[^\d])(\d{1,2})[_-](\d{1,2})[_-](\d{2,4})(?:[^\d]|$)/g));
+    for (const match of matches) {
+      const day = Number.parseInt(match[1], 10);
+      const month = Number.parseInt(match[2], 10);
+      const year = this.normalizeFilenameYear(match[3]);
+
+      if (!year || day < 1 || day > 31 || month < 1 || month > 12) {
+        continue;
+      }
+
+      return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    }
+
+    return null;
+  }
+
+  private normalizeFilenameYear(value: string): string | null {
+    if (value.length === 2) {
+      const yearSuffix = Number.parseInt(value, 10);
+      return yearSuffix >= 20 ? `20${value}` : null;
+    }
+
+    if (value === '0206') {
+      return '2026';
+    }
+
+    const year = Number.parseInt(value, 10);
+    return year >= 2020 && year <= 2099 ? String(year) : null;
+  }
+
+  private parsePageNumber(filename: string): number | null {
+    if (/frist-page/i.test(filename) || /first-page/i.test(filename)) {
+      return 1;
+    }
+
+    const patterns = [
+      /^page-(\d{1,2})-e-/i,
+      /page[_-]?(\d{1,2})(?=[_-])/i,
+      /page[_-]?(\d)(?=\d{2}[_-]\d{2}[_-]\d{2})/i,
+    ];
+
+    for (const pattern of patterns) {
+      const match = filename.match(pattern);
+      if (match) {
+        const pageNumber = Number.parseInt(match[1], 10);
+        if (Number.isFinite(pageNumber) && pageNumber > 0 && pageNumber <= 32) {
+          return pageNumber;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  private isSupportedImageUrl(url: string): boolean {
+    return /\.(jpe?g|png|webp)(\?.*)?$/i.test(url);
   }
 
   getData(): NewspaperData {
@@ -433,7 +732,13 @@ export class NewspaperDataService {
     return fallback || '';
   }
 
-  saveData(data: NewspaperData): Observable<any> {
+  saveData(data: NewspaperData, options: SaveDataOptions = {}): Observable<any> {
+    if (this.dataRecoveredFromMediaLibrary && !options.allowRecoveredData) {
+      return throwError(() => new Error(
+        'Save blocked: the current pages were temporarily recovered from WordPress Media Library and do not include cropped sections/content. Restore the original Digital Newspaper JSON backup before saving.'
+      ));
+    }
+
     // Update the local data
     this.dataSubject.next(data);
     
@@ -444,7 +749,50 @@ export class NewspaperDataService {
     
     // Save to backend API
     const headers = this.auth.getAuthHeaders();
-    return this.http.post(this.apiUrl, data, { headers });
+    const saveUrl = options.forceEmptyOverwrite ? `${this.apiUrl}?force=1` : this.apiUrl;
+    return this.http.post<unknown>(saveUrl, data, { headers }).pipe(
+      map((response) => this.assertSaveAccepted(response)),
+      tap(() => {
+        if (options.allowRecoveredData) {
+          this.dataRecoveredFromMediaLibrary = false;
+        }
+      })
+    );
+  }
+
+  private assertSaveAccepted(response: unknown): unknown {
+    if (response && typeof response === 'object' && (response as { success?: unknown }).success === true) {
+      return response;
+    }
+
+    const payload = response && typeof response === 'object'
+      ? response as { message?: unknown; error?: unknown }
+      : {};
+    const serverMessage = typeof payload.error === 'string'
+      ? payload.error
+      : (typeof payload.message === 'string' ? payload.message : 'server did not confirm success');
+    throw new Error(`Save was not confirmed by WordPress: ${serverMessage}`);
+  }
+
+  listServerBackups(): Observable<ServerDataBackupSummary[]> {
+    const headers = this.auth.getAuthHeaders();
+    return this.http.get<{ backups: ServerDataBackupSummary[] }>(`${this.apiUrl}/backups`, { headers }).pipe(
+      map(response => response.backups || [])
+    );
+  }
+
+  restoreServerBackup(index: number): Observable<any> {
+    const headers = this.auth.getAuthHeaders();
+    return this.http.post(`${this.apiUrl}/restore`, { index }, { headers });
+  }
+
+  rebuildDataFromSectionPosts(): Observable<{ success: boolean; editionCount: number; pageCount: number; sectionCount: number }> {
+    const headers = this.auth.getAuthHeaders();
+    return this.http.post<{ success: boolean; editionCount: number; pageCount: number; sectionCount: number }>(
+      `${this.apiUrl}/rebuild-from-sections`,
+      {},
+      { headers }
+    );
   }
 
   getApiBaseUrl(): string {
