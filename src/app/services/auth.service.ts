@@ -27,11 +27,20 @@ export class AuthService {
     const loginUrl = `${this.wpBaseUrl}/wp-json/digital-newspaper/v1/auth/login`;
     const body = new URLSearchParams({ username, password }).toString();
     return this.http.post<LoginResponse>(loginUrl, body, {
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' }
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+      withCredentials: true,
     }).pipe(
       map((response) => {
         if (!response?.token) {
-          throw new Error('WordPress login response did not include a token. The request may be blocked before it reaches WordPress.');
+          // Detect host-level security block (Imunify360, ModSecurity, etc.).
+          // These return HTTP 200 with a JSON body that has no 'token' field.
+          const resp = response as unknown as Record<string, unknown>;
+          const serverMsg = typeof resp['message'] === 'string' ? resp['message']
+            : typeof resp['error'] === 'string' ? resp['error'] : '';
+          if (AuthService.isWafBlockMessage(serverMsg)) {
+            throw new Error('WAF_BLOCKED:' + serverMsg);
+          }
+          throw new Error('NO_TOKEN');
         }
         return response;
       }),
@@ -41,6 +50,15 @@ export class AuthService {
         }
       })
     );
+  }
+
+  /** Returns true when the server message looks like a WAF / bot-protection block. */
+  static isWafBlockMessage(msg: string): boolean {
+    const lower = msg.toLowerCase();
+    return lower.includes('imunify') || lower.includes('bot-protection')
+      || lower.includes('access denied') || lower.includes('blocked')
+      || lower.includes('modsecurity') || lower.includes('cloudflare')
+      || lower.includes('captcha');
   }
 
   logout(): void {
@@ -87,7 +105,7 @@ export class AuthService {
       return of(false);
     }
     const meUrl = `${this.wpBaseUrl}/wp-json/digital-newspaper/v1/auth/me`;
-    return this.http.get(meUrl, { headers }).pipe(
+    return this.http.get(meUrl, { headers, withCredentials: true }).pipe(
       map(() => true)
     );
   }

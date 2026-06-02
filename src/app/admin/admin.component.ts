@@ -309,14 +309,23 @@ export class AdminComponent implements OnInit {
       error: (err) => {
         this.isAuthenticating = false;
         const isParseError = err.error instanceof SyntaxError || (err.status === 200 && err.name === 'HttpErrorResponse');
+        const msg: string = err?.message ?? '';
         if (err.status === 0) {
           this.authError = 'Cannot reach WordPress. Verify the WordPress site is online and CORS "Allowed Origins" includes this app\'s URL.';
         } else if (err.status === 401 || err.status === 400) {
           this.authError = 'Invalid username or password. Please try again.';
         } else if (err.status === 403) {
           this.authError = 'Access denied. Your WordPress account may not have the Administrator role.';
-        } else if (err?.message?.includes('did not include a token')) {
-          this.authError = 'WordPress did not return a login token. The request is likely being blocked by Imunify360 before it reaches the Digital Newspaper plugin.';
+        } else if (msg.startsWith('WAF_BLOCKED:')) {
+          // Host-level security (e.g. Imunify360, ModSecurity) blocked the request.
+          // The withCredentials interceptor sends session cookies to avoid this;
+          // if it still happens, the REST API paths must be whitelisted server-side.
+          const detail = msg.replace('WAF_BLOCKED:', '').trim();
+          this.authError = `The login request was blocked by the server's security module. `
+            + `To fix this, whitelist the path /wp-json/digital-newspaper/v1/ in your hosting security settings (Imunify360 / ModSecurity). `
+            + `Server message: ${detail}`;
+        } else if (msg === 'NO_TOKEN' || msg.includes('did not include a token')) {
+          this.authError = 'WordPress did not return a login token. Please check: (1) the Digital Newspaper plugin is active, (2) WordPress Permalinks are set to "Post name", and (3) the WordPress URL in the app configuration is correct.';
         } else if (isParseError) {
           this.authError = 'WordPress returned an unexpected response. Please check: (1) WordPress Permalinks are set to "Post name", (2) the Digital Newspaper plugin is active, and (3) the WordPress URL in the app configuration is correct.';
         } else {
@@ -1762,7 +1771,15 @@ export class AdminComponent implements OnInit {
             return;
           }
         }
-        this.toaster.error(error.message || 'Failed to save data');
+        const errMsg: string = error?.message ?? '';
+        if (errMsg.startsWith('WAF_BLOCKED:')) {
+          const detail = errMsg.replace('WAF_BLOCKED:', '').trim();
+          this.toaster.error(
+            `Save was blocked by the server's security module. Whitelist /wp-json/digital-newspaper/v1/ in your hosting security settings. (${detail})`
+          );
+        } else {
+          this.toaster.error(errMsg || 'Failed to save data');
+        }
       }
     });
   }

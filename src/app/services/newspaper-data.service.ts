@@ -307,6 +307,12 @@ export class NewspaperDataService {
     const serverMessage = typeof candidate.message === 'string'
       ? candidate.message
       : (typeof candidate.error === 'string' ? candidate.error : 'missing editions/pages');
+
+    // Distinguish host-level WAF blocks from genuine plugin errors so the
+    // calling code can surface a helpful, actionable message to the admin.
+    if (AuthService.isWafBlockMessage(serverMessage)) {
+      throw new Error(`WAF_BLOCKED:${serverMessage}`);
+    }
     throw new Error(`Invalid newspaper API response: ${serverMessage}`);
   }
 
@@ -771,6 +777,11 @@ export class NewspaperDataService {
     const serverMessage = typeof payload.error === 'string'
       ? payload.error
       : (typeof payload.message === 'string' ? payload.message : 'server did not confirm success');
+
+    // Host-level WAF block — distinguish from a plugin-level rejection.
+    if (AuthService.isWafBlockMessage(serverMessage)) {
+      throw new Error(`WAF_BLOCKED:${serverMessage}`);
+    }
     throw new Error(`Save was not confirmed by WordPress: ${serverMessage}`);
   }
 

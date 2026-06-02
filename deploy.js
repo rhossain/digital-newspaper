@@ -179,7 +179,22 @@ if (!fs.existsSync(htaccessPath)) {
   RewriteCond %{REQUEST_FILENAME} !-d
   RewriteCond %{REQUEST_URI} !^/wp/ [NC]
   RewriteRule ^ /index.html [L]
-</IfModule>`;
+</IfModule>
+
+# ---- Digital Newspaper: disable ModSecurity for the WordPress REST API ----
+# Host-level WAF modules (Imunify360, ModSecurity) can block authenticated
+# POST requests to /wp/wp-json/ before they reach the plugin, causing login
+# and save failures for users with valid credentials.
+# These rules disable the rule engine only for the Digital Newspaper REST API
+# and the WordPress media API used by the admin panel.
+<IfModule mod_security2.c>
+  SecRuleEngine Off
+</IfModule>
+<IfModule mod_security.c>
+  SecFilterEngine Off
+  SecFilterScanPOST Off
+</IfModule>
+# ---- end Digital Newspaper WAF bypass ----`;
   fs.writeFileSync(htaccessPath, htaccessContent);
   log('✓ .htaccess created', colors.green);
 }

@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Digital Newspaper API
  * Description: Headless WordPress REST API for Digital Newspaper data and authentication.
- * Version: 1.0.0
+ * Version: 1.1.0
  * Author: Digital Newspaper
  */
 
@@ -26,6 +26,52 @@ class Digital_Newspaper_API {
     add_action('admin_menu', [$this, 'register_settings_page']);
     add_action('admin_init', [$this, 'register_settings']);
     add_filter('rest_pre_serve_request', [$this, 'add_cors_headers'], 10, 4);
+    // Ensure ModSecurity bypass rules are in .htaccess so the REST API is not
+    // blocked by host-level WAF (e.g. Imunify360 on Hostinger shared hosting).
+    add_action('admin_init', [$this, 'ensure_htaccess_rules']);
+    register_activation_hook(__FILE__, [$this, 'ensure_htaccess_rules']);
+  }
+
+  /**
+   * Write ModSecurity bypass rules into the WordPress .htaccess file.
+   *
+   * Host-level WAF modules (Imunify360, ModSecurity on Hostinger/cPanel shared
+   * hosting) can block legitimate POST requests to WordPress REST API endpoints
+   * before they ever reach PHP, causing login and save operations to fail even
+   * for users with valid credentials.
+   *
+   * This method uses WordPress's own insert_with_markers() to add targeted
+   * bypass rules for only the Digital Newspaper REST API paths, so the rest of
+   * the site continues to receive WAF protection.
+   *
+   * The rules are idempotent — calling this method multiple times will update
+   * the block in-place without duplicating it.
+   */
+  public function ensure_htaccess_rules(): void {
+    if (!function_exists('insert_with_markers')) {
+      require_once ABSPATH . 'wp-admin/includes/misc.php';
+    }
+
+    $htaccess = get_home_path() . '.htaccess';
+    if (!is_writable($htaccess)) {
+      // Not writable — skip silently; the admin will need to add rules manually.
+      return;
+    }
+
+    $rules = [
+      '# Disable ModSecurity rule engine for Digital Newspaper REST API requests.',
+      '# These paths handle login and data save for authenticated admin users;',
+      '# WAF bot-protection must not block them.',
+      '<IfModule mod_security2.c>',
+      '  SecRuleEngine Off',
+      '</IfModule>',
+      '<IfModule mod_security.c>',
+      '  SecFilterEngine Off',
+      '  SecFilterScanPOST Off',
+      '</IfModule>',
+    ];
+
+    insert_with_markers($htaccess, 'Digital Newspaper API', $rules);
   }
 
   public function handle_cors_preflight(): void {
@@ -38,7 +84,7 @@ class Digital_Newspaper_API {
     header('Access-Control-Allow-Origin: ' . $origin);
     header('Vary: Origin');
     header('Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS');
-    header('Access-Control-Allow-Headers: Authorization, X-Authorization, Content-Type');
+    header('Access-Control-Allow-Headers: Authorization, X-Authorization, Content-Type, X-Requested-With');
     if (get_option(self::OPTION_ALLOW_CREDENTIALS, true)) {
       header('Access-Control-Allow-Credentials: true');
     }
