@@ -789,10 +789,19 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     this.modalLinkedSections = [];
   }
 
+  private getPrintDocument(contentHtml: string, styles: string = ''): string {
+    // <thead>/<tfoot> repeat on every printed page natively — no JS padding tricks needed.
+    return `<!DOCTYPE html><html><head><title></title><style>${this.getPrintStyles()}${styles}</style></head><body><table class="print-table"><thead><tr><td><div class="print-header"><div class="print-header-left"></div><span class="print-header-date"></span></div></td></tr></thead><tbody><tr><td><main class="print-content">${contentHtml}</main></td></tr></tbody><tfoot><tr><td><div class="print-footer"></div></td></tr></tfoot></table></body></html>`;
+  }
+
+  private getPrintStyles(): string {
+    return `*{box-sizing:border-box;}html,body{margin:0;padding:0;background:white;color:#000;font-family:sans-serif;font-size:16px;line-height:1.7;}.print-table{width:100%;border-collapse:collapse;border-spacing:0;}.print-table thead td,.print-table tfoot td{padding:0;margin:0;}.print-table tbody td{padding:0;vertical-align:top;}.print-header{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 20px;border-bottom:2px solid #ccc;background:white;font-family:sans-serif;}.print-header-left{display:flex;align-items:center;gap:12px;min-width:0;}.logo-img{height:40px;width:auto;max-width:220px;object-fit:contain;}.logo-text{font-size:20px;font-weight:600;overflow-wrap:anywhere;}.print-header-date{font-size:14px;color:#444;white-space:nowrap;}.print-content{padding:16px 20px;}.print-footer{padding:12px 20px;border-top:2px solid #ccc;font-size:14px;line-height:1.5;color:#555;background:white;font-family:sans-serif;}.footer-editor{font-weight:bold;display:block;margin-bottom:4px;}.footer-detail{display:block;overflow-wrap:anywhere;}h1{font-size:22px;line-height:1.3;margin:0 0 14px;}article{font-family:serif;overflow-wrap:anywhere;}article p{margin:0 0 10px;}img{max-width:100%;height:auto;}@media print{*{-webkit-print-color-adjust:exact;print-color-adjust:exact;}@page{margin:15mm;}h1,img{break-inside:avoid;page-break-inside:avoid;}img{max-height:185mm;width:auto;}}`;
+  }
+
   printContent(content: string, title: string): void {
     const win = window.open('', '_blank');
     if (!win) return;
-    win.document.write('<!DOCTYPE html><html><head><title></title><style>body{margin:0;background:white;font-family:serif;font-size:16px;line-height:1.7;color:#000;padding-top:100px;padding-bottom:70px;}.print-header{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid #ccc;background:white;font-family:sans-serif;}.print-header-left{display:flex;align-items:center;gap:12px;}.logo-img{height:40px;width:auto;object-fit:contain;}.logo-text{font-size:20px;font-weight:600;}.print-header-date{font-size:16px;color:#444;white-space:nowrap;}h1{font-size:22px;margin:16px 20px;}article{padding:0 20px 20px;}.print-footer{padding:16px 20px;border-top:1px solid #ccc;text-align:left;font-size:15px;color:#555;background:white;font-family:sans-serif;}.footer-editor{font-weight:bold;white-space:nowrap;display:block;margin-bottom:4px;}.footer-detail{display:block;line-height:1.5;}@media print{body{margin:0;padding-top:100px;padding-bottom:120px;}.print-header{position:fixed;top:0;left:0;right:0;z-index:1000;}.print-footer{position:fixed;bottom:0;left:0;right:0;z-index:1000;}}</style></head><body><div class="print-header"><div class="print-header-left"></div><span class="print-header-date"></span></div><h1></h1><article></article><div class="print-footer"></div></body></html>');
+    win.document.write(this.getPrintDocument('<h1></h1><article></article>'));
     win.document.close();
     this.populatePrintHeaderFooter(win);
     const titleEl = win.document.querySelector('title');
@@ -802,6 +811,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     const articleEl = win.document.querySelector('article');
     if (articleEl) {
       articleEl.innerHTML = this.normalizeContent(content);
+      this.applyPrintContentPadding(win);
       win.print();
       win.close();
     }
@@ -819,7 +829,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   printImage(imageUrl: string, title: string): void {
     const win = window.open('', '_blank');
     if (!win) return;
-    win.document.write('<!DOCTYPE html><html><head><title></title><style>body{margin:0;background:white;font-family:sans-serif;padding-top:100px;padding-bottom:70px;}.print-header{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid #ccc;background:white;}.print-header-left{display:flex;align-items:center;gap:12px;}.logo-img{height:40px;width:auto;object-fit:contain;}.logo-text{font-size:20px;font-weight:600;}.print-header-date{font-size:16px;color:#444;white-space:nowrap;}.img-container{display:flex;justify-content:center;align-items:flex-start;padding:20px;}img{max-width:100%;height:auto;display:block;}.print-footer{padding:16px 20px;border-top:1px solid #ccc;text-align:left;font-size:15px;color:#555;background:white;}.footer-editor{font-weight:bold;white-space:nowrap;display:block;margin-bottom:4px;}.footer-detail{display:block;line-height:1.5;}@media print{body{margin:0;padding-top:100px;padding-bottom:120px;}.print-header{position:fixed;top:0;left:0;right:0;z-index:1000;}.print-footer{position:fixed;bottom:0;left:0;right:0;z-index:1000;}}</style></head><body><div class="print-header"><div class="print-header-left"></div><span class="print-header-date"></span></div><div class="img-container"><img/></div><div class="print-footer"></div></body></html>');
+    win.document.write(this.getPrintDocument('<div class="img-container"><img/></div>', '.img-container{display:flex;justify-content:center;align-items:flex-start;}.img-container img{display:block;max-width:100%;max-height:185mm;height:auto;object-fit:contain;}'));
     win.document.close();
     this.populatePrintHeaderFooter(win);
     const titleEl = win.document.querySelector('title');
@@ -828,7 +838,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     if (imgEl) {
       imgEl.alt = title;
       imgEl.src = imageUrl;
-      imgEl.onload = () => { win.print(); win.close(); };
+      imgEl.onload = () => { this.applyPrintContentPadding(win); win.print(); win.close(); };
     }
   }
 
@@ -847,7 +857,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     if (!win) return;
 
     // Write a minimal skeleton — no user content injected as HTML
-    win.document.write('<!DOCTYPE html><html><head><title></title><style>body{margin:0;background:white;font-family:sans-serif;padding-top:100px;padding-bottom:70px;}.print-header{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid #ccc;background:white;}.print-header-left{display:flex;align-items:center;gap:12px;}.logo-img{height:40px;width:auto;object-fit:contain;}.logo-text{font-size:20px;font-weight:600;}.print-header-date{font-size:16px;color:#444;white-space:nowrap;}.images-container{padding:20px;display:flex;flex-direction:column;gap:30px;align-items:center;}.print-image{width:100%;max-width:900px;height:auto;display:block;}.print-footer{padding:16px 20px;border-top:1px solid #ccc;text-align:left;font-size:15px;color:#555;background:white;}.footer-editor{font-weight:bold;white-space:nowrap;display:block;margin-bottom:4px;}.footer-detail{display:block;line-height:1.5;}@media print{body{margin:0;padding-top:100px;padding-bottom:120px;}.print-header{position:fixed;top:0;left:0;right:0;z-index:1000;}.print-footer{position:fixed;bottom:0;left:0;right:0;z-index:1000;}}</style></head><body><div class="print-header"><div class="print-header-left"></div><span class="print-header-date"></span></div><div class="images-container"></div><div class="print-footer"></div></body></html>');
+    win.document.write(this.getPrintDocument('<div class="images-container"></div>', '.images-container{display:flex;flex-direction:column;gap:30px;align-items:center;}.print-image{width:100%;max-width:100%;max-height:185mm;height:auto;object-fit:contain;display:block;break-inside:avoid;page-break-inside:avoid;}'));
     win.document.close();
 
     this.populatePrintHeaderFooter(win);
@@ -857,7 +867,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     let loadedCount = 0;
     const checkPrint = () => {
       loadedCount++;
-      if (loadedCount >= images.length) { win.print(); win.close(); }
+      if (loadedCount >= images.length) { this.applyPrintContentPadding(win); win.print(); win.close(); }
     };
     for (const img of images) {
       const el = win.document.createElement('img');
@@ -869,6 +879,11 @@ export class NewspaperComponent implements OnInit, OnDestroy {
       container.appendChild(el);
     }
   }
+
+  /** No-op: the HTML table structure (<thead>/<tfoot>) repeats the header/footer on every
+   *  printed page natively, so no JS padding injection is required. */
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  private applyPrintContentPadding(_win: Window): void { /* table layout — no padding needed */ }
 
   private populatePrintHeaderFooter(win: Window): void {
     const headerLeft = win.document.querySelector('.print-header-left')!;
