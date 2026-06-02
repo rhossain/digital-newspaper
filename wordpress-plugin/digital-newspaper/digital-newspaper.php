@@ -17,7 +17,6 @@ class Digital_Newspaper_API {
   const OPTION_ALLOW_CREDENTIALS = 'dn_allow_credentials';
   const SECTION_POST_TYPE = 'dn_section';
   const TOKEN_TTL = 86400; // 24 hours
-  const INTERNAL_WARM_CACHE_TTL = 300; // 5 minutes
 
   public function __construct() {
     add_action('init', [$this, 'handle_cors_preflight'], 1);
@@ -27,8 +26,6 @@ class Digital_Newspaper_API {
     add_action('admin_menu', [$this, 'register_settings_page']);
     add_action('admin_init', [$this, 'register_settings']);
     add_filter('rest_pre_serve_request', [$this, 'add_cors_headers'], 10, 4);
-    // Background WP-Cron hook: pre-warm social thumbnail cache after data save.
-    add_action('dn_warm_social_cache', [$this, 'run_background_warm_cache']);
   }
 
   public function handle_cors_preflight(): void {
@@ -561,9 +558,9 @@ class Digital_Newspaper_API {
       ]
     ]);
 
-    // Cache pre-warm: generate all social thumbnail JPEG files proactively.
-    // Call this after uploading new newspaper data so WhatsApp/Facebook crawlers
-    // always get a fast cached response on their first visit.
+    // Cache pre-warm: generate social thumbnail JPEG files proactively.
+    // This is intentionally credential-protected and never called automatically
+    // after saves, because host bot protection may block background automation.
     register_rest_route('digital-newspaper/v1', '/warm-cache', [
       [
         'methods'             => 'POST',
@@ -574,10 +571,6 @@ class Digital_Newspaper_API {
   }
 
   public function warm_cache_permission(WP_REST_Request $request) {
-    if ($this->is_internal_warm_cache_request($request)) {
-      return true;
-    }
-
     return $this->auth_required($request);
   }
 
@@ -903,14 +896,6 @@ HTML;
     return new WP_REST_Response(null, 200);
   }
 
-  /**
-   * WP-Cron callback: run the social thumbnail cache warm in the background.
-   * Triggered ~30 s after each successful data save via post_data_endpoint().
-   */
-  public function run_background_warm_cache(): void {
-    $this->warm_social_cache(new WP_REST_Request());
-  }
-
   public function social_image_endpoint(WP_REST_Request $request): WP_REST_Response {
     $file = trim((string) ($request->get_param('file') ?? ''));
     if (!preg_match('/^dn-social-(?:resize|fallback|section)-[a-z0-9_-]+\.jpg$/', $file)) {
@@ -941,11 +926,10 @@ HTML;
   /**
    * Pre-warm the social thumbnail cache for all sections in the current dataset.
    *
-   * Calling POST /wp-json/digital-newspaper/v1/warm-cache (authenticated) after
-   * uploading new newspaper data ensures every section's 1200×630 JPEG is already
-   * generated before social bots visit.  Without this, the FIRST bot visit per
-   * section triggers a slow on-demand image download + GD resize that can exceed
-   * WhatsApp's ~10-15 s crawl timeout, resulting in "no thumbnail".
+    * Calling POST /wp-json/digital-newspaper/v1/warm-cache with a valid admin
+    * token ensures every section's 1200x630 JPEG is already generated before
+    * social bots visit. This endpoint is intentionally not called automatically
+    * after saves because shared-host bot protection can block automation.
    *
    * Returns a JSON summary: { "processed": N, "skipped": N, "errors": N }
    */
@@ -1528,16 +1512,6 @@ HTML;
 
     $this->save_data($payload);
 
-    // Start cache warming immediately via a signed loopback request so the
-    // first WhatsApp/Facebook crawl is less likely to hit an on-demand resize.
-    $this->trigger_background_warm_cache();
-
-    // Schedule a background WP-Cron event to pre-warm social thumbnail cache.
-    // Keep WP-Cron as a fallback because some hosts block loopback requests.
-    if (!wp_next_scheduled('dn_warm_social_cache')) {
-      wp_schedule_single_event(time() + 30, 'dn_warm_social_cache');
-    }
-
     return rest_ensure_response([
       'success' => true,
       'message' => 'Data saved successfully'
@@ -1806,39 +1780,6 @@ HTML;
     }
 
     return true;
-  }
-
-  private function is_internal_warm_cache_request(WP_REST_Request $request): bool {
-    $timestamp = trim((string) $request->get_header('X-DN-Warm-Cache-Time'));
-    $signature = trim((string) $request->get_header('X-DN-Warm-Cache-Signature'));
-
-    if ($timestamp === '' || $signature === '' || !ctype_digit($timestamp)) {
-      return false;
-    }
-
-    if (abs(time() - (int) $timestamp) > self::INTERNAL_WARM_CACHE_TTL) {
-      return false;
-    }
-
-    $expected = hash_hmac('sha256', 'dn-warm-cache|' . $timestamp, $this->get_secret());
-    return hash_equals($expected, $signature);
-  }
-
-  private function trigger_background_warm_cache(): void {
-    $timestamp = (string) time();
-    $signature = hash_hmac('sha256', 'dn-warm-cache|' . $timestamp, $this->get_secret());
-    $warmUrl   = site_url('/index.php?rest_route=/digital-newspaper/v1/warm-cache');
-
-    wp_remote_post($warmUrl, [
-      'timeout'    => 1,
-      'blocking'   => false,
-      'sslverify'  => apply_filters('https_local_ssl_verify', false),
-      'headers'    => [
-        'X-DN-Warm-Cache-Time'      => $timestamp,
-        'X-DN-Warm-Cache-Signature' => $signature,
-      ],
-      'body'       => [],
-    ]);
   }
 
   public function authenticate_rest_request($result) {

@@ -1,7 +1,7 @@
-// Development environment — call WordPress through the Angular CLI dev-server
-// proxy. The browser talks to localhost only, which avoids browser CORS issues
-// when the WordPress host blocks or strips cross-origin REST headers.
+// Development environment — call WordPress directly from the browser.
+// Avoid the Angular CLI proxy here: shared-host bot protection can classify
+// Node/server-to-server proxy traffic as automation and block valid admin saves.
 export const environment = {
   production: false,
-  wpBaseUrl: '/wp',
+  wpBaseUrl: 'https://epaper.dailysangram.com/wp',
 };
