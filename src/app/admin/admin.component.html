@@ -18,7 +18,7 @@
           </svg>
           {{ hasUnsavedChanges ? 'Save All' : 'Saved' }}
         </button>
-        <button class="btn btn-primary" *ngIf="isAuthenticated" (click)="openExportModal()" title="Export a JSON backup of WordPress data">
+        <button class="btn btn-primary" *ngIf="isAdmin" (click)="openExportModal()" title="Export a JSON backup of WordPress data">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
             <polyline points="7 10 12 15 17 10"></polyline>
@@ -33,7 +33,7 @@
           style="display:none"
           (change)="importBackup($event)"
         />
-        <button class="btn btn-warning" *ngIf="isAuthenticated" (click)="importFileInput.click()" title="Import a JSON backup and overwrite WordPress data">
+        <button class="btn btn-warning" *ngIf="isAdmin" (click)="importFileInput.click()" title="Import a JSON backup and overwrite WordPress data">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
             <polyline points="17 8 12 3 7 8"></polyline>
@@ -41,7 +41,7 @@
           </svg>
           Import Backup
         </button>
-        <button class="btn btn-secondary" *ngIf="isAuthenticated" (click)="rebuildFromSectionPosts()" [disabled]="isSavingCrop" title="Rebuild JSON data from mirrored WordPress section posts">
+        <button class="btn btn-secondary" *ngIf="isAdmin" (click)="rebuildFromSectionPosts()" [disabled]="isSavingCrop" title="Rebuild JSON data from mirrored WordPress section posts">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polyline points="23 4 23 10 17 10"></polyline>
             <polyline points="1 20 1 14 7 14"></polyline>
@@ -86,6 +86,7 @@
         📄 Content Management
       </button>
       <button 
+        *ngIf="isAdmin"
         class="main-tab" 
         [class.active]="activeMainTab === 'settings'"
         (click)="activeMainTab = 'settings'">

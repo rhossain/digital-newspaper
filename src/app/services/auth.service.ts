@@ -11,7 +11,16 @@ interface LoginResponse {
     username: string;
     email: string;
     displayName: string;
+    role: string;
   };
+}
+
+interface MeResponse {
+  id: number;
+  username: string;
+  email: string;
+  displayName: string;
+  role: string;
 }
 
 @Injectable({
@@ -19,6 +28,7 @@ interface LoginResponse {
 })
 export class AuthService {
   private readonly tokenKey = 'dn_wp_token';
+  private readonly userKey  = 'dn_wp_user';
   private readonly wpBaseUrl = WP_BASE_URL;
 
   constructor(private http: HttpClient) {}
@@ -47,6 +57,10 @@ export class AuthService {
       tap((response) => {
         if (response?.token) {
           localStorage.setItem(this.tokenKey, response.token);
+          localStorage.setItem(this.userKey, JSON.stringify({
+            displayName: response.user?.displayName ?? '',
+            role: response.user?.role ?? 'editor',
+          }));
         }
       })
     );
@@ -63,6 +77,26 @@ export class AuthService {
 
   logout(): void {
     localStorage.removeItem(this.tokenKey);
+    localStorage.removeItem(this.userKey);
+  }
+
+  private getStoredUser(): { displayName: string; role: string } | null {
+    const raw = localStorage.getItem(this.userKey);
+    if (!raw) return null;
+    try { return JSON.parse(raw); } catch { return null; }
+  }
+
+  getUserDisplayName(): string {
+    return this.getStoredUser()?.displayName ?? '';
+  }
+
+  getUserRole(): string {
+    return this.getStoredUser()?.role ?? 'editor';
+  }
+
+  /** Returns true only when the authenticated user has the WordPress administrator role. */
+  isAdmin(): boolean {
+    return this.isAuthenticated() && this.getUserRole() === 'administrator';
   }
 
   getToken(): string | null {
@@ -105,7 +139,16 @@ export class AuthService {
       return of(false);
     }
     const meUrl = `${this.wpBaseUrl}/wp-json/digital-newspaper/v1/auth/me`;
-    return this.http.get(meUrl, { headers, withCredentials: true }).pipe(
+    return this.http.get<MeResponse>(meUrl, { headers, withCredentials: true }).pipe(
+      tap((user) => {
+        // Refresh stored user info (role may have changed since last login).
+        if (user?.displayName !== undefined) {
+          localStorage.setItem(this.userKey, JSON.stringify({
+            displayName: user.displayName ?? '',
+            role: user.role ?? 'editor',
+          }));
+        }
+      }),
       map(() => true)
     );
   }

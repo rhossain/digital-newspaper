@@ -281,6 +281,14 @@ export class AdminComponent implements OnInit {
     return this.authService.isAuthenticated();
   }
 
+  get isAdmin(): boolean {
+    return this.authService.isAdmin();
+  }
+
+  get currentUserName(): string {
+    return this.authService.getUserDisplayName();
+  }
+
   authForm = {
     username: '',
     password: ''

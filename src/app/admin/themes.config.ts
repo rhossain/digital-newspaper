@@ -26,4 +26,4 @@
 
 export type AdminTheme = 'standard' | 'vintage';
 
-export const ADMIN_THEME: AdminTheme = 'standard';
+export const ADMIN_THEME: AdminTheme = 'vintage';

@@ -526,7 +526,7 @@ class Digital_Newspaper_API {
       [
         'methods' => 'POST',
         'callback' => [$this, 'restore_data_backup_endpoint'],
-        'permission_callback' => [$this, 'auth_required']
+        'permission_callback' => [$this, 'admin_required']
       ]
     ]);
 
@@ -534,7 +534,7 @@ class Digital_Newspaper_API {
       [
         'methods' => 'POST',
         'callback' => [$this, 'rebuild_data_from_sections_endpoint'],
-        'permission_callback' => [$this, 'auth_required']
+        'permission_callback' => [$this, 'admin_required']
       ]
     ]);
 
@@ -1583,13 +1583,17 @@ HTML;
 
     $token = $this->generate_token($user->ID);
 
+    $roles = (array) $user->roles;
+    $role   = !empty($roles) ? $roles[0] : 'subscriber';
+
     return rest_ensure_response([
       'token' => $token,
       'user' => [
-        'id' => $user->ID,
-        'username' => $user->user_login,
-        'email' => $user->user_email,
-        'displayName' => $user->display_name
+        'id'          => $user->ID,
+        'username'    => $user->user_login,
+        'email'       => $user->user_email,
+        'displayName' => $user->display_name,
+        'role'        => $role,
       ]
     ]);
   }
@@ -1600,11 +1604,15 @@ HTML;
       return new WP_REST_Response(['error' => 'Unauthorized'], 401);
     }
 
+    $roles = (array) $user->roles;
+    $role   = !empty($roles) ? $roles[0] : 'subscriber';
+
     return rest_ensure_response([
-      'id' => $user->ID,
-      'username' => $user->user_login,
-      'email' => $user->user_email,
-      'displayName' => $user->display_name
+      'id'          => $user->ID,
+      'username'    => $user->user_login,
+      'email'       => $user->user_email,
+      'displayName' => $user->display_name,
+      'role'        => $role,
     ]);
   }
 
@@ -1823,6 +1831,23 @@ HTML;
 
     if (!user_can($user, 'edit_posts')) {
       return new WP_Error('dn_forbidden', 'Insufficient permissions', ['status' => 403]);
+    }
+
+    return true;
+  }
+
+  /**
+   * Permission callback that requires the WordPress Administrator role.
+   * Calls auth_required first so token validation is not duplicated.
+   */
+  public function admin_required(WP_REST_Request $request) {
+    $check = $this->auth_required($request);
+    if ($check !== true) {
+      return $check;
+    }
+    $user = wp_get_current_user();
+    if (!$user || !user_can($user, 'manage_options')) {
+      return new WP_Error('dn_forbidden', 'Administrator access required', ['status' => 403]);
     }
 
     return true;
