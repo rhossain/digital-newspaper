@@ -212,22 +212,47 @@ class Digital_Newspaper_API {
     if (!is_array($data)) {
       $data = self::default_data();
     }
-    // Rewrite old nepaper URLs to epaper URLs for backward compatibility
-    $data = $this->rewrite_old_urls($data);
+    // Normalize all stored domain aliases to the current WordPress origin
+    $data = $this->normalize_domain_urls($data);
     return $data;
   }
 
   /**
-   * Recursively rewrite old nepaper.dailysangram.com URLs to epaper.dailysangram.com
-   * This handles data that was saved with the old domain before the fix.
+   * Normalize all known domain aliases in stored URLs to the current WordPress
+   * home_url() origin. This ensures the API always returns URLs whose host
+   * matches the active installation — no matter which domain was used when the
+   * data was originally saved (epaper ↔ nepaper ↔ www variants).
+   * The canonical origin is derived at runtime from home_url(), so it
+   * automatically follows the configured wpBaseUrl on the Angular side.
    */
-  private function rewrite_old_urls($data) {
+  private function normalize_domain_urls($data) {
+    static $canonical_origin = null;
+    if ($canonical_origin === null) {
+      $parsed           = wp_parse_url(home_url());
+      $canonical_origin = ($parsed['scheme'] ?? 'https') . '://' . ($parsed['host'] ?? '');
+    }
+
+    // All domain variants ever used by this installation.
+    // Any URL whose origin is in this list gets rewritten to $canonical_origin.
+    $known_aliases = [
+      'https://epaper.dailysangram.com',
+      'http://epaper.dailysangram.com',
+      'https://www.epaper.dailysangram.com',
+      'https://nepaper.dailysangram.com',
+      'http://nepaper.dailysangram.com',
+      'https://www.nepaper.dailysangram.com',
+    ];
+
     if (is_array($data)) {
-      return array_map([$this, 'rewrite_old_urls'], $data);
+      return array_map([$this, 'normalize_domain_urls'], $data);
     }
     if (is_string($data)) {
-      // Replace nepaper with epaper in URLs
-      return str_replace('https://nepaper.dailysangram.com', 'https://epaper.dailysangram.com', $data);
+      foreach ($known_aliases as $alias) {
+        if ($alias !== $canonical_origin && strpos($data, $alias) !== false) {
+          $data = str_replace($alias, $canonical_origin, $data);
+        }
+      }
+      return $data;
     }
     return $data;
   }
@@ -1277,6 +1302,26 @@ HTML;
     return rtrim($upload['basedir'], '/') . '/' . ltrim($relativePath, '/');
   }
 
+  /**
+   * Like dn_uploads_url_to_path but ignores the URL host entirely.
+   * Compares only the path segment, so cross-domain aliases
+   * (epaper.dailysangram.com ↔ nepaper.dailysangram.com) resolve to the same
+   * local file. Safe because the resolved path is still validated against
+   * the uploads basedir before any file is read.
+   */
+  private function dn_uploads_url_to_path_any_host(string $url): string {
+    $upload    = wp_upload_dir();
+    $baseUrl   = rtrim($upload['baseurl'], '/');
+    // Strip scheme+host to get just the path
+    $urlPath  = (string) preg_replace('#^https?://[^/]+#i', '', $url);
+    $basePath = (string) preg_replace('#^https?://[^/]+#i', '', $baseUrl);
+    if ($basePath === '' || strpos($urlPath, $basePath) !== 0) {
+      return '';
+    }
+    $relativePath = substr($urlPath, strlen($basePath));
+    return rtrim($upload['basedir'], '/') . '/' . ltrim($relativePath, '/');
+  }
+
   private function dn_public_social_image_url(string $imageUrl): string {
     $imageUrl = trim($imageUrl);
     if ($imageUrl === '') {
@@ -1622,21 +1667,29 @@ HTML;
       return new WP_REST_Response(['error' => 'Missing url'], 400);
     }
 
-    // Only allow proxying images from the same WordPress host or trusted domains
-    $parsed = wp_parse_url($url);
-    $home_host = wp_parse_url(home_url(), PHP_URL_HOST);
-    $allowed_hosts = apply_filters('dn_proxy_allowed_hosts', [$home_host]);
-    if (empty($parsed['host']) || !in_array($parsed['host'], $allowed_hosts, true)) {
-      return new WP_REST_Response(['error' => 'URL not allowed'], 403);
+    // Resolve protocol-relative URLs before parsing
+    if (substr($url, 0, 2) === '//') {
+      $url = 'https:' . $url;
     }
 
-    // Validate it resolves to an image path
+    // If the URL has no host, resolve it against site_url() (handles relative paths)
+    $parsed = wp_parse_url($url);
+    if (empty($parsed['host'])) {
+      $url = rtrim(site_url(), '/') . '/' . ltrim($url, '/');
+      $parsed = wp_parse_url($url);
+    }
+
+    // Validate scheme early (before any host checks or file lookups)
     $scheme = $parsed['scheme'] ?? '';
     if (!in_array($scheme, ['http', 'https'], true)) {
       return new WP_REST_Response(['error' => 'Invalid URL scheme'], 400);
     }
 
-    $local_path = $this->dn_uploads_url_to_path($url);
+    // Fast path: try to serve the image directly from the local uploads directory.
+    // Uses a host-agnostic path comparison so cross-domain aliases
+    // (epaper.dailysangram.com ↔ nepaper.dailysangram.com on the same server)
+    // resolve to the local file without needing to pass the host allowlist check.
+    $local_path = $this->dn_uploads_url_to_path_any_host($url);
     if ($local_path !== '') {
       $upload = wp_upload_dir();
       $uploads_base = realpath($upload['basedir']);
@@ -1650,17 +1703,32 @@ HTML;
         if (!$content_type || strpos($content_type, 'image/') !== 0) {
           return new WP_REST_Response(['error' => 'Not an image'], 415);
         }
-
         $body = file_get_contents($real_path);
         if ($body === false) {
           return new WP_REST_Response(['error' => 'Failed to read image'], 500);
         }
-
         return new WP_REST_Response($body, 200, [
-          'Content-Type' => $content_type,
-          'Cache-Control' => 'public, max-age=86400'
+          'Content-Type'  => $content_type,
+          'Cache-Control' => 'public, max-age=86400',
         ]);
       }
+    }
+
+    // Remote fetch: only allowed for the site's own domains.
+    // Include home_url, site_url, and www. variants to handle subdirectory installs.
+    $home_host = (string) wp_parse_url(home_url(), PHP_URL_HOST);
+    $site_host = (string) wp_parse_url(site_url(), PHP_URL_HOST);
+    $built_in_hosts = array_values(array_unique(array_filter([
+      $home_host,
+      $site_host,
+      $home_host ? 'www.' . $home_host : '',
+      $site_host ? 'www.' . $site_host : '',
+      $home_host && strpos($home_host, 'www.') === 0 ? substr($home_host, 4) : '',
+      $site_host && strpos($site_host, 'www.') === 0 ? substr($site_host, 4) : '',
+    ])));
+    $allowed_hosts = apply_filters('dn_proxy_allowed_hosts', $built_in_hosts);
+    if (empty($parsed['host']) || !in_array($parsed['host'], $allowed_hosts, true)) {
+      return new WP_REST_Response(['error' => 'URL not allowed: ' . ($parsed['host'] ?? '(none)') . '. Allowed: ' . implode(', ', $allowed_hosts)], 403);
     }
 
     $response = wp_remote_get($url, [

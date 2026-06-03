@@ -52,6 +52,10 @@ export class AdminComponent implements OnInit {
   isSavingCrop = false;
   hasUnsavedChanges = false;
   private hasUnsavedSettingsChanges = false;
+
+  // Vintage theme navigation state
+  vintageView: 'pages' | 'sections' | 'section-detail' = 'pages';
+  vintageSelectedSection: NewsSection | null = null;
   
   // Form Data
   pageForm: Partial<NewspaperPage> = {
@@ -410,6 +414,8 @@ export class AdminComponent implements OnInit {
     this.selectedSection = null;
     this.isEditingPage = false;
     this.isEditingSection = false;
+    this.vintageView = 'pages';
+    this.vintageSelectedSection = null;
   }
 
   onEditionChange(editionNumber: number) {
@@ -418,6 +424,8 @@ export class AdminComponent implements OnInit {
     this.selectedSection = null;
     this.isEditingPage = false;
     this.isEditingSection = false;
+    this.vintageView = 'pages';
+    this.vintageSelectedSection = null;
     this.loadCurrentEdition();
   }
 
@@ -1277,7 +1285,23 @@ export class AdminComponent implements OnInit {
     this.cdr.detectChanges();
     try {
       const fullImageHref = new URL(fullImageUrl, window.location.href).href;
-      const proxyUrl = `${this.dataService.getApiBaseUrl()}/wp-json/digital-newspaper/v1/proxy?url=${encodeURIComponent(fullImageUrl)}`;
+      // Resolve relative URLs against the WP base so the proxy always receives an absolute URL
+      const absoluteImageUrl = (() => {
+        try { new URL(fullImageUrl); return fullImageUrl; } catch {
+          return new URL(fullImageUrl, this.dataService.getApiBaseUrl() + '/').href;
+        }
+      })();
+      // Normalize the image URL's origin to match the WP API origin.
+      // epaper.dailysangram.com and nepaper.dailysangram.com are the same server;
+      // rewriting ensures the proxy's host-allowlist check always passes.
+      const wpApiOrigin = new URL(this.dataService.getApiBaseUrl()).origin;
+      const proxyImageUrl = (() => {
+        try {
+          const p = new URL(absoluteImageUrl);
+          return p.origin !== wpApiOrigin ? wpApiOrigin + p.pathname + p.search + p.hash : absoluteImageUrl;
+        } catch { return absoluteImageUrl; }
+      })();
+      const proxyUrl = `${this.dataService.getApiBaseUrl()}/wp-json/digital-newspaper/v1/proxy?url=${encodeURIComponent(proxyImageUrl)}`;
       const fetchUrls = new URL(fullImageHref).origin === window.location.origin
         ? [fullImageHref, proxyUrl]
         : [proxyUrl];
@@ -1826,6 +1850,13 @@ export class AdminComponent implements OnInit {
           this.toaster.error(
             `Save was blocked by the server's security module. Whitelist /wp-json/digital-newspaper/v1/ in your hosting security settings. (${detail})`
           );
+        } else if ((error?.status ?? -1) === 0) {
+          this.toaster.error(
+            'Save failed: The WordPress server could not be reached (status 0). ' +
+            'This is usually a CORS policy block or a network connectivity issue. ' +
+            'Check that your WordPress CORS settings allow requests from this app\'s origin, ' +
+            'and that the server is online.'
+          );
         } else {
           this.toaster.error(errMsg || 'Failed to save data');
         }
@@ -2099,11 +2130,48 @@ export class AdminComponent implements OnInit {
     }
   }
 
+  // ─── Vintage theme navigation ────────────────────────────────────
+
+  vintageSelectPage(page: NewspaperPage): void {
+    this.selectedPage = page;
+    this.vintageView = 'sections';
+    this.vintageSelectedSection = null;
+  }
+
+  vintageSelectSection(section: NewsSection): void {
+    this.vintageSelectedSection = section;
+    this.vintageView = 'section-detail';
+  }
+
+  vintageBackToPages(): void {
+    this.selectedPage = null;
+    this.vintageSelectedSection = null;
+    this.vintageView = 'pages';
+    this.isEditingPage = false;
+    this.isEditingSection = false;
+  }
+
+  vintageBackToSections(): void {
+    this.vintageSelectedSection = null;
+    this.vintageView = 'sections';
+    this.isEditingSection = false;
+  }
+
+  getCurrentEditionLabel(): string {
+    const ed = this.editionsForDate.find(e => (e.edition || 1) === this.selectedEditionNumber);
+    return ed ? this.getEditionLabel(ed) : '';
+  }
+
+  // ─── Menu navigation ─────────────────────────────────────────────
+
   menuGoToPages(): void {
     this.activeMainTab = 'content';
     this.activeTab = 'pages';
     this.isEditingPage = false;
     this.isEditingSection = false;
+    if (this.adminTheme === 'vintage') {
+      this.vintageBackToPages();
+    }
     this.closeMenu();
   }
 
