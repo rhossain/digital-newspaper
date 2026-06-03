@@ -8,6 +8,7 @@ import { AuthService } from '../services/auth.service';
 import { ToasterService } from '../services/toaster.service';
 import { LoaderService } from '../services/loader.service';
 import { TranslationService } from '../i18n/translation.service';
+import { ADMIN_THEME } from './themes.config';
 
 @Component({
   selector: 'app-admin',
@@ -17,6 +18,9 @@ import { TranslationService } from '../i18n/translation.service';
   styleUrls: ['./admin.component.css']
 })
 export class AdminComponent implements OnInit {
+  /** Active theme — set in themes.config.ts */
+  readonly adminTheme = ADMIN_THEME;
+
   @ViewChild('cropperImage') cropperImageRef!: ElementRef<HTMLImageElement>;
   
   pages: NewspaperPage[] = [];
