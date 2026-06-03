@@ -22,6 +22,8 @@ export class AdminComponent implements OnInit {
   readonly adminTheme = ADMIN_THEME;
 
   @ViewChild('cropperImage') cropperImageRef!: ElementRef<HTMLImageElement>;
+  @ViewChild('importFileInput') importFileInputRef!: ElementRef<HTMLInputElement>;
+  @ViewChild('vintageMenuPanel') vintageMenuPanelRef?: ElementRef<HTMLElement>;
   
   pages: NewspaperPage[] = [];
   selectedPage: NewspaperPage | null = null;
@@ -46,6 +48,7 @@ export class AdminComponent implements OnInit {
   isEditingSection = false;
   showImageCropper = false;
   isBodyMaximized = false;
+  isMenuOpen = false;
   isSavingCrop = false;
   hasUnsavedChanges = false;
   private hasUnsavedSettingsChanges = false;
@@ -1479,6 +1482,30 @@ export class AdminComponent implements OnInit {
     return new File([u8arr], filename, { type: mime });
   }
 
+  /**
+   * Applies the same WAF-bypass rules as wpApiInterceptor to a native fetch()
+   * call so media uploads are not blocked by host-level security modules:
+   *   1. URL rewrite  /wp-json/ → /?rest_route=/
+   *   2. credentials: 'include'  (sends WAF verification cookies)
+   *   3. X-Requested-With: XMLHttpRequest  (activates OWASP AJAX exemptions)
+   */
+  private wafBypassFetch(url: string, options: RequestInit = {}): Promise<Response> {
+    let rewrittenUrl = url;
+    if (url.includes('/wp-json/')) {
+      const qIndex = url.indexOf('?');
+      const path   = qIndex !== -1 ? url.substring(0, qIndex) : url;
+      const qs     = qIndex !== -1 ? url.substring(qIndex + 1) : '';
+      const base   = path.replace('/wp-json/', '/?rest_route=/');
+      rewrittenUrl = qs ? `${base}&${qs}` : base;
+    }
+    const existingHeaders = (options.headers ?? {}) as Record<string, string>;
+    return fetch(rewrittenUrl, {
+      ...options,
+      headers: { ...existingHeaders, 'X-Requested-With': 'XMLHttpRequest' },
+      credentials: 'include',
+    });
+  }
+
   private async uploadMediaFile(file: File, filename: string): Promise<string> {
     const url = `${this.dataService.getApiBaseUrl()}/wp-json/digital-newspaper/v1/media`;
     const headers = this.authService.getAuthHeaders();
@@ -1501,7 +1528,7 @@ export class AdminComponent implements OnInit {
     const formData = new FormData();
     formData.append('file', file, finalName);
 
-    const response = await fetch(url, {
+    const response = await this.wafBypassFetch(url, {
       method: 'POST',
       headers,
       body: formData
@@ -1510,6 +1537,16 @@ export class AdminComponent implements OnInit {
     if (!response.ok) {
       const errorText = await response.text();
       throw new Error(errorText || 'Upload failed');
+    }
+
+    const contentType = response.headers.get('content-type') ?? '';
+    if (!contentType.includes('application/json')) {
+      const bodyPreview = await response.text();
+      throw new Error(
+        `Upload endpoint returned non-JSON (HTTP ${response.status}). ` +
+        `Check that WordPress REST API and permalinks are configured correctly. ` +
+        `Response: ${bodyPreview.slice(0, 150)}`
+      );
     }
 
     const data = await response.json();
@@ -1575,7 +1612,7 @@ export class AdminComponent implements OnInit {
       `${this.dataService.getApiBaseUrl()}/wp-json/digital-newspaper/v1/media` +
       `?search=${encodeURIComponent(datePrefix)}&per_page=100`;
     try {
-      const response = await fetch(searchUrl, { headers });
+      const response = await this.wafBypassFetch(searchUrl, { headers });
       if (!response.ok) return 1;
       const items: any[] = await response.json();
       if (!Array.isArray(items) || items.length === 0) return 1;
@@ -1614,7 +1651,7 @@ export class AdminComponent implements OnInit {
   private async findExistingMedia(filename: string, headers: Record<string, string>): Promise<{ id: number } | null> {
     const base = filename.replace(/\.[^/.]+$/, '').toLowerCase();
     const searchUrl = `${this.dataService.getApiBaseUrl()}/wp-json/digital-newspaper/v1/media?search=${encodeURIComponent(base)}&per_page=100`;
-    const response = await fetch(searchUrl, { headers });
+    const response = await this.wafBypassFetch(searchUrl, { headers });
     if (!response.ok) return null;
     const items = await response.json();
     const match = Array.isArray(items)
@@ -1629,7 +1666,7 @@ export class AdminComponent implements OnInit {
 
   private async deleteMedia(id: number, headers: Record<string, string>): Promise<void> {
     const deleteUrl = `${this.dataService.getApiBaseUrl()}/wp-json/digital-newspaper/v1/media/${id}`;
-    const response = await fetch(deleteUrl, { method: 'DELETE', headers });
+    const response = await this.wafBypassFetch(deleteUrl, { method: 'DELETE', headers });
     if (!response.ok) {
       const errorText = await response.text();
       throw new Error(errorText || 'Failed to delete existing media');
@@ -2037,6 +2074,83 @@ export class AdminComponent implements OnInit {
       return;
     }
     this.router.navigate(['/']);
+  }
+
+  goToViewerNewWindow(): void {
+    window.open('/', '_blank');
+  }
+
+  // ── Vintage header: menu state & navigation ───────────────────────────
+
+  toggleMenu(): void {
+    this.isMenuOpen = !this.isMenuOpen;
+  }
+
+  closeMenu(): void {
+    this.isMenuOpen = false;
+  }
+
+  @HostListener('document:click', ['$event'])
+  onDocumentClick(event: MouseEvent): void {
+    if (!this.isMenuOpen) return;
+    if (this.vintageMenuPanelRef &&
+        !this.vintageMenuPanelRef.nativeElement.contains(event.target as Node)) {
+      this.isMenuOpen = false;
+    }
+  }
+
+  menuGoToPages(): void {
+    this.activeMainTab = 'content';
+    this.activeTab = 'pages';
+    this.isEditingPage = false;
+    this.isEditingSection = false;
+    this.closeMenu();
+  }
+
+  menuAddNewPage(): void {
+    this.activeMainTab = 'content';
+    this.closeMenu();
+    this.newPage();
+  }
+
+  menuGoToEditions(): void {
+    this.activeMainTab = 'content';
+    this.closeMenu();
+  }
+
+  menuAddNewEdition(): void {
+    this.createNewEdition();
+    this.closeMenu();
+  }
+
+  menuGoToDates(): void {
+    this.activeMainTab = 'content';
+    this.closeMenu();
+  }
+
+  menuAddNewDate(): void {
+    this.createNewDate();
+    this.closeMenu();
+  }
+
+  menuGoToSettings(): void {
+    this.activeMainTab = 'settings';
+    this.closeMenu();
+  }
+
+  menuExportBackup(): void {
+    this.openExportModal();
+    this.closeMenu();
+  }
+
+  menuImportBackup(): void {
+    this.importFileInputRef?.nativeElement.click();
+    this.closeMenu();
+  }
+
+  menuRebuildFromPosts(): void {
+    this.rebuildFromSectionPosts();
+    this.closeMenu();
   }
 
   // Linked Sections Helper

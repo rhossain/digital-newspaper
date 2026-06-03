@@ -1,6 +1,6 @@
 <div class="admin-container" [attr.data-admin-theme]="adminTheme">
-  <!-- Header -->
-  <header class="admin-header">
+  <!-- Standard Header (hidden when vintage theme is active) -->
+  <header class="admin-header" *ngIf="adminTheme !== 'vintage'">
     <div class="header-content">
       <h1>📰 Newspaper Admin Panel</h1>
       <div class="header-actions">
@@ -26,13 +26,6 @@
           </svg>
           Export Backup
         </button>
-        <input
-          #importFileInput
-          type="file"
-          accept=".json,application/json"
-          style="display:none"
-          (change)="importBackup($event)"
-        />
         <button class="btn btn-warning" *ngIf="isAdmin" (click)="importFileInput.click()" title="Import a JSON backup and overwrite WordPress data">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
@@ -57,6 +50,149 @@
     </div>
   </header>
 
+  <!-- Vintage Header ──────────────────────────────────────────────── -->
+  <header class="admin-header-vintage" *ngIf="adminTheme === 'vintage'">
+    <div class="vhdr-inner">
+
+      <!-- Left: Logo / Title -->
+      <div class="vhdr-logo">
+        <img *ngIf="settingsForm.logo?.url"
+             [src]="settingsForm.logo?.url"
+             [alt]="settingsForm.logo?.alt || 'Newspaper Logo'"
+             class="vhdr-logo-img" />
+        <span *ngIf="!settingsForm.logo?.url" class="vhdr-logo-text">📰 Newspaper Admin</span>
+      </div>
+
+      <!-- Right: Actions + Dropdown -->
+      <div class="vhdr-actions" #vintageMenuPanel>
+
+        <!-- Save All -->
+        <button class="btn btn-sm btn-success"
+                (click)="saveAllData()"
+                [disabled]="isSavingCrop || !hasUnsavedChanges"
+                [title]="isSavingCrop ? 'Please wait — cropped image is being saved…' : (!hasUnsavedChanges ? 'No unsaved changes' : 'Save all unsaved newspaper data')">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+            <polyline points="17 21 17 13 7 13 7 21"></polyline>
+            <polyline points="7 3 7 8 15 8"></polyline>
+          </svg>
+          {{ hasUnsavedChanges ? 'Save' : 'Saved' }}
+        </button>
+
+        <span class="vhdr-sep" aria-hidden="true">|</span>
+
+        <!-- Back to Viewer (opens in new window) -->
+        <button class="vhdr-icon-btn" (click)="goToViewerNewWindow()" title="Open Viewer in new window">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+            <polyline points="15 3 21 3 21 9"></polyline>
+            <line x1="10" y1="14" x2="21" y2="3"></line>
+          </svg>
+        </button>
+
+        <span class="vhdr-sep" aria-hidden="true">|</span>
+
+        <!-- Authenticated user name -->
+        <span class="vhdr-user">{{ currentUserName }}</span>
+
+        <span class="vhdr-sep" aria-hidden="true">|</span>
+
+        <!-- Logout -->
+        <button class="vhdr-text-btn" (click)="logout()">Logout</button>
+
+        <span class="vhdr-sep" aria-hidden="true">|</span>
+
+        <!-- Menu toggle -->
+        <button class="vhdr-menu-toggle"
+                (click)="toggleMenu(); $event.stopPropagation()"
+                [class.open]="isMenuOpen"
+                aria-haspopup="true"
+                [attr.aria-expanded]="isMenuOpen">
+          Menu <span class="vhdr-caret">▾</span>
+        </button>
+
+        <!-- Dropdown panel -->
+        <div class="vhdr-dropdown" *ngIf="isMenuOpen" (click)="$event.stopPropagation()" role="menu">
+
+          <!-- E-paper -->
+          <div class="vhdr-menu-group">
+            <span class="vhdr-group-label">E-paper</span>
+            <button class="vhdr-menu-item" (click)="menuGoToPages()" role="menuitem">All Pages</button>
+            <button class="vhdr-menu-item" (click)="menuAddNewPage()" role="menuitem">Add New Page</button>
+          </div>
+
+          <!-- Edition -->
+          <div class="vhdr-menu-group">
+            <span class="vhdr-group-label">Edition</span>
+            <button class="vhdr-menu-item" (click)="menuGoToEditions()" role="menuitem">All Editions</button>
+            <button class="vhdr-menu-item" (click)="menuAddNewEdition()" role="menuitem">Add New Edition</button>
+          </div>
+
+          <!-- Dates -->
+          <div class="vhdr-menu-group">
+            <span class="vhdr-group-label">Dates</span>
+            <button class="vhdr-menu-item" (click)="menuGoToDates()" role="menuitem">All Dates</button>
+            <button class="vhdr-menu-item" (click)="menuAddNewDate()" role="menuitem">Add New Date</button>
+          </div>
+
+          <!-- E-post (scope TBD — items functional shell only) -->
+          <div class="vhdr-menu-group">
+            <span class="vhdr-group-label">E-post</span>
+            <button class="vhdr-menu-item vhdr-menu-item--soon" (click)="closeMenu()" role="menuitem">All E-posts</button>
+            <button class="vhdr-menu-item vhdr-menu-item--soon" (click)="closeMenu()" role="menuitem">Add New E-post</button>
+            <button class="vhdr-menu-item vhdr-menu-item--soon" (click)="closeMenu()" role="menuitem">Add Bulk E-post</button>
+          </div>
+
+          <!-- Admin-only section -->
+          <ng-container *ngIf="isAdmin">
+            <div class="vhdr-menu-divider"></div>
+
+            <!-- E-category (scope TBD — items functional shell only) -->
+            <div class="vhdr-menu-group">
+              <span class="vhdr-group-label">E-category <span class="vhdr-admin-badge">Admin</span></span>
+              <button class="vhdr-menu-item vhdr-menu-item--soon" (click)="closeMenu()" role="menuitem">All E-categories</button>
+              <button class="vhdr-menu-item vhdr-menu-item--soon" (click)="closeMenu()" role="menuitem">Add New E-category</button>
+            </div>
+
+            <!-- Global Settings -->
+            <button class="vhdr-menu-item vhdr-menu-item--toplevel" (click)="menuGoToSettings()" role="menuitem">
+              Global Settings <span class="vhdr-admin-badge">Admin</span>
+            </button>
+
+            <!-- Export Backup -->
+            <button class="vhdr-menu-item vhdr-menu-item--toplevel" (click)="menuExportBackup()" role="menuitem">
+              Export Backup <span class="vhdr-admin-badge">Admin</span>
+            </button>
+
+            <!-- Import Backup -->
+            <button class="vhdr-menu-item vhdr-menu-item--toplevel" (click)="menuImportBackup()" role="menuitem">
+              Import Backup <span class="vhdr-admin-badge">Admin</span>
+            </button>
+
+            <!-- Rebuild From Posts -->
+            <button class="vhdr-menu-item vhdr-menu-item--toplevel"
+                    [disabled]="isSavingCrop"
+                    (click)="menuRebuildFromPosts()"
+                    role="menuitem">
+              Rebuild From Posts <span class="vhdr-admin-badge">Admin</span>
+            </button>
+          </ng-container>
+
+        </div><!-- /vhdr-dropdown -->
+      </div><!-- /vhdr-actions -->
+    </div><!-- /vhdr-inner -->
+  </header>
+  <!-- /Vintage Header ─────────────────────────────────────────────── -->
+
+  <!-- Hidden file input: always in DOM, shared by both themes for Import Backup -->
+  <input
+    #importFileInput
+    type="file"
+    accept=".json,application/json"
+    style="display:none"
+    (change)="importBackup($event)"
+  />
+
   <!-- Auth Overlay -->
   <div class="auth-overlay" *ngIf="!isAuthenticated">
     <div class="auth-card">
@@ -78,7 +214,7 @@
 
   <!-- Date Selector Bar -->
   <div class="date-selector-bar" *ngIf="isAuthenticated">
-    <div class="main-tabs">
+    <div class="main-tabs" *ngIf="adminTheme !== 'vintage'">
       <button 
         class="main-tab" 
         [class.active]="activeMainTab === 'content'"
