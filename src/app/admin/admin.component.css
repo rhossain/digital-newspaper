@@ -119,6 +119,18 @@
   gap: 1rem;
 }
 
+.date-selector-bar--centered {
+  justify-content: center;
+}
+
+.date-bar-sep {
+  color: var(--color-border-ui);
+  font-size: 1.25rem;
+  line-height: 1;
+  user-select: none;
+  align-self: center;
+}
+
 .main-tabs {
   display: flex;
   gap: 0.5rem;
@@ -159,7 +171,8 @@
 
 .date-label {
   font-size: 14px;
-  color: var(--color-text-muted);
+  color: var(--color-text-medium);
+  font-weight: 500;
 }
 
 .current-date {
@@ -201,6 +214,26 @@
   outline: none;
   border-color: var(--color-primary);
   box-shadow: 0 0 0 3px rgba(25, 118, 210, 0.1);
+}
+
+/* Compact edition dropdown inside the date-info area (vintage theme) */
+.edition-select-inline {
+  padding: 6px 12px;
+  border: 2px solid var(--color-border-ui);
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-primary);
+  background: var(--color-white);
+  cursor: pointer;
+  min-width: 0;
+  transition: border-color 0.2s;
+}
+
+.edition-select-inline:hover,
+.edition-select-inline:focus {
+  outline: none;
+  border-color: var(--color-primary);
 }
 
 /* Edition bar */
@@ -702,7 +735,7 @@
 
 /* Forms */
 .section-form {
-  max-width: 800px;
+  max-width: 100%;
 }
 
 .form-row {
@@ -2624,6 +2657,15 @@ small {
   background: var(--color-primary);
   color: #fff;
 }
+.vpc-btn--delete {
+  background: var(--color-danger-bg, #fef2f2);
+  border-color: var(--color-danger, #ef4444);
+  color: var(--color-danger, #ef4444);
+}
+.vpc-btn--delete:hover {
+  background: var(--color-danger, #ef4444);
+  color: #fff;
+}
 
 /* Skeleton state */
 .vpc-card--skeleton { pointer-events: none; }
@@ -2829,6 +2871,140 @@ small {
   padding-top: 8px;
 }
 
+/* ── All Editions List ─────────────────────────────────────────── */
+.veditions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Edition card — column layout: top / editor / footer */
+.vedition-row {
+  display: flex;
+  flex-direction: column;
+  background: var(--color-white);
+  border: 1px solid var(--color-border-ui);
+  border-radius: 12px;
+  overflow: hidden;
+  transition: box-shadow 0.15s;
+}
+
+.vedition-row:hover {
+  box-shadow: 0 3px 14px rgba(0,0,0,0.09);
+}
+
+/* Top strip: icon + info */
+.vedition-card-top {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 20px;
+}
+
+.vedition-icon {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--color-primary) 10%, transparent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-primary);
+}
+
+.vedition-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.vedition-label {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--color-text-dark);
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vedition-meta {
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.vedition-active-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 20px;
+  background: var(--color-primary);
+  color: #fff;
+  letter-spacing: 0.03em;
+  flex-shrink: 0;
+}
+
+/* Inline label editor — middle strip */
+.vedition-label-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 20px;
+  background: var(--color-bg-muted);
+  border-top: 1px solid var(--color-border-ui);
+}
+
+.vedition-label-fields {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.vedition-label-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 180px;
+}
+
+.vedition-label-lang {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-text-muted);
+  min-width: 30px;
+}
+
+.vedition-label-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* Bottom footer — actions strip */
+.vedition-card-footer {
+  display: flex;
+  align-items: center;
+  padding: 10px 20px;
+  border-top: 1px solid var(--color-border-ui);
+  background: color-mix(in srgb, var(--color-bg-muted) 50%, transparent);
+}
+
+.vedition-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  width: 100%;
+}
+
 /* Responsive — stack on small screens */
 @media (max-width: 640px) {
   .vintage-content-area { padding: 16px; }
@@ -2836,5 +3012,8 @@ small {
   .vintage-post-grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
   .vintage-post-detail { flex-direction: column; }
   .vpd-thumb-wrap { width: 100%; height: 220px; }
+  .vedition-card-top { padding: 14px 16px; }
+  .vedition-card-footer { padding: 10px 16px; }
+  .vedition-label-editor { padding: 12px 16px; }
 }
 /* ===== END VINTAGE CONTENT AREA ===== */

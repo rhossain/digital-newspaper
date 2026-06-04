@@ -228,7 +228,13 @@ export class NewspaperDataService {
   // Date helper methods
   getTodayDate(): string {
     const today = new Date();
-    return today.toISOString().split('T')[0]; // YYYY-MM-DD
+    // Use local date components instead of toISOString() which returns UTC and
+    // would show the previous day for UTC+ timezones between midnight and their
+    // UTC offset hour (e.g. Bangladesh UTC+6 would show the wrong date until 6 AM).
+    const year  = today.getFullYear();
+    const month = String(today.getMonth() + 1).padStart(2, '0');
+    const day   = String(today.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
   }
 
   formatDisplayDate(dateStr: string): string {

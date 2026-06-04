@@ -225,50 +225,5 @@ app-root {
 /* ── Standard (default) – no overrides needed, :root values apply ── */
 
 /* ── Vintage ──────────────────────────────────────────────────────── */
-/*    Warm ink-brown / parchment palette for a newspaper heritage feel */
-.admin-container[data-admin-theme="vintage"] {
-
-  /* --- Brand / Primary --- */
-  --color-primary:              #7b4f2e;  /* warm dark brown — buttons, links */
-  --color-primary-dark:         #5c3620;  /* deeper brown — hover states       */
-  --color-primary-darker:       #3d2213;  /* deepest — active/selected          */
-  --color-primary-light:        #f5ede5;  /* warm cream — active bg tint        */
-  --color-primary-faint:        #faf6f1;  /* faintest cream — hint boxes        */
-
-  /* --- Accent --- */
-  --color-accent:               #c0783a;  /* amber/burnt-orange — active tabs   */
-  --color-accent-dark:          #9e5e25;  /* darker amber — icon/logo           */
-  --color-accent-light:         #fef3ea;  /* pale amber — radio hover bg        */
-
-  /* --- Sidebar header gradient --- */
-  --color-sidebar-header-from:  #4a2c0e;  /* dark mahogany                      */
-  --color-sidebar-header-to:    #2c1805;  /* near-black brown                   */
-
-  /* --- Page / surface backgrounds --- */
-  --color-bg-app:               #f2e8dc;  /* warm parchment body                */
-  --color-bg-page:              #f8f2ec;  /* slightly lighter parchment         */
-  --color-bg-surface:           #faf5f0;  /* near-white warm surface            */
-  --color-bg-muted:             #ede1d4;  /* muted warm beige                   */
-
-  /* --- Borders --- */
-  --color-border:               #ecddd0;
-  --color-border-ui:            #d4b896;  /* warm tan — UI borders              */
-  --color-border-dashed:        #c4a07a;  /* warm tan dashes                    */
-
-  /* --- Scrollbars --- */
-  --color-scrollbar-thumb-admin:       #c4a882;
-  --color-scrollbar-thumb-admin-hover: #a88b65;
-
-  /* --- Text --- */
-  --color-text-link:            #7b4f2e;  /* matches primary                    */
-
-  /* --- Hint box (admin settings) --- */
-  --color-hint-bg:              #fef3ea;
-  --color-hint-border:          #c0783a;
-  --color-hint-text:            #7b4f2e;
-
-  /* --- Instructions / hint strip --- */
-  --color-instructions-bg:      #fef3dc;
-  --color-instructions-border:  #c09040;
-  --color-instructions-text:    #7a5010;
-}
+/*    Uses the same color tokens as the Standard theme.
+      Only structural/background differences live in admin.component.css.   */

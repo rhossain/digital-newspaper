@@ -10,14 +10,6 @@
           </svg>
           Back to Viewer
         </button>
-        <button class="btn btn-success" (click)="saveAllData()" [disabled]="isSavingCrop || !hasUnsavedChanges" [title]="isSavingCrop ? 'Please wait — cropped image is being saved…' : (!hasUnsavedChanges ? 'No unsaved changes' : 'Save all unsaved newspaper data')">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
-            <polyline points="17 21 17 13 7 13 7 21"></polyline>
-            <polyline points="7 3 7 8 15 8"></polyline>
-          </svg>
-          {{ hasUnsavedChanges ? 'Save All' : 'Saved' }}
-        </button>
         <button class="btn btn-primary" *ngIf="isAdmin" (click)="openExportModal()" title="Export a JSON backup of WordPress data">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
@@ -65,21 +57,6 @@
 
       <!-- Right: Actions + Dropdown -->
       <div class="vhdr-actions" #vintageMenuPanel>
-
-        <!-- Save All -->
-        <button class="btn btn-sm btn-success"
-                (click)="saveAllData()"
-                [disabled]="isSavingCrop || !hasUnsavedChanges"
-                [title]="isSavingCrop ? 'Please wait — cropped image is being saved…' : (!hasUnsavedChanges ? 'No unsaved changes' : 'Save all unsaved newspaper data')">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
-            <polyline points="17 21 17 13 7 13 7 21"></polyline>
-            <polyline points="7 3 7 8 15 8"></polyline>
-          </svg>
-          {{ hasUnsavedChanges ? 'Save' : 'Saved' }}
-        </button>
-
-        <span class="vhdr-sep" aria-hidden="true">|</span>
 
         <!-- Back to Viewer (opens in new window) -->
         <button class="vhdr-icon-btn" (click)="goToViewerNewWindow()" title="Open Viewer in new window">
@@ -213,7 +190,7 @@
   </div>
 
   <!-- Date Selector Bar -->
-  <div class="date-selector-bar" *ngIf="isAuthenticated">
+  <div class="date-selector-bar" [class.date-selector-bar--centered]="adminTheme === 'vintage'" *ngIf="isAuthenticated">
     <div class="main-tabs" *ngIf="adminTheme !== 'vintage'">
       <button 
         class="main-tab" 
@@ -230,7 +207,8 @@
       </button>
     </div>
 
-    <div class="date-info" *ngIf="activeMainTab === 'content'">
+    <!-- Standard theme: show formatted date -->
+    <div class="date-info" *ngIf="activeMainTab === 'content' && adminTheme !== 'vintage'">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
         <line x1="16" y1="2" x2="16" y2="6"></line>
@@ -240,6 +218,24 @@
       <span class="date-label">Edition:</span>
       <strong class="current-date">{{ formatDisplayDate(selectedDate) }}</strong>
     </div>
+
+    <!-- Vintage theme: show edition name, dropdown when multiple editions exist -->
+    <div class="date-info" *ngIf="activeMainTab === 'content' && adminTheme === 'vintage'">
+      <span class="date-label">Edition:</span>
+      <!-- Single edition — static label -->
+      <strong class="current-date" *ngIf="editionsForDate.length <= 1">{{ getCurrentEditionLabel() }}</strong>
+      <!-- Multiple editions — dropdown selector -->
+      <select *ngIf="editionsForDate.length > 1"
+              [ngModel]="selectedEditionNumber"
+              (ngModelChange)="onEditionChange($event)"
+              class="date-select edition-select-inline">
+        <option *ngFor="let ed of editionsForDate" [ngValue]="ed.edition || 1">
+          {{ getEditionLabel(ed) }}
+        </option>
+      </select>
+    </div>
+
+    <span class="vhdr-sep date-bar-sep" *ngIf="activeMainTab === 'content' && adminTheme === 'vintage'" aria-hidden="true">|</span>
     
     <div class="date-controls" *ngIf="activeMainTab === 'content'">
       <label class="date-control-label">Select Date:</label>
@@ -249,7 +245,7 @@
         </option>
       </select>
       
-      <button class="btn btn-sm btn-primary" (click)="createNewDate()">
+      <button class="btn btn-sm btn-primary" (click)="createNewDate()" *ngIf="adminTheme !== 'vintage'">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <line x1="12" y1="5" x2="12" y2="19"></line>
           <line x1="5" y1="12" x2="19" y2="12"></line>
@@ -258,8 +254,8 @@
       </button>
     </div>
 
-    <!-- Edition selector (shown when a date has multiple editions) -->
-    <div class="edition-bar" *ngIf="activeMainTab === 'content' && editionsForDate.length > 0">
+    <!-- Edition selector (shown when a date has multiple editions; hidden in vintage — managed via All Editions view) -->
+    <div class="edition-bar" *ngIf="activeMainTab === 'content' && editionsForDate.length > 0 && adminTheme !== 'vintage'">
       <span class="edition-bar-label">Edition:</span>
       <ng-container *ngFor="let ed of editionsForDate">
         <button
@@ -395,6 +391,16 @@
         </div>
       </div>
     </aside>
+
+    <!-- Section Image Preview Lightbox (vintage post cards) -->
+    <div class="lightbox-overlay" *ngIf="previewSectionUrl" (click)="closeSectionPreview()">
+      <div class="lightbox-content lightbox-content--section" (click)="$event.stopPropagation()">
+        <button class="lightbox-close" (click)="closeSectionPreview()" title="Close">&times;</button>
+        <div class="lightbox-img-wrap">
+          <img [src]="previewSectionUrl" alt="Post image preview" />
+        </div>
+      </div>
+    </div>
 
     <!-- Page Image Preview Lightbox -->
     <div class="lightbox-overlay" *ngIf="previewPageUrl" (click)="closePagePreview()">
@@ -653,6 +659,18 @@
             </div>
           </div>
 
+          <div class="form-group">
+            <label style="width: 100%;">Content (HTML) *</label>
+            <quill-editor
+              [(ngModel)]="sectionForm.content"
+              [modules]="quillModules"
+              [styles]="{ 'min-height': '200px' }"
+              placeholder="Enter section content..."
+              class="quill-content-editor"
+              style="width: 100%;">
+            </quill-editor>
+          </div>
+
           <div class="form-group">            <label>Crop the news section Image</label>
             <div class="crop-controls">
               <!-- <div class="form-row">
@@ -733,18 +751,6 @@
             <div *ngIf="imageSourceOption === 'auto-crop'" style="color: #6b7280; font-size: 14px; margin-top: 8px;">
               Image will be automatically cropped from the full page using the coordinates below
             </div>
-          </div>
-
-          <div class="form-group">
-            <label style="width: 100%;">Content (HTML) *</label>
-            <quill-editor
-              [(ngModel)]="sectionForm.content"
-              [modules]="quillModules"
-              [styles]="{ 'min-height': '200px' }"
-              placeholder="Enter section content..."
-              class="quill-content-editor"
-              style="width: 100%;">
-            </quill-editor>
           </div>
 
           <div class="form-group">            <label class="checkbox-label">
@@ -850,6 +856,22 @@
             </div>
           </ng-container>
 
+          <!-- Editions view -->
+          <ng-container *ngIf="vintageView === 'editions'">
+            <div class="vtb-nav">
+              <h2 class="vtb-title">All Editions</h2>
+              <span class="vtb-dot" aria-hidden="true"></span>
+              <span class="vtb-meta">{{ editionsForDate.length }} edition{{ editionsForDate.length !== 1 ? 's' : '' }} · {{ formatDisplayDate(selectedDate) }}</span>
+            </div>
+            <button class="btn btn-primary btn-sm" (click)="createNewEdition()">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <line x1="12" y1="5" x2="12" y2="19"></line>
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+              </svg>
+              Add Edition
+            </button>
+          </ng-container>
+
         </div><!-- /vintage-top-bar -->
 
         <!-- ── PAGES GRID ───────────────────────────────────────── -->
@@ -872,7 +894,6 @@
               <div class="vpc-body">
                 <div class="vpc-meta-row vpc-meta-row--primary">
                   <span class="vpc-page-name">{{ getPageLabel(page) }}</span>
-                  <span class="vpc-edition-badge">{{ getCurrentEditionLabel() }}</span>
                 </div>
                 <div class="vpc-meta-row vpc-meta-row--secondary">
                   <span class="vpc-date">{{ formatDisplayDate(selectedDate) }}</span>
@@ -962,6 +983,25 @@
                   </svg>
                   {{ section.linkedSectionIds!.length }} linked post{{ section.linkedSectionIds!.length !== 1 ? 's' : '' }}
                 </div>
+                <div class="vpc-actions" (click)="$event.stopPropagation()">
+                  <button *ngIf="section.imageUrl" class="vpc-btn vpc-btn--preview" (click)="openSectionPreview(section, $event)" title="Preview post image">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                      <circle cx="12" cy="12" r="3"></circle>
+                    </svg>
+                    Preview
+                  </button>
+                  <button class="vpc-btn vpc-btn--delete" (click)="deleteSection(section)" title="Delete post">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <polyline points="3 6 5 6 21 6"></polyline>
+                      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
+                      <path d="M10 11v6"></path>
+                      <path d="M14 11v6"></path>
+                      <path d="M9 6V4h6v2"></path>
+                    </svg>
+                    Delete
+                  </button>
+                </div>
               </div>
             </article>
           </div>
@@ -1018,6 +1058,102 @@
                 <button class="btn btn-danger" (click)="deleteSection(vintageSelectedSection); vintageBackToSections()">Delete Post</button>
               </div>
             </div>
+          </div>
+        </ng-container>
+
+        <!-- ── ALL EDITIONS LIST ─────────────────────────────────── -->
+        <ng-container *ngIf="vintageView === 'editions'">
+          <div class="veditions-list">
+
+            <div class="vedition-row" *ngFor="let ed of editionsForDate">
+
+              <!-- Top: icon + info -->
+              <div class="vedition-card-top">
+                <div class="vedition-icon">
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                    <polyline points="14 2 14 8 20 8"></polyline>
+                    <line x1="16" y1="13" x2="8" y2="13"></line>
+                    <line x1="16" y1="17" x2="8" y2="17"></line>
+                    <polyline points="10 9 9 9 8 9"></polyline>
+                  </svg>
+                </div>
+                <div class="vedition-info">
+                  <span class="vedition-label">{{ getEditionLabel(ed) }}</span>
+                  <span class="vedition-meta">
+                    {{ ed.pages.length }} page{{ ed.pages.length !== 1 ? 's' : '' }} &middot; Edition {{ ed.edition || 1 }}
+                    <span class="vedition-active-badge" *ngIf="selectedEditionNumber === (ed.edition || 1)">Active</span>
+                  </span>
+                </div>
+              </div>
+
+              <!-- Middle: inline label editor (shown when editing) -->
+              <div class="vedition-label-editor" *ngIf="editingEditionLabel && editingEditionLabel.edition === ed.edition" (click)="$event.stopPropagation()">
+                <div class="vedition-label-fields">
+                  <label class="vedition-label-field">
+                    <span class="vedition-label-lang">EN</span>
+                    <input type="text" [(ngModel)]="editionLabelForm.en" class="edition-label-input" placeholder="e.g. Morning" />
+                  </label>
+                  <label class="vedition-label-field">
+                    <span class="vedition-label-lang">বাং</span>
+                    <input type="text" [(ngModel)]="editionLabelForm.bn" class="edition-label-input" placeholder="যেমন: সকাল" />
+                  </label>
+                </div>
+                <div class="vedition-label-actions">
+                  <button class="btn btn-sm btn-success" (click)="saveEditionLabels()">Save Labels</button>
+                  <button class="btn btn-sm btn-secondary" (click)="editingEditionLabel = null">Cancel</button>
+                </div>
+              </div>
+
+              <!-- Bottom: action buttons -->
+              <div class="vedition-card-footer">
+                <div class="vedition-actions">
+                  <button class="btn btn-sm btn-outline"
+                          (click)="onEditionChange(ed.edition || 1); vintageView = 'pages'"
+                          title="View pages in this edition">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                      <circle cx="12" cy="12" r="3"></circle>
+                    </svg>
+                    View
+                  </button>
+                  <button class="btn btn-sm btn-primary"
+                          (click)="openEditionLabelEditor(ed); $event.stopPropagation()"
+                          title="Edit edition labels">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                    </svg>
+                    Edit Labels
+                  </button>
+                  <button class="btn btn-sm btn-danger"
+                          (click)="deleteEditionEntry(ed)"
+                          [disabled]="editionsForDate.length <= 1"
+                          [title]="editionsForDate.length <= 1 ? 'Cannot delete the only edition' : 'Delete this edition'">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <polyline points="3 6 5 6 21 6"></polyline>
+                      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
+                      <path d="M10 11v6"></path>
+                      <path d="M14 11v6"></path>
+                      <path d="M9 6V4h6v2"></path>
+                    </svg>
+                    Delete
+                  </button>
+                </div>
+              </div>
+
+            </div>
+
+            <!-- Empty state -->
+            <div class="vintage-empty-state" *ngIf="editionsForDate.length === 0">
+              <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                <polyline points="14 2 14 8 20 8"></polyline>
+              </svg>
+              <p>No editions yet for this date</p>
+              <button class="btn btn-primary" (click)="createNewEdition()">Create First Edition</button>
+            </div>
+
           </div>
         </ng-container>
 

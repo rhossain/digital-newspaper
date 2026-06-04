@@ -54,7 +54,7 @@ export class AdminComponent implements OnInit {
   private hasUnsavedSettingsChanges = false;
 
   // Vintage theme navigation state
-  vintageView: 'pages' | 'sections' | 'section-detail' = 'pages';
+  vintageView: 'pages' | 'sections' | 'section-detail' | 'editions' = 'pages';
   vintageSelectedSection: NewsSection | null = null;
   
   // Form Data
@@ -219,6 +219,18 @@ export class AdminComponent implements OnInit {
   // Image preview lightbox
   previewPageUrl: string | null = null;
   previewPage: any = null;
+
+  // Section image preview lightbox (vintage post cards)
+  previewSectionUrl: string | null = null;
+
+  openSectionPreview(section: NewsSection, event: MouseEvent): void {
+    event.stopPropagation();
+    this.previewSectionUrl = this.resolveImageUrl(section.imageUrl || '');
+  }
+
+  closeSectionPreview(): void {
+    this.previewSectionUrl = null;
+  }
 
   openPagePreview(page: any, event: MouseEvent) {
     event.stopPropagation();
@@ -442,6 +454,7 @@ export class AdminComponent implements OnInit {
     // Open label editor immediately for the new edition
     const newEd = this.editionsForDate.find(e => (e.edition || 1) === nextEditionNumber);
     if (newEd) this.openEditionLabelEditor(newEd);
+    this.autoSaveForVintage();
   }
 
   openEditionLabelEditor(ed: NewspaperEdition) {
@@ -466,6 +479,7 @@ export class AdminComponent implements OnInit {
     this.editingEditionLabel = null;
     this.loadCurrentEdition();
     this.toaster.success('Edition labels saved!');
+    this.autoSaveForVintage();
   }
 
   /** Display label for the admin UI (always shows EN / BN side-by-side if custom labels are set). */
@@ -523,6 +537,7 @@ export class AdminComponent implements OnInit {
         this.availableDates.sort().reverse();
       }
       this.onDateChange();
+      this.autoSaveForVintage();
     } else if (newDate) {
       alert('Invalid date format. Please use YYYY-MM-DD');
     }
@@ -647,6 +662,7 @@ export class AdminComponent implements OnInit {
 
       this.cancelPageEdit();
       this.toaster.success('Page saved successfully!');
+      this.autoSaveForVintage();
     }
   }
 
@@ -664,6 +680,7 @@ export class AdminComponent implements OnInit {
         this.pages = edition.pages;
       }
       this.toaster.success('Page deleted successfully!');
+      this.autoSaveForVintage();
     }
   }
 
@@ -770,6 +787,7 @@ export class AdminComponent implements OnInit {
       if (closeForm) {
         this.cancelSectionEdit();
         this.toaster.success('Section saved successfully!');
+        this.autoSaveForVintage();
       }
     } else {
       console.error('Missing required fields:', {
@@ -795,6 +813,7 @@ export class AdminComponent implements OnInit {
       this.selectedPage = this.pages.find(p => p.id === this.selectedPage?.id) || null;
       
       this.toaster.success('Section deleted successfully!');
+      this.autoSaveForVintage();
     }
   }
 
@@ -2139,8 +2158,9 @@ export class AdminComponent implements OnInit {
   }
 
   vintageSelectSection(section: NewsSection): void {
+    // Keep vintageView as 'sections' so Cancel returns to the post list
     this.vintageSelectedSection = section;
-    this.vintageView = 'section-detail';
+    this.editSection(section);
   }
 
   vintageBackToPages(): void {
@@ -2183,12 +2203,38 @@ export class AdminComponent implements OnInit {
 
   menuGoToEditions(): void {
     this.activeMainTab = 'content';
+    if (this.adminTheme === 'vintage') {
+      this.vintageView = 'editions';
+      this.isEditingPage = false;
+      this.isEditingSection = false;
+    }
     this.closeMenu();
   }
 
   menuAddNewEdition(): void {
     this.createNewEdition();
     this.closeMenu();
+  }
+
+  deleteEditionEntry(ed: NewspaperEdition): void {
+    const label = this.getEditionLabel(ed);
+    if (!confirm(`Delete edition "${label}" for ${this.formatDisplayDate(this.selectedDate)}? This will permanently remove all pages and content in this edition.`)) return;
+    const data = this.dataService.getData();
+    const targetNum = ed.edition || 1;
+    const updatedEditions = data.editions.filter(e => !(e.date === this.selectedDate && (e.edition || 1) === targetNum));
+    (this.dataService as any)['dataSubject'].next({ ...data, editions: updatedEditions });
+    this.markUnsavedChanges();
+    // If the deleted edition was selected, switch to edition 1
+    if (this.selectedEditionNumber === targetNum) {
+      this.selectedEditionNumber = 1;
+    }
+    this.loadCurrentEdition();
+    this.toaster.success(`Edition "${label}" deleted.`);
+    this.autoSaveForVintage();
+  }
+
+  private autoSaveForVintage(): void {
+    this.saveAllData();
   }
 
   menuGoToDates(): void {
