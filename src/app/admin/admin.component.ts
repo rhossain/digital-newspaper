@@ -1,21 +1,29 @@
-import { Component, OnInit, ViewChild, ElementRef, ChangeDetectorRef } from '@angular/core';
+import { Component, OnInit, ViewChild, ElementRef, ChangeDetectorRef, HostListener } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
-import { NewspaperDataService, NewspaperPage, NewsSection, GlobalSettings, NewspaperEdition } from '../services/newspaper-data.service';
+import { QuillModule } from 'ngx-quill';
+import { NewspaperDataService, NewspaperPage, NewsSection, GlobalSettings, NewspaperEdition, ExportOptions, ImportOptions, ImportValidationResult, ImportPreview, BackupHistoryEntry } from '../services/newspaper-data.service';
 import { AuthService } from '../services/auth.service';
 import { ToasterService } from '../services/toaster.service';
+import { LoaderService } from '../services/loader.service';
 import { TranslationService } from '../i18n/translation.service';
+import { ADMIN_THEME } from './themes.config';
 
 @Component({
   selector: 'app-admin',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, QuillModule],
   templateUrl: './admin.component.html',
   styleUrls: ['./admin.component.css']
 })
 export class AdminComponent implements OnInit {
+  /** Active theme — set in themes.config.ts */
+  readonly adminTheme = ADMIN_THEME;
+
   @ViewChild('cropperImage') cropperImageRef!: ElementRef<HTMLImageElement>;
+  @ViewChild('importFileInput') importFileInputRef!: ElementRef<HTMLInputElement>;
+  @ViewChild('vintageMenuPanel') vintageMenuPanelRef?: ElementRef<HTMLElement>;
   
   pages: NewspaperPage[] = [];
   selectedPage: NewspaperPage | null = null;
@@ -39,6 +47,15 @@ export class AdminComponent implements OnInit {
   isEditingPage = false;
   isEditingSection = false;
   showImageCropper = false;
+  isBodyMaximized = false;
+  isMenuOpen = false;
+  isSavingCrop = false;
+  hasUnsavedChanges = false;
+  private hasUnsavedSettingsChanges = false;
+
+  // Vintage theme navigation state
+  vintageView: 'pages' | 'sections' | 'section-detail' | 'editions' = 'pages';
+  vintageSelectedSection: NewsSection | null = null;
   
   // Form Data
   pageForm: Partial<NewspaperPage> = {
@@ -50,14 +67,16 @@ export class AdminComponent implements OnInit {
   
   // Image input modes
   fullImageInputMode: 'url' | 'file' = 'url';
+  fullImageHiResInputMode: 'url' | 'file' = 'url';
   thumbnailInputMode: 'url' | 'file' = 'url';
   fullImageFile: File | null = null;
+  fullImageHiResFile: File | null = null;
   thumbnailFile: File | null = null;
   previewLoading: boolean = false;
 
   // Global Settings
   settingsForm: GlobalSettings = {
-    logo: { url: '', alt: 'Digital Newspaper' },
+    logo: { url: '', alt: 'Digital Newspaper', link: '' },
     socialLinks: {
       facebook: '',
       twitter: '',
@@ -80,10 +99,31 @@ export class AdminComponent implements OnInit {
       email: '',
       website: ''
     },
-    language: 'en'
+    language: 'en',
+    headScripts: '',
+    underMaintenance: false,
+    maintenanceMessage: ''
   };
   logoInputMode: 'url' | 'file' = 'url';
   logoFile: File | null = null;
+
+  // Predefined page name options (paired BN / EN)
+  readonly predefinedPageNames: { bn: string; en: string }[] = [
+    { bn: 'প্রথম পাতা',    en: 'First Page'   },
+    { bn: 'খবর',           en: 'News'          },
+    { bn: 'সম্পাদকীয়',   en: 'Editorial'     },
+    { bn: 'আন্তর্জাতিক', en: 'International'  },
+    { bn: 'সাহিত্য',      en: 'Literature'    },
+    { bn: 'গ্রাম-গঞ্জ-শহর', en: 'National'   },
+    { bn: 'খেলার খবর',   en: 'Sports'         },
+    { bn: 'শেষের পাতা',   en: 'Last Page'     },
+    { bn: 'নীল সবুজের হাট', en: 'For Kids'   },
+    { bn: 'বিষেশ সংখ্যা', en: 'Supplement'   },
+    { bn: 'ঈদুল ফিতর',   en: 'Eid al-Fitr'   },
+    { bn: 'ঈদুল আজহা',   en: 'Eid al-Adha'   },
+  ];
+  pageNameSelect: string = '';
+  pageFormErrors: { fullImage?: boolean; pageName?: boolean } = {};
 
   sectionForm: Partial<NewsSection> = {
     id: '',
@@ -97,11 +137,61 @@ export class AdminComponent implements OnInit {
     linkedSectionIds: [],
     showCaption: true
   };
+
+  private generateSectionId(): string {
+    return `post-${Date.now()}`;
+  }
+
+  private normalizeSectionId(sectionId: string | undefined | null): string {
+    const rawId = (sectionId || '').trim();
+    if (!rawId) return this.generateSectionId();
+    if (rawId.startsWith('section-')) {
+      return `post-${rawId.slice('section-'.length)}`;
+    }
+    return rawId;
+  }
   
   // Image source option
   imageSourceOption: 'auto-crop' | 'external-url' | 'upload' = 'auto-crop';
+
+  // Quill rich text editor configuration
+  quillModules = {
+    toolbar: [
+      ['bold', 'italic', 'underline', 'strike'],
+      [{ 'header': [1, 2, 3, 4, false] }],
+      [{ 'list': 'ordered' }, { 'list': 'bullet' }],
+      [{ 'indent': '-1' }, { 'indent': '+1' }],
+      [{ 'align': [] }],
+      ['blockquote'],
+      ['link'],
+      ['clean']
+    ]
+  };
   
-  // Image Cropper
+  // ─── Export modal state
+  showExportModal = false;
+  exportOptions: ExportOptions = {
+    exportType: 'full',
+    exportScope: 'full',
+  };
+
+  // ─── Import preview modal state
+  showImportPreviewModal = false;
+  importParsed: any = null;
+  importValidation: ImportValidationResult | null = null;
+  importPreview: ImportPreview | null = null;
+  importOptions: ImportOptions = {
+    importSettings: true,
+    importEditions: true,
+    mergeMode: 'overwrite-all',
+    rewriteUrls: false,
+  };
+  isImporting = false;
+
+  // ─── Backup history
+  backupHistory: BackupHistoryEntry[] = [];
+
+  // Image Cropper – base state
   cropperImageLoaded = false;
   cropperStartX = 0;
   cropperStartY = 0;
@@ -112,25 +202,110 @@ export class AdminComponent implements OnInit {
   imageNaturalHeight = 0;
   cropperZoom = 1;
 
+  // Enhanced Cropper – interaction
+  cropMode: 'idle' | 'drawing' | 'moving' | 'resizing' = 'idle';
+  activeResizeHandle: string | null = null;
+  dragStartMouseX = 0;
+  dragStartMouseY = 0;
+  dragStartBox = { x1: 0, y1: 0, x2: 0, y2: 0 };
+  cropperCursor = 'crosshair';
+  // Enhanced Cropper – options
+  cropAspectRatio: number | null = null;
+  showCropGrid = false;
+  // Enhanced Cropper – undo/redo
+  cropUndoStack: Array<{ sx: number; sy: number; ex: number; ey: number }> = [];
+  cropRedoStack: Array<{ sx: number; sy: number; ex: number; ey: number }> = [];
+
+  // Image preview lightbox
+  previewPageUrl: string | null = null;
+  previewPage: any = null;
+
+  // Section image preview lightbox (vintage post cards)
+  previewSectionUrl: string | null = null;
+
+  openSectionPreview(section: NewsSection, event: MouseEvent): void {
+    event.stopPropagation();
+    this.previewSectionUrl = this.resolveImageUrl(section.imageUrl || '');
+  }
+
+  closeSectionPreview(): void {
+    this.previewSectionUrl = null;
+  }
+
+  openPagePreview(page: any, event: MouseEvent) {
+    event.stopPropagation();
+    this.previewPage = page;
+    this.previewPageUrl = page.fullImage || page.thumbnail || null;
+  }
+
+  closePagePreview() {
+    this.previewPageUrl = null;
+    this.previewPage = null;
+  }
+
+  previewEditSection(sec: NewsSection) {
+    this.selectPage(this.previewPage);
+    this.editSection(sec);
+    this.closePagePreview();
+    this.cdr.detectChanges();
+  }
+
+  previewDeleteSection(sec: NewsSection) {
+    if (!confirm(`Delete section "${sec.title}"?`)) return;
+    this.dataService.deleteSection(this.previewPage.id, sec.id, this.selectedDate, this.selectedEditionNumber);
+    this.markUnsavedChanges();
+    const edition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);
+    if (edition) this.pages = edition.pages;
+    this.previewPage = this.pages.find((p: any) => p.id === this.previewPage?.id) ?? null;
+    if (!this.previewPage) { this.closePagePreview(); return; }
+    this.toaster.success('Section deleted.');
+    this.cdr.detectChanges();
+  }
+
   constructor(
     private dataService: NewspaperDataService,
     private router: Router,
     private cdr: ChangeDetectorRef,
     private toaster: ToasterService,
     private authService: AuthService,
-    private translationService: TranslationService
+    private translationService: TranslationService,
+    private loader: LoaderService
   ) {}
 
   ngOnInit() {
     this.todayDate = this.dataService.getTodayDate();
     this.selectedDate = this.todayDate;
     this.availableDates = this.selectedDate ? [this.selectedDate] : [];
-    
+    this.backupHistory = this.dataService.getBackupHistory();
     this.verifyAuth();
+  }
+
+  private markUnsavedChanges(): void {
+    this.hasUnsavedChanges = true;
+    this.cdr.detectChanges();
+  }
+
+  onSettingsFormChanged(): void {
+    this.hasUnsavedSettingsChanges = true;
+    this.markUnsavedChanges();
+  }
+
+  private markSaved(): void {
+    this.hasUnsavedChanges = false;
+    this.hasUnsavedSettingsChanges = false;
+    this.cdr.detectChanges();
   }
 
   get isAuthenticated(): boolean {
     return this.authService.isAuthenticated();
+  }
+
+  get isAdmin(): boolean {
+    return this.authService.isAdmin();
+  }
+
+  get currentUserName(): string {
+    return this.authService.getUserDisplayName();
   }
 
   authForm = {
@@ -165,17 +340,29 @@ export class AdminComponent implements OnInit {
       error: (err) => {
         this.isAuthenticating = false;
         const isParseError = err.error instanceof SyntaxError || (err.status === 200 && err.name === 'HttpErrorResponse');
+        const msg: string = err?.message ?? '';
         if (err.status === 0) {
           this.authError = 'Cannot reach WordPress. Verify the WordPress site is online and CORS "Allowed Origins" includes this app\'s URL.';
         } else if (err.status === 401 || err.status === 400) {
           this.authError = 'Invalid username or password. Please try again.';
         } else if (err.status === 403) {
           this.authError = 'Access denied. Your WordPress account may not have the Administrator role.';
+        } else if (msg.startsWith('WAF_BLOCKED:')) {
+          // Host-level security (e.g. Imunify360, ModSecurity) blocked the request.
+          // The withCredentials interceptor sends session cookies to avoid this;
+          // if it still happens, the REST API paths must be whitelisted server-side.
+          const detail = msg.replace('WAF_BLOCKED:', '').trim();
+          this.authError = `The login request was blocked by the server's security module. `
+            + `To fix this, whitelist the path /wp-json/digital-newspaper/v1/ in your hosting security settings (Imunify360 / ModSecurity). `
+            + `Server message: ${detail}`;
+        } else if (msg === 'NO_TOKEN' || msg.includes('did not include a token')) {
+          this.authError = 'WordPress did not return a login token. Please check: (1) the Digital Newspaper plugin is active, (2) WordPress Permalinks are set to "Post name", and (3) the WordPress URL in the app configuration is correct.';
         } else if (isParseError) {
           this.authError = 'WordPress returned an unexpected response. Please check: (1) WordPress Permalinks are set to "Post name", (2) the Digital Newspaper plugin is active, and (3) the WordPress URL in the app configuration is correct.';
         } else {
           this.authError = `Login failed (HTTP ${err.status}). Check that the Digital Newspaper plugin is active and WordPress Permalinks are set to "Post name".`;
         }
+        this.cdr.detectChanges();
         this.toaster.error(this.authError);
       }
     });
@@ -187,7 +374,7 @@ export class AdminComponent implements OnInit {
   }
 
   zoomOut() {
-    this.cropperZoom = Math.max(1, parseFloat((this.cropperZoom - 0.1).toFixed(1)));
+    this.cropperZoom = Math.max(0.25, parseFloat((this.cropperZoom - 0.1).toFixed(2)));
   }
 
   zoomIn() {
@@ -203,6 +390,7 @@ export class AdminComponent implements OnInit {
         }
         this.loadCurrentEdition();
         this.loadSettings();
+        this.markSaved();
         this.cdr.detectChanges(); // Explicitly trigger change detection
       },
       error: (error) => console.error('Error loading data:', error)
@@ -238,6 +426,8 @@ export class AdminComponent implements OnInit {
     this.selectedSection = null;
     this.isEditingPage = false;
     this.isEditingSection = false;
+    this.vintageView = 'pages';
+    this.vintageSelectedSection = null;
   }
 
   onEditionChange(editionNumber: number) {
@@ -246,6 +436,8 @@ export class AdminComponent implements OnInit {
     this.selectedSection = null;
     this.isEditingPage = false;
     this.isEditingSection = false;
+    this.vintageView = 'pages';
+    this.vintageSelectedSection = null;
     this.loadCurrentEdition();
   }
 
@@ -254,6 +446,7 @@ export class AdminComponent implements OnInit {
     const nextEditionNumber = editionNumbers.length > 0 ? Math.max(...editionNumbers) + 1 : 2;
 
     this.dataService.getOrCreateEdition(this.selectedDate, nextEditionNumber);
+    this.markUnsavedChanges();
     this.selectedEditionNumber = nextEditionNumber;
     this.loadCurrentEdition();
     this.toaster.success(`Edition ${nextEditionNumber} created!`);
@@ -261,6 +454,7 @@ export class AdminComponent implements OnInit {
     // Open label editor immediately for the new edition
     const newEd = this.editionsForDate.find(e => (e.edition || 1) === nextEditionNumber);
     if (newEd) this.openEditionLabelEditor(newEd);
+    this.autoSaveForVintage();
   }
 
   openEditionLabelEditor(ed: NewspaperEdition) {
@@ -281,9 +475,11 @@ export class AdminComponent implements OnInit {
         : e
     );
     this.dataService['dataSubject'].next({ ...data, editions });
+    this.markUnsavedChanges();
     this.editingEditionLabel = null;
     this.loadCurrentEdition();
     this.toaster.success('Edition labels saved!');
+    this.autoSaveForVintage();
   }
 
   /** Display label for the admin UI (always shows EN / BN side-by-side if custom labels are set). */
@@ -335,11 +531,13 @@ export class AdminComponent implements OnInit {
     if (newDate && /^\d{4}-\d{2}-\d{2}$/.test(newDate)) {
       this.selectedDate = newDate;
       this.dataService.getOrCreateEdition(newDate);
+      this.markUnsavedChanges();
       if (!this.availableDates.includes(newDate)) {
         this.availableDates.unshift(newDate);
         this.availableDates.sort().reverse();
       }
       this.onDateChange();
+      this.autoSaveForVintage();
     } else if (newDate) {
       alert('Invalid date format. Please use YYYY-MM-DD');
     }
@@ -356,31 +554,80 @@ export class AdminComponent implements OnInit {
     this.activeTab = 'sections';
   }
 
+  onPageNameSelectChange(value: string) {
+    this.pageNameSelect = value;
+    if (value === '' ) {
+      this.pageForm.pageLabels!['en'] = '';
+      this.pageForm.pageLabels!['bn'] = '';
+    } else if (value === '__custom__') {
+      this.pageForm.pageLabels!['en'] = '';
+      this.pageForm.pageLabels!['bn'] = '';
+    } else {
+      const found = this.predefinedPageNames.find(p => p.bn === value);
+      if (found) {
+        this.pageForm.pageLabels!['en'] = found.en;
+        this.pageForm.pageLabels!['bn'] = found.bn;
+      }
+    }
+  }
+
+  private initPageNameSelects() {
+    const en = this.pageForm.pageLabels?.['en'] ?? '';
+    const bn = this.pageForm.pageLabels?.['bn'] ?? '';
+    if (!en && !bn) { this.pageNameSelect = ''; return; }
+    const found = this.predefinedPageNames.find(p => p.bn === bn && p.en === en);
+    this.pageNameSelect = found ? found.bn : '__custom__';
+  }
+
   newPage() {
     this.isEditingPage = true;
     this.pageForm = {
       id: this.dataService.getNextPageId(this.selectedDate, this.selectedEditionNumber),
       thumbnail: '',
       fullImage: '',
+      fullImageHiRes: '',
       sections: [],
       pageLabels: { en: '', bn: '' }
     };
+    this.pageNameSelect = '';
     this.fullImageInputMode = 'url';
+    this.fullImageHiResInputMode = 'url';
     this.thumbnailInputMode = 'url';
     this.fullImageFile = null;
+    this.fullImageHiResFile = null;
     this.thumbnailFile = null;
   }
 
   editPage(page: NewspaperPage) {
     this.isEditingPage = true;
     this.pageForm = { ...page, pageLabels: { en: page.pageLabels?.['en'] ?? '', bn: page.pageLabels?.['bn'] ?? '' } };
+    this.initPageNameSelects();
     this.fullImageInputMode = 'url';
+    this.fullImageHiResInputMode = 'url';
     this.thumbnailInputMode = 'url';
     this.fullImageFile = null;
+    this.fullImageHiResFile = null;
     this.thumbnailFile = null;
   }
 
   savePage() {
+    this.pageFormErrors = {};
+    const enLabel = (this.pageForm.pageLabels?.['en'] || '').trim();
+    const bnLabel = (this.pageForm.pageLabels?.['bn'] || '').trim();
+    let hasErrors = false;
+
+    if (!this.pageForm.fullImage) {
+      this.pageFormErrors.fullImage = true;
+      this.toaster.error('Full Image is required. Please provide an image URL or upload a file.');
+      hasErrors = true;
+    }
+    if (!enLabel && !bnLabel) {
+      this.pageFormErrors.pageName = true;
+      this.toaster.error('Page Name is required. Please select or enter a page name.');
+      hasErrors = true;
+    }
+    if (hasErrors) return;
+
     if (this.pageForm.id && this.pageForm.fullImage) {
       const page = { ...this.pageForm } as NewspaperPage;
       // Strip empty pageLabels
@@ -400,21 +647,29 @@ export class AdminComponent implements OnInit {
       } else {
         this.dataService.addPage(page, this.selectedDate, this.selectedEditionNumber);
       }
+      this.markUnsavedChanges();
       
       // Update local pages immediately from service (no network call)
       const edition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);
       if (edition) {
         this.pages = edition.pages;
       }
-      
+
+      // Re-sync selectedPage so the cropper reflects the latest saved data
+      if (this.selectedPage?.id === page.id) {
+        this.selectedPage = this.pages.find(p => p.id === page.id) || null;
+      }
+
       this.cancelPageEdit();
       this.toaster.success('Page saved successfully!');
+      this.autoSaveForVintage();
     }
   }
 
   deletePage(page: NewspaperPage) {
     if (confirm(`Delete page ${page.id}?`)) {
       this.dataService.deletePage(page.id, this.selectedDate, this.selectedEditionNumber);
+      this.markUnsavedChanges();
       if (this.selectedPage?.id === page.id) {
         this.selectedPage = null;
       }
@@ -425,12 +680,15 @@ export class AdminComponent implements OnInit {
         this.pages = edition.pages;
       }
       this.toaster.success('Page deleted successfully!');
+      this.autoSaveForVintage();
     }
   }
 
   cancelPageEdit() {
     this.isEditingPage = false;
-    this.pageForm = { id: 0, thumbnail: '', fullImage: '', sections: [], pageLabels: { en: '', bn: '' } };
+    this.pageForm = { id: 0, thumbnail: '', fullImage: '', fullImageHiRes: '', sections: [], pageLabels: { en: '', bn: '' } };
+    this.pageNameSelect = '';
+    this.pageFormErrors = {};
   }
 
   // Section Management
@@ -443,7 +701,7 @@ export class AdminComponent implements OnInit {
     this.isEditingSection = true;
     this.imageSourceOption = 'auto-crop'; // Default to auto-crop
     this.sectionForm = {
-      id: `section-${Date.now()}`,
+      id: this.generateSectionId(),
       title: '',
       x: 0,
       y: 0,
@@ -460,7 +718,10 @@ export class AdminComponent implements OnInit {
   editSection(section: NewsSection) {
     this.isEditingSection = true;
     this.selectedSection = section;
-    this.sectionForm = { ...section };
+    this.sectionForm = {
+      ...section,
+      id: this.normalizeSectionId(section.id)
+    };
     
     // Set the appropriate radio button based on imageUrl
     if (!section.imageUrl || section.imageUrl.trim() === '') {
@@ -474,12 +735,14 @@ export class AdminComponent implements OnInit {
 
   saveSection(closeForm = true) {
     if (this.selectedPage && this.sectionForm.id && this.sectionForm.title) {
+      const normalizedSectionId = this.normalizeSectionId(this.sectionForm.id);
+
       // Clear imageUrl if auto-crop is selected
       const imageUrl = this.imageSourceOption === 'auto-crop' ? '' : (this.sectionForm.imageUrl || '');
       
       // Create a clean copy of the section
       const section: NewsSection = {
-        id: this.sectionForm.id,
+        id: normalizedSectionId,
         title: this.sectionForm.title,
         x: this.sectionForm.x || 0,
         y: this.sectionForm.y || 0,
@@ -496,13 +759,21 @@ export class AdminComponent implements OnInit {
       // Check if section exists by looking in the service data (not the stale selectedPage)
       const currentEdition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);
       const currentPage = currentEdition?.pages.find(p => p.id === this.selectedPage?.id);
-      const existingSection = currentPage?.sections.find(s => s.id === section.id);
+      const originalSectionId = this.selectedSection?.id || normalizedSectionId;
+      const existingSection = currentPage?.sections.find(s => s.id === originalSectionId);
       
       if (existingSection) {
-        this.dataService.updateSection(this.selectedPage.id, section.id, section, this.selectedDate, this.selectedEditionNumber);
+        this.dataService.updateSection(this.selectedPage.id, originalSectionId, section, this.selectedDate, this.selectedEditionNumber);
       } else {
         this.dataService.addSection(this.selectedPage.id, section, this.selectedDate, this.selectedEditionNumber);
       }
+      this.markUnsavedChanges();
+
+      this.sectionForm.id = normalizedSectionId;
+
+      // Sync bidirectional links: ensure every section linked from A also links back to A,
+      // and every section no longer linked from A removes A from its links.
+      this.syncBidirectionalLinks(normalizedSectionId, section.linkedSectionIds || []);
       
       // Update local pages immediately from service (no network call)
       const edition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);
@@ -516,6 +787,7 @@ export class AdminComponent implements OnInit {
       if (closeForm) {
         this.cancelSectionEdit();
         this.toaster.success('Section saved successfully!');
+        this.autoSaveForVintage();
       }
     } else {
       console.error('Missing required fields:', {
@@ -530,6 +802,7 @@ export class AdminComponent implements OnInit {
   deleteSection(section: NewsSection) {
     if (this.selectedPage && confirm(`Delete section "${section.title}"?`)) {
       this.dataService.deleteSection(this.selectedPage.id, section.id, this.selectedDate, this.selectedEditionNumber);
+      this.markUnsavedChanges();
       
       // Update local pages immediately from service (no network call)
       const edition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);
@@ -540,6 +813,7 @@ export class AdminComponent implements OnInit {
       this.selectedPage = this.pages.find(p => p.id === this.selectedPage?.id) || null;
       
       this.toaster.success('Section deleted successfully!');
+      this.autoSaveForVintage();
     }
   }
 
@@ -559,7 +833,8 @@ export class AdminComponent implements OnInit {
     };
   }
 
-  // Image Cropper
+  // ─── Image Cropper ──────────────────────────────────────────────
+
   openImageCropper() {
     if (!this.selectedPage?.fullImage) {
       alert('Please save the page with a full image URL first');
@@ -568,6 +843,16 @@ export class AdminComponent implements OnInit {
     this.showImageCropper = true;
     this.cropperImageLoaded = false;
     this.cropperZoom = 1;
+    this.cropMode = 'idle';
+    this.activeResizeHandle = null;
+    this.cropUndoStack = [];
+    this.cropRedoStack = [];
+    this.cropperCursor = 'crosshair';
+    // Box will be restored in onCropperImageLoad from sectionForm
+    this.cropperStartX = 0;
+    this.cropperStartY = 0;
+    this.cropperEndX = 0;
+    this.cropperEndY = 0;
   }
 
   onCropperImageLoad(event: Event) {
@@ -575,82 +860,483 @@ export class AdminComponent implements OnInit {
     this.imageNaturalWidth = img.naturalWidth;
     this.imageNaturalHeight = img.naturalHeight;
     this.cropperImageLoaded = true;
-    this.cdr.detectChanges();
+    this.cdr.detectChanges(); // render side-panel / stage first
+    // Defer reading clientWidth until the layout has settled after detectChanges.
+    // We prefer clientWidth (CSS layout, same as the draw coordinate space) and
+    // fall back to naturalWidth (always available immediately after load).
+    requestAnimationFrame(() => {
+      if ((this.sectionForm.width ?? 0) > 0 && (this.sectionForm.height ?? 0) > 0) {
+        const w = img.clientWidth  || img.naturalWidth;
+        const h = img.clientHeight || img.naturalHeight;
+        if (w > 0 && h > 0) {
+          // Convert stored float percentages back to display-pixel positions.
+          // Using the same reference (clientWidth) that calculateCropCoordinates
+          // used when saving, so the round-trip is lossless.
+          this.cropperStartX = ((this.sectionForm.x ?? 0) / 100) * w;
+          this.cropperStartY = ((this.sectionForm.y ?? 0) / 100) * h;
+          this.cropperEndX   = (((this.sectionForm.x ?? 0) + (this.sectionForm.width  ?? 0)) / 100) * w;
+          this.cropperEndY   = (((this.sectionForm.y ?? 0) + (this.sectionForm.height ?? 0)) / 100) * h;
+          this.cdr.detectChanges();
+        }
+      }
+    });
   }
 
   onCropperMouseDown(event: MouseEvent) {
-    if (!this.cropperImageRef) {
-      return;
+    if (!this.cropperImageRef) return;
+    const mx = event.offsetX ?? 0;
+    const my = event.offsetY ?? 0;
+
+    if (this.hasCropBox()) {
+      const handle = this.getHandleAtPoint(mx, my);
+      if (handle) {
+        this.pushCropUndo();
+        this.cropMode = 'resizing';
+        this.activeResizeHandle = handle;
+        this.dragStartMouseX = mx;
+        this.dragStartMouseY = my;
+        const norm = this.getCropNormalized();
+        this.dragStartBox = { x1: norm.x1, y1: norm.y1, x2: norm.x2, y2: norm.y2 };
+        this.cdr.detectChanges();
+        return;
+      }
+      if (this.isInsideCropBox(mx, my)) {
+        this.pushCropUndo();
+        this.cropMode = 'moving';
+        this.dragStartMouseX = mx;
+        this.dragStartMouseY = my;
+        const norm = this.getCropNormalized();
+        this.dragStartBox = { x1: norm.x1, y1: norm.y1, x2: norm.x2, y2: norm.y2 };
+        this.cdr.detectChanges();
+        return;
+      }
     }
-    
-    const zoom = this.cropperZoom || 1;
-    this.cropperStartX = event.offsetX ?? 0;
-    this.cropperStartY = event.offsetY ?? 0;
-    this.cropperEndX = this.cropperStartX;
-    this.cropperEndY = this.cropperStartY;
+
+    this.pushCropUndo();
+    this.cropMode = 'drawing';
     this.isDrawing = true;
-    
+    this.cropperStartX = mx;
+    this.cropperStartY = my;
+    this.cropperEndX = mx;
+    this.cropperEndY = my;
     this.cdr.detectChanges();
   }
 
   onCropperMouseMove(event: MouseEvent) {
-    if (!this.isDrawing || !this.cropperImageRef) return;
-    
-    const zoom = this.cropperZoom || 1;
-    this.cropperEndX = event.offsetX ?? 0;
-    this.cropperEndY = event.offsetY ?? 0;
-    
-    
-    // Only calculate coordinates in real-time, don't generate image yet
-    this.calculateCropCoordinates();
+    if (!this.cropperImageRef) return;
+    const mx = event.offsetX ?? 0;
+    const my = event.offsetY ?? 0;
+
+    if (this.cropMode === 'drawing') {
+      this.cropperEndX = mx;
+      this.cropperEndY = my;
+      if (this.cropAspectRatio) this.applyAspectRatioConstraint();
+      this.calculateCropCoordinates();
+    } else if (this.cropMode === 'moving') {
+      const img = this.cropperImageRef.nativeElement;
+      const imgW = img.clientWidth;
+      const imgH = img.clientHeight;
+      const dx = mx - this.dragStartMouseX;
+      const dy = my - this.dragStartMouseY;
+      const bw = this.dragStartBox.x2 - this.dragStartBox.x1;
+      const bh = this.dragStartBox.y2 - this.dragStartBox.y1;
+      this.cropperStartX = Math.max(0, Math.min(this.dragStartBox.x1 + dx, imgW - bw));
+      this.cropperStartY = Math.max(0, Math.min(this.dragStartBox.y1 + dy, imgH - bh));
+      this.cropperEndX = this.cropperStartX + bw;
+      this.cropperEndY = this.cropperStartY + bh;
+      this.calculateCropCoordinates();
+    } else if (this.cropMode === 'resizing') {
+      this.handleResize(mx, my);
+    } else {
+      this.updateCropCursor(mx, my);
+    }
     this.cdr.detectChanges();
   }
 
   onCropperMouseUp() {
-    if (!this.isDrawing) return;
+    if (this.cropMode === 'idle') return;
+    this.cropMode = 'idle';
     this.isDrawing = false;
+    this.activeResizeHandle = null;
     this.calculateCropCoordinates();
     this.cdr.detectChanges();
   }
 
+  onCropperMouseLeave() {
+    if (this.cropMode !== 'idle') this.onCropperMouseUp();
+  }
+
+  onCropperTouchStart(event: TouchEvent) {
+    event.preventDefault();
+    const touch = event.touches[0];
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    const zoom = this.cropperZoom || 1;
+    this.onCropperMouseDown({ offsetX: (touch.clientX - rect.left) / zoom, offsetY: (touch.clientY - rect.top) / zoom } as unknown as MouseEvent);
+  }
+
+  onCropperTouchMove(event: TouchEvent) {
+    event.preventDefault();
+    const touch = event.touches[0];
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    const zoom = this.cropperZoom || 1;
+    this.onCropperMouseMove({ offsetX: (touch.clientX - rect.left) / zoom, offsetY: (touch.clientY - rect.top) / zoom } as unknown as MouseEvent);
+  }
+
+  onCropperTouchEnd(event: TouchEvent) {
+    event.preventDefault();
+    this.onCropperMouseUp();
+  }
+
   calculateCropCoordinates() {
     if (!this.cropperImageRef) return;
-    
     const img = this.cropperImageRef.nativeElement;
-    const imgWidth = img.clientWidth;
-    const imgHeight = img.clientHeight;
-    
-    // Normalize coordinates
+    // Use clientWidth (= naturalWidth for inline-block stage) for coordinate
+    // normalisation. Fall back to naturalWidth in case layout hasn't settled.
+    const imgWidth  = img.clientWidth  || img.naturalWidth;
+    const imgHeight = img.clientHeight || img.naturalHeight;
+    if (!imgWidth || !imgHeight) return;
     const x1 = Math.min(this.cropperStartX, this.cropperEndX);
     const y1 = Math.min(this.cropperStartY, this.cropperEndY);
     const x2 = Math.max(this.cropperStartX, this.cropperEndX);
     const y2 = Math.max(this.cropperStartY, this.cropperEndY);
-    
-    // Convert to percentages and ensure sectionForm is updated
-    const newX = Math.round((x1 / imgWidth) * 100);
-    const newY = Math.round((y1 / imgHeight) * 100);
-    const newWidth = Math.round(((x2 - x1) / imgWidth) * 100);
-    const newHeight = Math.round(((y2 - y1) / imgHeight) * 100);
-    
-    // Update sectionForm coordinates only
+    // Store as high-precision floats (4 d.p.) to avoid rounding drift on restore.
+    // For a 3000-px image, 4 d.p. = 0.003 px error — effectively lossless.
+    const round4 = (v: number) => parseFloat(v.toFixed(4));
     this.sectionForm = {
       ...this.sectionForm,
-      x: newX,
-      y: newY,
-      width: newWidth,
-      height: newHeight
+      x:      round4(Math.max(0, (x1 / imgWidth)  * 100)),
+      y:      round4(Math.max(0, (y1 / imgHeight) * 100)),
+      width:  round4(Math.min(100, ((x2 - x1) / imgWidth)  * 100)),
+      height: round4(Math.min(100, ((y2 - y1) / imgHeight) * 100))
     };
-    
+  }
+
+  // ─── Crop helper methods ───────────────────────────────────────────
+
+  getCropNormalized(): { x1: number; y1: number; x2: number; y2: number; w: number; h: number } {
+    const x1 = Math.min(this.cropperStartX, this.cropperEndX);
+    const y1 = Math.min(this.cropperStartY, this.cropperEndY);
+    const x2 = Math.max(this.cropperStartX, this.cropperEndX);
+    const y2 = Math.max(this.cropperStartY, this.cropperEndY);
+    return { x1, y1, x2, y2, w: x2 - x1, h: y2 - y1 };
+  }
+
+  hasCropBox(): boolean {
+    return Math.abs(this.cropperEndX - this.cropperStartX) > 5 &&
+           Math.abs(this.cropperEndY - this.cropperStartY) > 5;
+  }
+
+  private getHandleAtPoint(mx: number, my: number): string | null {
+    if (!this.hasCropBox()) return null;
+    const { x1, y1, x2, y2 } = this.getCropNormalized();
+    const cx = (x1 + x2) / 2;
+    const cy = (y1 + y2) / 2;
+    const R = 8;
+    const handles = [
+      { id: 'nw', x: x1, y: y1 }, { id: 'n', x: cx, y: y1 }, { id: 'ne', x: x2, y: y1 },
+      { id: 'e', x: x2, y: cy },
+      { id: 'se', x: x2, y: y2 }, { id: 's', x: cx, y: y2 }, { id: 'sw', x: x1, y: y2 },
+      { id: 'w', x: x1, y: cy },
+    ];
+    for (const h of handles) {
+      if (Math.abs(mx - h.x) <= R && Math.abs(my - h.y) <= R) return h.id;
+    }
+    return null;
+  }
+
+  private isInsideCropBox(mx: number, my: number): boolean {
+    if (!this.hasCropBox()) return false;
+    const { x1, y1, x2, y2 } = this.getCropNormalized();
+    return mx > x1 + 8 && mx < x2 - 8 && my > y1 + 8 && my < y2 - 8;
+  }
+
+  private updateCropCursor(mx: number, my: number) {
+    const handle = this.getHandleAtPoint(mx, my);
+    if (handle) {
+      const cursors: Record<string, string> = {
+        nw: 'nw-resize', n: 'n-resize', ne: 'ne-resize',
+        e: 'e-resize', se: 'se-resize', s: 's-resize',
+        sw: 'sw-resize', w: 'w-resize'
+      };
+      this.cropperCursor = cursors[handle] ?? 'pointer';
+    } else if (this.isInsideCropBox(mx, my)) {
+      this.cropperCursor = 'move';
+    } else {
+      this.cropperCursor = 'crosshair';
+    }
+  }
+
+  private handleResize(mx: number, my: number) {
+    if (!this.activeResizeHandle || !this.cropperImageRef) return;
+    const img = this.cropperImageRef.nativeElement;
+    const imgW = img.clientWidth;
+    const imgH = img.clientHeight;
+    const dx = mx - this.dragStartMouseX;
+    const dy = my - this.dragStartMouseY;
+    const { x1, y1, x2, y2 } = this.dragStartBox;
+    const MIN = 10;
+    let nx1 = x1, ny1 = y1, nx2 = x2, ny2 = y2;
+
+    switch (this.activeResizeHandle) {
+      case 'nw': nx1 = Math.max(0, Math.min(x1 + dx, x2 - MIN)); ny1 = Math.max(0, Math.min(y1 + dy, y2 - MIN)); break;
+      case 'n':  ny1 = Math.max(0, Math.min(y1 + dy, y2 - MIN)); break;
+      case 'ne': nx2 = Math.min(imgW, Math.max(x2 + dx, x1 + MIN)); ny1 = Math.max(0, Math.min(y1 + dy, y2 - MIN)); break;
+      case 'e':  nx2 = Math.min(imgW, Math.max(x2 + dx, x1 + MIN)); break;
+      case 'se': nx2 = Math.min(imgW, Math.max(x2 + dx, x1 + MIN)); ny2 = Math.min(imgH, Math.max(y2 + dy, y1 + MIN)); break;
+      case 's':  ny2 = Math.min(imgH, Math.max(y2 + dy, y1 + MIN)); break;
+      case 'sw': nx1 = Math.max(0, Math.min(x1 + dx, x2 - MIN)); ny2 = Math.min(imgH, Math.max(y2 + dy, y1 + MIN)); break;
+      case 'w':  nx1 = Math.max(0, Math.min(x1 + dx, x2 - MIN)); break;
+    }
+    if (this.cropAspectRatio && ['nw', 'ne', 'se', 'sw'].includes(this.activeResizeHandle)) {
+      const newW = nx2 - nx1;
+      const targetH = newW / this.cropAspectRatio;
+      if (this.activeResizeHandle === 'nw' || this.activeResizeHandle === 'ne') {
+        ny1 = Math.max(0, ny2 - targetH);
+      } else {
+        ny2 = Math.min(imgH, ny1 + targetH);
+      }
+    }
+    this.cropperStartX = nx1; this.cropperStartY = ny1;
+    this.cropperEndX = nx2; this.cropperEndY = ny2;
+    this.calculateCropCoordinates();
+  }
+
+  private applyAspectRatioConstraint() {
+    if (!this.cropAspectRatio) return;
+    const w = Math.abs(this.cropperEndX - this.cropperStartX);
+    const h = w / this.cropAspectRatio;
+    const dirY = this.cropperEndY >= this.cropperStartY ? 1 : -1;
+    this.cropperEndY = this.cropperStartY + dirY * h;
+  }
+
+  pushCropUndo() {
+    this.cropUndoStack.push({
+      sx: this.cropperStartX, sy: this.cropperStartY,
+      ex: this.cropperEndX, ey: this.cropperEndY
+    });
+    if (this.cropUndoStack.length > 30) this.cropUndoStack.shift();
+    this.cropRedoStack = [];
+  }
+
+  undoCrop() {
+    if (!this.cropUndoStack.length) return;
+    this.cropRedoStack.push({ sx: this.cropperStartX, sy: this.cropperStartY, ex: this.cropperEndX, ey: this.cropperEndY });
+    const prev = this.cropUndoStack.pop()!;
+    this.cropperStartX = prev.sx; this.cropperStartY = prev.sy;
+    this.cropperEndX = prev.ex; this.cropperEndY = prev.ey;
+    this.calculateCropCoordinates();
+    this.cdr.detectChanges();
+  }
+
+  redoCrop() {
+    if (!this.cropRedoStack.length) return;
+    this.cropUndoStack.push({ sx: this.cropperStartX, sy: this.cropperStartY, ex: this.cropperEndX, ey: this.cropperEndY });
+    const next = this.cropRedoStack.pop()!;
+    this.cropperStartX = next.sx; this.cropperStartY = next.sy;
+    this.cropperEndX = next.ex; this.cropperEndY = next.ey;
+    this.calculateCropCoordinates();
+    this.cdr.detectChanges();
+  }
+
+  setCropAspectRatio(ratio: number | null) { this.cropAspectRatio = ratio; }
+
+  moveCropBox(dx: number, dy: number, imgW: number, imgH: number) {
+    if (!this.hasCropBox()) return;
+    const { x1, y1, w, h } = this.getCropNormalized();
+    const nx1 = Math.max(0, Math.min(x1 + dx, imgW - w));
+    const ny1 = Math.max(0, Math.min(y1 + dy, imgH - h));
+    this.cropperStartX = nx1; this.cropperStartY = ny1;
+    this.cropperEndX = nx1 + w; this.cropperEndY = ny1 + h;
+    this.calculateCropCoordinates();
+    this.cdr.detectChanges();
+  }
+
+  getCropPixelDimensions(): { w: number; h: number } {
+    if (!this.cropperImageRef?.nativeElement || !this.hasCropBox() || !this.imageNaturalWidth) return { w: 0, h: 0 };
+    const img = this.cropperImageRef.nativeElement;
+    const scaleX = this.imageNaturalWidth / img.clientWidth;
+    const scaleY = this.imageNaturalHeight / img.clientHeight;
+    const { w, h } = this.getCropNormalized();
+    return { w: Math.round(w * scaleX), h: Math.round(h * scaleY) };
+  }
+
+  getResizeHandleStyle(handle: string): { [key: string]: string } {
+    if (!this.hasCropBox()) return { display: 'none' };
+    const { x1, y1, x2, y2 } = this.getCropNormalized();
+    const cx = (x1 + x2) / 2;
+    const cy = (y1 + y2) / 2;
+    const pos: Record<string, [number, number]> = {
+      nw: [x1, y1], n: [cx, y1], ne: [x2, y1],
+      e: [x2, cy], se: [x2, y2], s: [cx, y2],
+      sw: [x1, y2], w: [x1, cy],
+    };
+    const [left, top] = pos[handle] ?? [0, 0];
+    return { left: `${left}px`, top: `${top}px` };
+  }
+
+  getExistingSectionsForCropper(): NewsSection[] {
+    if (!this.selectedPage) return [];
+    return this.selectedPage.sections.filter(s =>
+      s.id !== this.sectionForm.id && (s.width ?? 0) > 0 && (s.height ?? 0) > 0
+    );
+  }
+
+  getExistingSectionBoxStyle(section: NewsSection): { [key: string]: string } {
+    if (!this.cropperImageRef?.nativeElement) return { display: 'none' };
+    const img = this.cropperImageRef.nativeElement;
+    const w = img.clientWidth; const h = img.clientHeight;
+    if (!w || !h) return { display: 'none' };
+    return {
+      left: `${(section.x / 100) * w}px`,
+      top: `${(section.y / 100) * h}px`,
+      width: `${(section.width / 100) * w}px`,
+      height: `${(section.height / 100) * h}px`,
+    };
+  }
+
+  getSectionThumbStyle(section: NewsSection): { [key: string]: string } {
+    const imageUrl = this.selectedPage?.fullImageHiRes || this.selectedPage?.fullImage || '';
+    if (!imageUrl || !section.width || !section.height) return { background: 'var(--color-bg-muted)' };
+    const tW = 44; const tH = 56;
+    return {
+      'background-image': `url(${imageUrl})`,
+      'background-size': `${Math.round(tW * 100 / section.width)}px ${Math.round(tH * 100 / section.height)}px`,
+      'background-position': `${-Math.round(tW * section.x / section.width)}px ${-Math.round(tH * section.y / section.height)}px`,
+      'background-repeat': 'no-repeat',
+    };
+  }
+
+  getSectionCardPreviewStyle(section: NewsSection): { [key: string]: string } {
+    const imageUrl = this.selectedPage?.fullImageHiRes || this.selectedPage?.fullImage || '';
+    if (!imageUrl || !section.width || !section.height) return { background: 'var(--color-bg-muted)' };
+    const resolvedUrl = this.resolveImageUrl(imageUrl);
+    const previewH = 180; // matches .section-preview height in CSS
+    // Compute natural width from section aspect ratio to avoid any stretching
+    const previewW = Math.round(previewH * (section.width / section.height));
+    return {
+      'background-image': `url(${resolvedUrl})`,
+      'background-size': `${Math.round(previewW * 100 / section.width)}px ${Math.round(previewH * 100 / section.height)}px`,
+      'background-position': `${-Math.round(previewW * section.x / section.width)}px ${-Math.round(previewH * section.y / section.height)}px`,
+      'background-repeat': 'no-repeat',
+    };
+  }
+
+  jumpToCropSection(section: NewsSection) {
+    if (this.sectionForm.id && this.sectionForm.title) this.saveSection(false);
+    this.isEditingSection = true;
+    this.selectedSection = section;
+    this.sectionForm = { ...section, id: this.normalizeSectionId(section.id) };
+    this.imageSourceOption = !section.imageUrl || section.imageUrl.trim() === '' ? 'auto-crop' :
+      section.imageUrl.startsWith('assets/cropped/') ? 'upload' : 'external-url';
+    if (this.cropperImageRef?.nativeElement && (section.width ?? 0) > 0) {
+      const img = this.cropperImageRef.nativeElement;
+      const iw = img.clientWidth; const ih = img.clientHeight;
+      this.cropperStartX = (section.x / 100) * iw;
+      this.cropperStartY = (section.y / 100) * ih;
+      this.cropperEndX = ((section.x + section.width) / 100) * iw;
+      this.cropperEndY = ((section.y + section.height) / 100) * ih;
+    } else {
+      this.cropperStartX = this.cropperStartY = this.cropperEndX = this.cropperEndY = 0;
+    }
+    this.cropUndoStack = []; this.cropRedoStack = [];
+    this.cdr.detectChanges();
+  }
+
+  deleteFromCropper(section: NewsSection) {
+    if (!this.selectedPage || !confirm(`Delete section "${section.title}"?`)) return;
+    this.dataService.deleteSection(this.selectedPage.id, section.id, this.selectedDate, this.selectedEditionNumber);
+    this.markUnsavedChanges();
+    const edition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);
+    if (edition) this.pages = edition.pages;
+    this.selectedPage = this.pages.find(p => p.id === this.selectedPage?.id) ?? null;
+    this.toaster.success('Section deleted.');
+    this.cdr.detectChanges();
+  }
+
+  /**
+   * Mousedown on an existing-section overlay box.
+   * - Lets Edit / Delete buttons handle their own clicks unobstructed.
+   * - Forwards the event to the main crop handler ONLY when the pointer is
+   *   on a resize handle or inside the current crop-box (move/resize intent).
+   * - Swallows the event in all other cases, preventing a new draw from
+   *   being started on top of a saved section.
+   */
+  onExistingSectionMouseDown(event: MouseEvent, section: NewsSection) {
+    // Let the action buttons handle their own clicks
+    if ((event.target as HTMLElement).closest('.section-box-actions')) return;
+    event.preventDefault();
+    if (!this.cropperImageRef?.nativeElement) return;
+    // Convert viewport coords to stage layout coords (undo the CSS zoom transform)
+    const imgRect = this.cropperImageRef.nativeElement.getBoundingClientRect();
+    const zoom = this.cropperZoom || 1;
+    const mx = (event.clientX - imgRect.left) / zoom;
+    const my = (event.clientY - imgRect.top) / zoom;
+    // Only allow move / resize of the active crop box — never start a new draw
+    if (this.hasCropBox()) {
+      const handle = this.getHandleAtPoint(mx, my);
+      if (handle || this.isInsideCropBox(mx, my)) {
+        this.onCropperMouseDown({ offsetX: mx, offsetY: my } as MouseEvent);
+      }
+    }
+    // Otherwise: event is swallowed — drawing is blocked on this section area
+  }
+
+  @HostListener('document:keydown', ['$event'])
+  onCropperKeyDown(event: KeyboardEvent) {
+    if (!this.showImageCropper || !this.cropperImageRef?.nativeElement) return;
+    const img = this.cropperImageRef.nativeElement;
+    const step = event.shiftKey ? 10 : 1;
+    switch (event.key) {
+      case 'ArrowLeft':  event.preventDefault(); this.moveCropBox(-step, 0, img.clientWidth, img.clientHeight); break;
+      case 'ArrowRight': event.preventDefault(); this.moveCropBox(step, 0, img.clientWidth, img.clientHeight); break;
+      case 'ArrowUp':    event.preventDefault(); this.moveCropBox(0, -step, img.clientWidth, img.clientHeight); break;
+      case 'ArrowDown':  event.preventDefault(); this.moveCropBox(0, step, img.clientWidth, img.clientHeight); break;
+      case 'z': case 'Z':
+        if (event.ctrlKey || event.metaKey) { event.preventDefault(); event.shiftKey ? this.redoCrop() : this.undoCrop(); }
+        break;
+      case 'Escape': this.closeCropper(); break;
+    }
   }
 
   async generateAndUploadCroppedImageFromFullSize(fullImageUrl: string) {
+    this.loader.show();
+    this.isSavingCrop = true;
+    this.cdr.detectChanges();
     try {
-      const proxyUrl = `${this.dataService.getApiBaseUrl()}/wp-json/digital-newspaper/v1/proxy?url=${encodeURIComponent(fullImageUrl)}`;
+      const fullImageHref = new URL(fullImageUrl, window.location.href).href;
+      // Resolve relative URLs against the WP base so the proxy always receives an absolute URL
+      const absoluteImageUrl = (() => {
+        try { new URL(fullImageUrl); return fullImageUrl; } catch {
+          return new URL(fullImageUrl, this.dataService.getApiBaseUrl() + '/').href;
+        }
+      })();
+      // Normalize the image URL's origin to match the WP API origin.
+      // epaper.dailysangram.com and nepaper.dailysangram.com are the same server;
+      // rewriting ensures the proxy's host-allowlist check always passes.
+      const wpApiOrigin = new URL(this.dataService.getApiBaseUrl()).origin;
+      const proxyImageUrl = (() => {
+        try {
+          const p = new URL(absoluteImageUrl);
+          return p.origin !== wpApiOrigin ? wpApiOrigin + p.pathname + p.search + p.hash : absoluteImageUrl;
+        } catch { return absoluteImageUrl; }
+      })();
+      const proxyUrl = `${this.dataService.getApiBaseUrl()}/wp-json/digital-newspaper/v1/proxy?url=${encodeURIComponent(proxyImageUrl)}`;
+      const fetchUrls = new URL(fullImageHref).origin === window.location.origin
+        ? [fullImageHref, proxyUrl]
+        : [proxyUrl];
       
       // Fetch the full-size image
-      const response = await fetch(proxyUrl);
-      if (!response.ok) {
-        throw new Error(`Proxy fetch failed (${response.status})`);
+      let response: Response | null = null;
+      let lastFetchError = '';
+      for (const imageUrl of fetchUrls) {
+        response = await fetch(imageUrl);
+        if (response.ok) break;
+        lastFetchError = `${imageUrl === proxyUrl ? 'Proxy' : 'Image'} fetch failed (${response.status})`;
+      }
+      if (!response?.ok) {
+        this.isSavingCrop = false;
+        this.loader.hide();
+        throw new Error(lastFetchError || 'Image fetch failed');
       }
       const contentType = response.headers.get('content-type') || '';
       if (!contentType.startsWith('image/')) {
@@ -672,6 +1358,8 @@ export class AdminComponent implements OnInit {
           
           if (!ctx) {
             this.toaster.error('Failed to create crop canvas');
+            this.isSavingCrop = false;
+            this.loader.hide();
             URL.revokeObjectURL(objectUrl);
             return;
           }
@@ -703,15 +1391,7 @@ export class AdminComponent implements OnInit {
           // Convert to data URL
           const croppedImageData = canvas.toDataURL('image/jpeg', 0.9);
           
-          // Generate filename: DD_MM_YYYY_NNNN_sectionId
-          const datePrefix = this.formatDateForFilename(
-            this.selectedDate || this.dataService.getTodayDate()
-          );
-          const headers = this.authService.getAuthHeaders();
-          const sequence = await this.getNextCropSequence(datePrefix, headers);
-          const sequenceStr = sequence.toString().padStart(4, '0');
-          const sectionId = (this.sectionForm.id || 'unknown').toString();
-          const fileName = `${datePrefix}_${sequenceStr}_${sectionId}`;
+          const fileName = this.buildSectionImageFilename('jpg');
           
           // Upload to backend
           this.uploadCroppedImage(croppedImageData, fileName);
@@ -721,12 +1401,16 @@ export class AdminComponent implements OnInit {
         } catch (error) {
           console.error('Error in canvas operations:', error);
           this.toaster.error('Failed to process cropped image');
+          this.isSavingCrop = false;
+          this.loader.hide();
           URL.revokeObjectURL(objectUrl);
         }
       };
       
       img.onerror = () => {
         this.toaster.error('Failed to load full-size image for cropping');
+        this.isSavingCrop = false;
+        this.loader.hide();
         URL.revokeObjectURL(objectUrl);
       };
       
@@ -735,12 +1419,16 @@ export class AdminComponent implements OnInit {
     } catch (error) {
       console.error('Error fetching full-size image:', error);
       this.toaster.error('Failed to fetch image: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      this.isSavingCrop = false;
+      this.loader.hide();
     }
   }
 
   uploadCroppedImage(imageData: string, fileName: string) {
-    const file = this.dataUrlToFile(imageData, `${fileName}.jpg`);
-    this.uploadMediaFile(file, `${fileName}.jpg`)
+    const file = this.dataUrlToFile(imageData, fileName);
+    const previousImageUrl = this.sectionForm.imageUrl || '';
+    // loader already shown by generateAndUploadCroppedImageFromFullSize
+    this.uploadMediaFile(file, fileName)
       .then((url) => {
         this.sectionForm = {
           ...this.sectionForm,
@@ -754,6 +1442,7 @@ export class AdminComponent implements OnInit {
         // without closing the section form — the user stays on the edit page.
         this.saveSection(false);
         this.saveAllData();
+        this.deletePreviousGeneratedPostCrop(previousImageUrl, url);
         this.toaster.success('Cropped image saved!');
       })
       .catch((error) => {
@@ -765,7 +1454,8 @@ export class AdminComponent implements OnInit {
         };
         this.imageSourceOption = 'auto-crop';
         this.cdr.detectChanges();
-      });
+      })
+      .finally(() => { this.isSavingCrop = false; this.loader.hide(); this.cdr.detectChanges(); });
   }
 
   onImageFileSelected(event: Event) {
@@ -793,7 +1483,8 @@ export class AdminComponent implements OnInit {
     const reader = new FileReader();
     reader.onload = () => {
       const imageData = reader.result as string;
-      const fileName = this.sectionForm.title?.replace(/\s+/g, '_').toLowerCase() || 'uploaded';
+      const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
+      const fileName = this.buildSectionImageFilename(ext);
       this.uploadImageFile(imageData, fileName);
     };
     reader.onerror = () => {
@@ -803,8 +1494,9 @@ export class AdminComponent implements OnInit {
   }
 
   uploadImageFile(imageData: string, fileName: string) {
-    const file = this.dataUrlToFile(imageData, `${fileName}.jpg`);
-    this.uploadMediaFile(file, `${fileName}.jpg`)
+    const file = this.dataUrlToFile(imageData, fileName);
+    this.loader.show();
+    this.uploadMediaFile(file, fileName)
       .then((url) => {
         this.sectionForm = {
           ...this.sectionForm,
@@ -816,7 +1508,8 @@ export class AdminComponent implements OnInit {
       .catch((error) => {
         console.error('Error uploading image:', error);
         this.toaster.error('Failed to upload image: ' + error.message);
-      });
+      })
+      .finally(() => this.loader.hide());
   }
 
   private dataUrlToFile(dataUrl: string, filename: string): File {
@@ -830,6 +1523,30 @@ export class AdminComponent implements OnInit {
       u8arr[n] = bstr.charCodeAt(n);
     }
     return new File([u8arr], filename, { type: mime });
+  }
+
+  /**
+   * Applies the same WAF-bypass rules as wpApiInterceptor to a native fetch()
+   * call so media uploads are not blocked by host-level security modules:
+   *   1. URL rewrite  /wp-json/ → /?rest_route=/
+   *   2. credentials: 'include'  (sends WAF verification cookies)
+   *   3. X-Requested-With: XMLHttpRequest  (activates OWASP AJAX exemptions)
+   */
+  private wafBypassFetch(url: string, options: RequestInit = {}): Promise<Response> {
+    let rewrittenUrl = url;
+    if (url.includes('/wp-json/')) {
+      const qIndex = url.indexOf('?');
+      const path   = qIndex !== -1 ? url.substring(0, qIndex) : url;
+      const qs     = qIndex !== -1 ? url.substring(qIndex + 1) : '';
+      const base   = path.replace('/wp-json/', '/?rest_route=/');
+      rewrittenUrl = qs ? `${base}&${qs}` : base;
+    }
+    const existingHeaders = (options.headers ?? {}) as Record<string, string>;
+    return fetch(rewrittenUrl, {
+      ...options,
+      headers: { ...existingHeaders, 'X-Requested-With': 'XMLHttpRequest' },
+      credentials: 'include',
+    });
   }
 
   private async uploadMediaFile(file: File, filename: string): Promise<string> {
@@ -854,7 +1571,7 @@ export class AdminComponent implements OnInit {
     const formData = new FormData();
     formData.append('file', file, finalName);
 
-    const response = await fetch(url, {
+    const response = await this.wafBypassFetch(url, {
       method: 'POST',
       headers,
       body: formData
@@ -865,15 +1582,65 @@ export class AdminComponent implements OnInit {
       throw new Error(errorText || 'Upload failed');
     }
 
+    const contentType = response.headers.get('content-type') ?? '';
+    if (!contentType.includes('application/json')) {
+      const bodyPreview = await response.text();
+      throw new Error(
+        `Upload endpoint returned non-JSON (HTTP ${response.status}). ` +
+        `Check that WordPress REST API and permalinks are configured correctly. ` +
+        `Response: ${bodyPreview.slice(0, 150)}`
+      );
+    }
+
     const data = await response.json();
     return data.source_url || data.guid?.rendered || '';
   }
 
-  /** Convert YYYY-MM-DD → DD_MM_YYYY for use in media filenames. */
+  /** Convert YYYY-MM-DD → DD-MM-YYYY for use in media filenames. */
   private formatDateForFilename(dateStr: string): string {
     const parts = dateStr.split('-');
     if (parts.length !== 3) return dateStr;
-    return `${parts[2]}_${parts[1]}_${parts[0]}`;
+    return `${parts[2]}-${parts[1]}-${parts[0]}`;
+  }
+
+  private buildPageImageFilename(ext: string, variant: 'full' | 'hires' | 'thumb' = 'full'): string {
+    const pageNumber = this.pad2(this.pageForm.id || this.dataService.getNextPageId(this.selectedDate, this.selectedEditionNumber));
+    const editionNumber = this.pad2(this.selectedEditionNumber || 1);
+    const date = this.formatDateForFilename(this.selectedDate || this.dataService.getTodayDate());
+    const suffix = variant === 'full' ? '' : `-${variant}`;
+    return `page-${pageNumber}-e-${editionNumber}-${date}${suffix}.${this.cleanExtension(ext)}`;
+  }
+
+  private buildSectionImageFilename(ext: string): string {
+    const pageNumber = this.pad2(this.selectedPage?.id || this.pageForm.id || 1);
+    const editionNumber = this.pad2(this.selectedEditionNumber || 1);
+    const postId = this.formatSectionIdForFilename(this.sectionForm.id || 'unknown');
+    const date = this.formatDateForFilename(this.selectedDate || this.dataService.getTodayDate());
+    const x = this.formatCoordinate(this.sectionForm.x ?? 0);
+    const y = this.formatCoordinate(this.sectionForm.y ?? 0);
+    const w = this.formatCoordinate(this.sectionForm.width ?? 0);
+    const h = this.formatCoordinate(this.sectionForm.height ?? 0);
+    return `page-${pageNumber}-e-${editionNumber}-${date}-post-${postId}-${x}-${y}-${w}-${h}.${this.cleanExtension(ext)}`;
+  }
+
+  private pad2(value: number | string): string {
+    const numericValue = typeof value === 'number' ? value : Number.parseInt(value, 10);
+    return Number.isFinite(numericValue) ? String(numericValue).padStart(2, '0') : String(value).padStart(2, '0');
+  }
+
+  private formatSectionIdForFilename(sectionId: string): string {
+    const trailingNumber = sectionId.match(/(\d+)$/)?.[1];
+    if (trailingNumber) return this.pad2(trailingNumber);
+    return sectionId.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'unknown';
+  }
+
+  private formatCoordinate(value: number): string {
+    return Number(value || 0).toFixed(4);
+  }
+
+  private cleanExtension(ext: string): string {
+    const clean = ext.toLowerCase().replace(/[^a-z0-9]/g, '');
+    return clean || 'jpg';
   }
 
   /**
@@ -888,7 +1655,7 @@ export class AdminComponent implements OnInit {
       `${this.dataService.getApiBaseUrl()}/wp-json/digital-newspaper/v1/media` +
       `?search=${encodeURIComponent(datePrefix)}&per_page=100`;
     try {
-      const response = await fetch(searchUrl, { headers });
+      const response = await this.wafBypassFetch(searchUrl, { headers });
       if (!response.ok) return 1;
       const items: any[] = await response.json();
       if (!Array.isArray(items) || items.length === 0) return 1;
@@ -927,7 +1694,7 @@ export class AdminComponent implements OnInit {
   private async findExistingMedia(filename: string, headers: Record<string, string>): Promise<{ id: number } | null> {
     const base = filename.replace(/\.[^/.]+$/, '').toLowerCase();
     const searchUrl = `${this.dataService.getApiBaseUrl()}/wp-json/digital-newspaper/v1/media?search=${encodeURIComponent(base)}&per_page=100`;
-    const response = await fetch(searchUrl, { headers });
+    const response = await this.wafBypassFetch(searchUrl, { headers });
     if (!response.ok) return null;
     const items = await response.json();
     const match = Array.isArray(items)
@@ -942,11 +1709,48 @@ export class AdminComponent implements OnInit {
 
   private async deleteMedia(id: number, headers: Record<string, string>): Promise<void> {
     const deleteUrl = `${this.dataService.getApiBaseUrl()}/wp-json/digital-newspaper/v1/media/${id}`;
-    const response = await fetch(deleteUrl, { method: 'DELETE', headers });
+    const response = await this.wafBypassFetch(deleteUrl, { method: 'DELETE', headers });
     if (!response.ok) {
       const errorText = await response.text();
       throw new Error(errorText || 'Failed to delete existing media');
     }
+  }
+
+  private deletePreviousGeneratedPostCrop(previousUrl: string, newUrl: string): void {
+    if (!previousUrl || previousUrl === newUrl || !this.isGeneratedPostCropUrl(previousUrl)) {
+      return;
+    }
+
+    const previousFilename = decodeURIComponent(previousUrl.split('/').pop() || '');
+    if (!previousFilename) {
+      return;
+    }
+
+    const headers = this.authService.getAuthHeaders();
+    this.findExistingMedia(previousFilename, headers)
+      .then((existing) => existing ? this.deleteMedia(existing.id, headers) : undefined)
+      .catch((error) => {
+        console.warn('Previous cropped post image could not be deleted:', error);
+      });
+  }
+
+  getSectionCropPreviewStyle(): { [key: string]: string } {
+    const x = this.sectionForm.x ?? 0;
+    const y = this.sectionForm.y ?? 0;
+    const w = this.sectionForm.width ?? 0;
+    const h = this.sectionForm.height ?? 0;
+    const imageUrl = this.selectedPage?.fullImageHiRes || this.selectedPage?.fullImage || '';
+    if (!w || !h || !imageUrl) return {};
+
+    const previewW = 108; // must match .section-crop-preview width in CSS
+    const previewH = 135; // must match .section-crop-preview height in CSS
+
+    return {
+      'background-image': `url(${this.resolveImageUrl(imageUrl)})`,
+      'background-size': `${Math.round(previewW * 100 / w)}px ${Math.round(previewH * 100 / h)}px`,
+      'background-position': `${-Math.round(previewW * x / w)}px ${-Math.round(previewH * y / h)}px`,
+      'background-repeat': 'no-repeat',
+    };
   }
 
   getCropStyle() {
@@ -971,12 +1775,10 @@ export class AdminComponent implements OnInit {
   }
 
   applyCrop() {
-    // Ensure the crop coordinates are calculated one final time
-    if (this.cropperEndX > 0 && this.cropperEndY > 0 && this.cropperImageRef && this.selectedPage) {
+    if (this.hasCropBox() && this.cropperImageRef && this.selectedPage) {
       this.calculateCropCoordinates();
-      
-      // Only generate cropped image if auto-crop is selected and imageUrl is empty
-      if (this.imageSourceOption === 'auto-crop' && (!this.sectionForm.imageUrl || this.sectionForm.imageUrl.trim() === '')) {
+
+      if (this.shouldGenerateCroppedPostImage()) {
         // Use percentage coordinates to crop from full-size image
         const fullImageUrl = this.selectedPage.fullImage;
         this.generateAndUploadCroppedImageFromFullSize(fullImageUrl);
@@ -987,16 +1789,38 @@ export class AdminComponent implements OnInit {
     this.closeCropper();
   }
 
+  private shouldGenerateCroppedPostImage(): boolean {
+    const imageUrl = this.sectionForm.imageUrl || '';
+    return this.imageSourceOption === 'auto-crop'
+      || this.isGeneratedPostCropUrl(imageUrl);
+  }
+
+  private isGeneratedPostCropUrl(url: string): boolean {
+    const filename = decodeURIComponent(url.split('/').pop() || '').toLowerCase();
+    return /^page-\d{1,2}-e-\d{1,2}-\d{1,2}-\d{1,2}-\d{4}-post-/.test(filename);
+  }
+
   closeCropper() {
     this.showImageCropper = false;
-    this.cropperStartX = 0;
-    this.cropperStartY = 0;
-    this.cropperEndX = 0;
-    this.cropperEndY = 0;
+    this.cropperStartX = 0; this.cropperStartY = 0;
+    this.cropperEndX = 0; this.cropperEndY = 0;
+    this.cropMode = 'idle';
+    this.activeResizeHandle = null;
+    this.cropUndoStack = []; this.cropRedoStack = [];
+    this.cropperCursor = 'crosshair';
   }
 
   // Data Management
   saveAllData() {
+    if (this.hasUnsavedSettingsChanges) {
+      this.commitSettingsFormToData();
+    }
+
+    if (!this.hasUnsavedChanges) {
+      this.toaster.info('No changes to save.');
+      return;
+    }
+
     // Get the latest data from service to ensure we have all changes
     const currentData = this.dataService.getData();
     
@@ -1009,11 +1833,16 @@ export class AdminComponent implements OnInit {
     
     // Show immediate feedback
     this.toaster.success('Saving data...');
-    
+
+    this.persistAllData(currentData);
+  }
+
+  private persistAllData(currentData: any) {
     // Save asynchronously without blocking UI
     this.dataService.saveData(currentData).subscribe({
       next: (response) => {
         console.log('Save successful:', response);
+        this.markSaved();
         this.toaster.success('All data saved successfully!');
         // NO RELOAD - data is already updated locally
         // Just ensure selected page reference is current
@@ -1023,84 +1852,457 @@ export class AdminComponent implements OnInit {
       },
       error: (error) => {
         console.error('Error saving data:', error);
-        this.toaster.error(error.message || 'Failed to save data');
+        if (this.isRecoveredDataSaveBlocked(error)) {
+          const proceed = confirm(
+            'This data was rebuilt temporarily from WordPress Media Library and may not include your cropped sections/content.\n\n' +
+            'Only continue if you intentionally want to save this recovered/rebuilt dataset as the new canonical newspaper data.\n\n' +
+            'Click OK to save anyway, or Cancel to stop and restore a backup first.'
+          );
+          if (proceed) {
+            this.persistRecoveredData(currentData);
+            return;
+          }
+        }
+        const errMsg: string = error?.message ?? '';
+        if (errMsg.startsWith('WAF_BLOCKED:')) {
+          const detail = errMsg.replace('WAF_BLOCKED:', '').trim();
+          this.toaster.error(
+            `Save was blocked by the server's security module. Whitelist /wp-json/digital-newspaper/v1/ in your hosting security settings. (${detail})`
+          );
+        } else if ((error?.status ?? -1) === 0) {
+          this.toaster.error(
+            'Save failed: The WordPress server could not be reached (status 0). ' +
+            'This is usually a CORS policy block or a network connectivity issue. ' +
+            'Check that your WordPress CORS settings allow requests from this app\'s origin, ' +
+            'and that the server is online.'
+          );
+        } else {
+          this.toaster.error(errMsg || 'Failed to save data');
+        }
       }
     });
   }
 
-  downloadJSON() {
-    this.dataService.downloadJSON();
-    this.toaster.success('JSON file downloaded!');
+  private persistRecoveredData(currentData: any) {
+    this.toaster.warning('Saving recovered data by explicit confirmation...');
+    this.dataService.saveData(currentData, { allowRecoveredData: true }).subscribe({
+      next: (response) => {
+        console.log('Recovered data save successful:', response);
+        this.markSaved();
+        this.toaster.success('Recovered data saved successfully!');
+        if (this.selectedPage) {
+          this.selectedPage = this.pages.find(p => p.id === this.selectedPage?.id) || null;
+        }
+      },
+      error: (error) => {
+        console.error('Error saving recovered data:', error);
+        this.toaster.error(error.message || 'Failed to save recovered data');
+      }
+    });
   }
+
+  private isRecoveredDataSaveBlocked(error: any): boolean {
+    const message = error?.message || error?.error?.message || String(error || '');
+    return message.includes('temporarily recovered from WordPress Media Library');
+  }
+
+  // ─── Export ──────────────────────────────────────────────────────
+
+  downloadJSON() {
+    this.openExportModal();
+  }
+
+  openExportModal() {
+    this.exportOptions = {
+      exportType: 'full',
+      exportScope: 'full',
+      currentDate: this.selectedDate,
+    };
+    this.showExportModal = true;
+  }
+
+  closeExportModal() {
+    this.showExportModal = false;
+  }
+
+  confirmExport() {
+    const opts: ExportOptions = { ...this.exportOptions, currentDate: this.selectedDate };
+    const { filename } = this.dataService.downloadExport(opts);
+    this.toaster.success(`Exported: ${filename}`);
+    this.backupHistory = this.dataService.getBackupHistory();
+    this.showExportModal = false;
+  }
+
+  // ─── Import ──────────────────────────────────────────────────────
 
   importBackup(event: Event) {
     const input = event.target as HTMLInputElement;
     if (!input.files || !input.files[0]) return;
 
     const file = input.files[0];
-    // Reset so the same file can be re-selected if needed
-    input.value = '';
+    input.value = ''; // reset so the same file can be re-selected
 
     if (!file.name.endsWith('.json') && file.type !== 'application/json') {
       this.toaster.error('Please select a valid .json backup file');
       return;
     }
 
+    // Give immediate feedback — large backup files can take a moment to read
+    this.loader.show();
+    this.toaster.info(`Reading backup file…`);
+
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
         const raw = e.target?.result as string;
         const parsed = JSON.parse(raw);
+        const validation = this.dataService.validateImportPayload(parsed);
+        const preview = validation.valid ? this.dataService.buildImportPreview(parsed) : null;
 
-        // Validate structure
-        if (typeof parsed !== 'object' || parsed === null) {
-          this.toaster.error('Invalid backup: not a JSON object');
-          return;
-        }
-        if (!Array.isArray(parsed.editions)) {
-          this.toaster.error('Invalid backup: missing "editions" array');
-          return;
-        }
+        this.importParsed = parsed;
+        this.importValidation = validation;
+        this.importPreview = preview;
 
-        if (!confirm(`This will OVERWRITE all current WordPress data with the backup from "${file.name}".\n\nAre you sure?`)) {
-          return;
-        }
+        this.importOptions = {
+          importSettings: preview ? preview.hasSettings : false,
+          importEditions: preview ? preview.hasEditions : false,
+          mergeMode: 'overwrite-all',
+          rewriteUrls: preview ? preview.urlMismatch : false,
+          oldBaseUrl: preview?.sourceUrl ?? '',
+          newBaseUrl: preview?.currentUrl ?? '',
+        };
 
-        // Normalize settings in case backup came from an older export
-        if (parsed.settings) {
-          if (!parsed.settings.logo) {
-            parsed.settings.logo = { url: '', alt: 'Digital Newspaper' };
-          }
-          if (!parsed.settings.socialLinks || Array.isArray(parsed.settings.socialLinks)) {
-            parsed.settings.socialLinks = {};
-          }
-        } else {
-          parsed.settings = { defaultDateMode: 'current', socialLinks: {}, logo: { url: '', alt: 'Digital Newspaper' } };
-        }
-
-        this.dataService.saveData(parsed).subscribe({
-          next: () => {
-            this.toaster.success('Backup imported successfully!');
-            this.loadData();
-          },
-          error: (err) => {
-            console.error('Import failed:', err);
-            this.toaster.error('Failed to import backup: ' + (err.message || 'Unknown error'));
-          }
-        });
+        this.loader.hide();
+        this.showImportPreviewModal = true;
+        this.cdr.detectChanges();
       } catch {
+        this.loader.hide();
         this.toaster.error('Failed to parse JSON file. Make sure it is a valid backup.');
       }
+    };
+    reader.onerror = () => {
+      this.loader.hide();
+      this.toaster.error('Failed to read the backup file.');
     };
     reader.readAsText(file);
   }
 
+  closeImportModal() {
+    this.showImportPreviewModal = false;
+    this.importParsed = null;
+    this.importValidation = null;
+    this.importPreview = null;
+    this.isImporting = false;
+  }
+
+  confirmImport() {
+    if (!this.importParsed || !this.importValidation?.valid) return;
+    this.isImporting = true;
+    this.loader.show();
+
+    // Auto-backup current data before overwriting
+    this.dataService.downloadExport({ exportType: 'full', exportScope: 'full' });
+    this.toaster.info('Auto-backup downloaded. Starting import…');
+
+    const mergedData = this.dataService.applyImport(this.importParsed, this.importOptions);
+    this.dataService.saveData(mergedData).subscribe({
+      next: () => {
+        this.isImporting = false;
+        this.loader.hide();
+        this.toaster.success('Backup imported successfully!');
+        this.backupHistory = this.dataService.getBackupHistory();
+        this.markSaved();
+        this.closeImportModal();
+
+        // Re-fetch from server so in-memory state matches what was persisted,
+        // then navigate to the most-recent date in the imported data so the
+        // user immediately sees the imported content instead of an empty
+        // "today" edition that would otherwise be auto-created.
+        this.dataService.loadData().subscribe({
+          next: () => {
+            this.availableDates = this.dataService.getAvailableDates();
+            if (this.availableDates.length > 0) {
+              this.selectedDate = this.availableDates[0]; // most recent imported date
+            } else if (!this.availableDates.includes(this.selectedDate)) {
+              this.availableDates.unshift(this.selectedDate);
+            }
+            this.selectedEditionNumber = 1;
+            this.loadCurrentEdition();
+            this.loadSettings();
+            this.cdr.detectChanges();
+          },
+          error: (err) => console.error('Error reloading after import:', err)
+        });
+      },
+      error: (err) => {
+        this.isImporting = false;
+        this.loader.hide();
+        console.error('Import failed:', err);
+        this.toaster.error('Failed to import: ' + (err.message || 'Unknown error'));
+      }
+    });
+  }
+
+  rebuildFromSectionPosts() {
+    const proceed = confirm(
+      'This will rebuild the main newspaper JSON from mirrored WordPress section posts.\n\n' +
+      'A server-side snapshot of the current JSON will be kept before replacement. Continue?'
+    );
+    if (!proceed) return;
+
+    this.loader.show();
+    this.dataService.rebuildDataFromSectionPosts().subscribe({
+      next: (result) => {
+        this.toaster.success(
+          `Rebuilt ${result.editionCount} edition(s), ${result.pageCount} page(s), ${result.sectionCount} section(s).`
+        );
+        this.dataService.loadData().subscribe({
+          next: () => {
+            this.availableDates = this.dataService.getAvailableDates();
+            if (this.availableDates.length > 0) {
+              this.selectedDate = this.availableDates[0];
+            }
+            this.loadCurrentEdition();
+            this.loader.hide();
+            this.markSaved();
+            this.cdr.detectChanges();
+          },
+          error: (error) => {
+            this.loader.hide();
+            console.error('Error reloading rebuilt data:', error);
+            this.toaster.error('Rebuild succeeded, but reloading data failed. Please refresh.');
+          }
+        });
+      },
+      error: (error) => {
+        this.loader.hide();
+        console.error('Error rebuilding from section posts:', error);
+        this.toaster.error(error?.error?.error || error?.message || 'Failed to rebuild from section posts');
+      }
+    });
+  }
+
+  // ─── Backup History ─────────────────────────────────────────────────
+
+  clearBackupHistory() {
+    this.dataService.clearBackupHistory();
+    this.backupHistory = [];
+    this.toaster.success('Backup history cleared.');
+  }
+
+  reExport(entry: BackupHistoryEntry) {
+    const opts: ExportOptions = {
+      exportType: entry.exportType,
+      exportScope: entry.exportScope,
+      currentDate: this.selectedDate,
+    };
+    const { filename } = this.dataService.downloadExport(opts);
+    this.toaster.success(`Re-exported: ${filename}`);
+    this.backupHistory = this.dataService.getBackupHistory();
+  }
+
+  formatExportDate(dateStr: string): string {
+    if (!dateStr || dateStr === 'Unknown') return 'Unknown';
+    try {
+      return new Date(dateStr).toLocaleString();
+    } catch {
+      return dateStr;
+    }
+  }
+
   // Navigation
+  @HostListener('window:beforeunload', ['$event'])
+  onBeforeUnload(event: BeforeUnloadEvent): void {
+    if (this.isSavingCrop) {
+      event.preventDefault();
+    }
+  }
+
   goToViewer() {
+    if (this.isSavingCrop) {
+      this.toaster.warning('Please wait — the cropped image is still being saved.');
+      return;
+    }
     this.router.navigate(['/']);
   }
 
+  goToViewerNewWindow(): void {
+    window.open('/', '_blank');
+  }
+
+  // ── Vintage header: menu state & navigation ───────────────────────────
+
+  toggleMenu(): void {
+    this.isMenuOpen = !this.isMenuOpen;
+  }
+
+  closeMenu(): void {
+    this.isMenuOpen = false;
+  }
+
+  @HostListener('document:click', ['$event'])
+  onDocumentClick(event: MouseEvent): void {
+    if (!this.isMenuOpen) return;
+    if (this.vintageMenuPanelRef &&
+        !this.vintageMenuPanelRef.nativeElement.contains(event.target as Node)) {
+      this.isMenuOpen = false;
+    }
+  }
+
+  // ─── Vintage theme navigation ────────────────────────────────────
+
+  vintageSelectPage(page: NewspaperPage): void {
+    this.selectedPage = page;
+    this.vintageView = 'sections';
+    this.vintageSelectedSection = null;
+  }
+
+  vintageSelectSection(section: NewsSection): void {
+    // Keep vintageView as 'sections' so Cancel returns to the post list
+    this.vintageSelectedSection = section;
+    this.editSection(section);
+  }
+
+  vintageBackToPages(): void {
+    this.selectedPage = null;
+    this.vintageSelectedSection = null;
+    this.vintageView = 'pages';
+    this.isEditingPage = false;
+    this.isEditingSection = false;
+  }
+
+  vintageBackToSections(): void {
+    this.vintageSelectedSection = null;
+    this.vintageView = 'sections';
+    this.isEditingSection = false;
+  }
+
+  getCurrentEditionLabel(): string {
+    const ed = this.editionsForDate.find(e => (e.edition || 1) === this.selectedEditionNumber);
+    return ed ? this.getEditionLabel(ed) : '';
+  }
+
+  // ─── Menu navigation ─────────────────────────────────────────────
+
+  menuGoToPages(): void {
+    this.activeMainTab = 'content';
+    this.activeTab = 'pages';
+    this.isEditingPage = false;
+    this.isEditingSection = false;
+    if (this.adminTheme === 'vintage') {
+      this.vintageBackToPages();
+    }
+    this.closeMenu();
+  }
+
+  menuAddNewPage(): void {
+    this.activeMainTab = 'content';
+    this.closeMenu();
+    this.newPage();
+  }
+
+  menuGoToEditions(): void {
+    this.activeMainTab = 'content';
+    if (this.adminTheme === 'vintage') {
+      this.vintageView = 'editions';
+      this.isEditingPage = false;
+      this.isEditingSection = false;
+    }
+    this.closeMenu();
+  }
+
+  menuAddNewEdition(): void {
+    this.createNewEdition();
+    this.closeMenu();
+  }
+
+  deleteEditionEntry(ed: NewspaperEdition): void {
+    const label = this.getEditionLabel(ed);
+    if (!confirm(`Delete edition "${label}" for ${this.formatDisplayDate(this.selectedDate)}? This will permanently remove all pages and content in this edition.`)) return;
+    const data = this.dataService.getData();
+    const targetNum = ed.edition || 1;
+    const updatedEditions = data.editions.filter(e => !(e.date === this.selectedDate && (e.edition || 1) === targetNum));
+    (this.dataService as any)['dataSubject'].next({ ...data, editions: updatedEditions });
+    this.markUnsavedChanges();
+    // If the deleted edition was selected, switch to edition 1
+    if (this.selectedEditionNumber === targetNum) {
+      this.selectedEditionNumber = 1;
+    }
+    this.loadCurrentEdition();
+    this.toaster.success(`Edition "${label}" deleted.`);
+    this.autoSaveForVintage();
+  }
+
+  private autoSaveForVintage(): void {
+    this.saveAllData();
+  }
+
+  menuGoToDates(): void {
+    this.activeMainTab = 'content';
+    this.closeMenu();
+  }
+
+  menuAddNewDate(): void {
+    this.createNewDate();
+    this.closeMenu();
+  }
+
+  menuGoToSettings(): void {
+    this.activeMainTab = 'settings';
+    this.closeMenu();
+  }
+
+  menuExportBackup(): void {
+    this.openExportModal();
+    this.closeMenu();
+  }
+
+  menuImportBackup(): void {
+    this.importFileInputRef?.nativeElement.click();
+    this.closeMenu();
+  }
+
+  menuRebuildFromPosts(): void {
+    this.rebuildFromSectionPosts();
+    this.closeMenu();
+  }
+
   // Linked Sections Helper
+
+  /** Keeps linked sections in sync bidirectionally.
+   *  When section A links to B, B is automatically updated to link back to A.
+   *  When section A removes a link to B, B's back-link to A is also removed.
+   */
+  private syncBidirectionalLinks(currentSectionId: string, currentLinkedIds: string[]): void {
+    const edition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);
+    if (!edition) return;
+
+    edition.pages.forEach(page => {
+      page.sections.forEach(otherSection => {
+        if (otherSection.id === currentSectionId) return;
+
+        const shouldBeLinked = currentLinkedIds.includes(otherSection.id);
+        const isAlreadyLinked = otherSection.linkedSectionIds?.includes(currentSectionId) ?? false;
+
+        if (shouldBeLinked && !isAlreadyLinked) {
+          // Add back-link
+          const updated: NewsSection = {
+            ...otherSection,
+            linkedSectionIds: [...(otherSection.linkedSectionIds || []), currentSectionId]
+          };
+          this.dataService.updateSection(page.id, otherSection.id, updated, this.selectedDate, this.selectedEditionNumber);
+        } else if (!shouldBeLinked && isAlreadyLinked) {
+          // Remove back-link
+          const updated: NewsSection = {
+            ...otherSection,
+            linkedSectionIds: (otherSection.linkedSectionIds || []).filter(id => id !== currentSectionId)
+          };
+          this.dataService.updateSection(page.id, otherSection.id, updated, this.selectedDate, this.selectedEditionNumber);
+        }
+      });
+    });
+  }
+
   getAvailableSections(): NewsSection[] {
     const sections: NewsSection[] = [];
     this.pages.forEach(page => {
@@ -1143,7 +2345,9 @@ export class AdminComponent implements OnInit {
     const input = event.target as HTMLInputElement;
     if (input.files && input.files[0]) {
       this.fullImageFile = input.files[0];
-      const fileName = this.fullImageFile.name || `page_full_${Date.now()}.jpg`;
+      const ext = this.fullImageFile.name.split('.').pop()?.toLowerCase() || 'jpg';
+      const fileName = this.buildPageImageFilename(ext, 'full');
+      this.loader.show();
       this.uploadMediaFile(this.fullImageFile, fileName)
         .then((url) => {
           this.pageForm.fullImage = url;
@@ -1154,12 +2358,34 @@ export class AdminComponent implements OnInit {
         .catch((error) => {
           console.error('Error uploading full image:', error);
           this.toaster.error('Failed to upload full image');
-        });
+        })
+        .finally(() => this.loader.hide());
     }
   }
 
   onFullImageUrlChange(value: string) {
     this.previewLoading = !!value;
+  }
+
+  onFullImageHiResFileSelected(event: Event): void {
+    const input = event.target as HTMLInputElement;
+    if (input.files && input.files[0]) {
+      this.fullImageHiResFile = input.files[0];
+      const ext = this.fullImageHiResFile.name.split('.').pop()?.toLowerCase() || 'jpg';
+      const fileName = this.buildPageImageFilename(ext, 'hires');
+      this.loader.show();
+      this.uploadMediaFile(this.fullImageHiResFile, fileName)
+        .then((url) => {
+          this.pageForm.fullImageHiRes = url;
+          this.cdr.detectChanges();
+          this.toaster.success('High-res image uploaded');
+        })
+        .catch((error) => {
+          console.error('Error uploading high-res image:', error);
+          this.toaster.error('Failed to upload high-res image');
+        })
+        .finally(() => this.loader.hide());
+    }
   }
 
   onFullImagePreviewLoad() {
@@ -1174,7 +2400,9 @@ export class AdminComponent implements OnInit {
     const input = event.target as HTMLInputElement;
     if (input.files && input.files[0]) {
       this.thumbnailFile = input.files[0];
-      const fileName = this.thumbnailFile.name || `page_thumb_${Date.now()}.jpg`;
+      const ext = this.thumbnailFile.name.split('.').pop()?.toLowerCase() || 'jpg';
+      const fileName = this.buildPageImageFilename(ext, 'thumb');
+      this.loader.show();
       this.uploadMediaFile(this.thumbnailFile, fileName)
         .then((url) => {
           this.pageForm.thumbnail = url;
@@ -1184,7 +2412,8 @@ export class AdminComponent implements OnInit {
         .catch((error) => {
           console.error('Error uploading thumbnail:', error);
           this.toaster.error('Failed to upload thumbnail');
-        });
+        })
+        .finally(() => this.loader.hide());
     }
   }
 
@@ -1193,7 +2422,7 @@ export class AdminComponent implements OnInit {
     const settings = this.dataService.getSettings();
     const addr = settings.address || {};
     this.settingsForm = {
-      logo: settings.logo || { url: '', alt: 'Digital Newspaper' },
+      logo: { url: '', alt: 'Digital Newspaper', link: '', ...(settings.logo || {}) },
       socialLinks: settings.socialLinks || {},
       defaultDateMode: settings.defaultDateMode || 'current',
       specificDate: settings.specificDate || '',
@@ -1218,11 +2447,16 @@ export class AdminComponent implements OnInit {
         }
       },
       language: settings.language || 'en',
-      showPagePagination: settings.showPagePagination !== false
+      showPagePagination: settings.showPagePagination !== false,
+      showBetaBadge: settings.showBetaBadge === true,
+      headScripts: settings.headScripts ?? '',
+      underMaintenance: settings.underMaintenance === true,
+      maintenanceMessage: settings.maintenanceMessage ?? ''
     };
+    this.hasUnsavedSettingsChanges = false;
   }
 
-  saveSettings(): void {
+  private buildSettingsFromForm(): GlobalSettings {
     // Strip empty labels so we don't bloat saved data
     const editorLabels = this.settingsForm.editorLabels || {};
     const cleanEditorLabels = { en: (editorLabels['en'] || '').trim(), bn: (editorLabels['bn'] || '').trim() };
@@ -1236,7 +2470,7 @@ export class AdminComponent implements OnInit {
     const cleanPhoneLabels = { en: (phoneLabels['en'] || '').trim(), bn: (phoneLabels['bn'] || '').trim() };
 
     // Ensure settings structure is complete
-    const completeSettings: GlobalSettings = {
+    return {
       logo: this.settingsForm.logo || { url: '', alt: 'Digital Newspaper' },
       socialLinks: this.settingsForm.socialLinks || {},
       defaultDateMode: this.settingsForm.defaultDateMode || 'current',
@@ -1255,12 +2489,26 @@ export class AdminComponent implements OnInit {
         phoneLabels: cleanPhoneLabels
       },
       language: this.settingsForm.language || 'en',
-      showPagePagination: this.settingsForm.showPagePagination !== false
+      showPagePagination: this.settingsForm.showPagePagination !== false,
+      showBetaBadge: this.settingsForm.showBetaBadge === true,
+      headScripts: this.settingsForm.headScripts || '',
+      underMaintenance: this.settingsForm.underMaintenance === true,
+      maintenanceMessage: this.settingsForm.maintenanceMessage || ''
     };
-    
+  }
+
+  private commitSettingsFormToData(): GlobalSettings {
+    const completeSettings = this.buildSettingsFromForm();
+
     // Update settings in the data service
     this.dataService.updateSettings(completeSettings);
-    
+
+    return completeSettings;
+  }
+
+  saveSettings(): void {
+    const completeSettings = this.commitSettingsFormToData();
+
     // Get the updated data after settings change
     const currentData = this.dataService.getData();
     console.log('Saving settings:', completeSettings);
@@ -1270,6 +2518,7 @@ export class AdminComponent implements OnInit {
     this.dataService.saveData(currentData).subscribe({
       next: () => {
         console.log('Settings saved successfully');
+        this.markSaved();
         this.toaster.success('Settings saved successfully!');
         this.cdr.detectChanges();
       },
@@ -1286,18 +2535,38 @@ export class AdminComponent implements OnInit {
       this.logoFile = input.files[0];
       const ext = this.logoFile.name.split('.').pop()?.toLowerCase() || 'jpg';
       const fileName = `logo_${Date.now()}.${ext}`;
+      this.loader.show();
       this.uploadMediaFile(this.logoFile, fileName)
         .then((url) => {
           if (this.settingsForm.logo) {
             this.settingsForm.logo.url = url;
           }
+          this.onSettingsFormChanged();
           this.cdr.detectChanges();
           this.toaster.success('Logo uploaded');
         })
         .catch((error) => {
           console.error('Error uploading logo:', error);
           this.toaster.error('Failed to upload logo');
-        });
+        })
+        .finally(() => this.loader.hide());
     }
+  }
+
+  resolveImageUrl(url: string): string {
+    if (!url || typeof url !== 'string') return '';
+    if (url.startsWith('data:') || url.startsWith('blob:')) return url;
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      if (url.includes('/wp-content/uploads/')) {
+        try {
+          const wpOrigin = new URL(this.dataService.getApiBaseUrl()).origin;
+          const pathMatch = url.match(/^https?:\/\/[^/]+(\/.*)$/);
+          return pathMatch ? wpOrigin + pathMatch[1] : url;
+        } catch { return url; }
+      }
+      return url;
+    }
+    const base = this.dataService.getApiBaseUrl();
+    return url.startsWith('/') ? `${base}${url}` : `${base}/${url}`;
   }
 }

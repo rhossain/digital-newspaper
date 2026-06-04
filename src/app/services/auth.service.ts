@@ -11,7 +11,16 @@ interface LoginResponse {
     username: string;
     email: string;
     displayName: string;
+    role: string;
   };
+}
+
+interface MeResponse {
+  id: number;
+  username: string;
+  email: string;
+  displayName: string;
+  role: string;
 }
 
 @Injectable({
@@ -19,23 +28,75 @@ interface LoginResponse {
 })
 export class AuthService {
   private readonly tokenKey = 'dn_wp_token';
+  private readonly userKey  = 'dn_wp_user';
   private readonly wpBaseUrl = WP_BASE_URL;
 
   constructor(private http: HttpClient) {}
 
   login(username: string, password: string): Observable<LoginResponse> {
     const loginUrl = `${this.wpBaseUrl}/wp-json/digital-newspaper/v1/auth/login`;
-    return this.http.post<LoginResponse>(loginUrl, { username, password }).pipe(
+    const body = new URLSearchParams({ username, password }).toString();
+    return this.http.post<LoginResponse>(loginUrl, body, {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+      withCredentials: true,
+    }).pipe(
+      map((response) => {
+        if (!response?.token) {
+          // Detect host-level security block (Imunify360, ModSecurity, etc.).
+          // These return HTTP 200 with a JSON body that has no 'token' field.
+          const resp = response as unknown as Record<string, unknown>;
+          const serverMsg = typeof resp['message'] === 'string' ? resp['message']
+            : typeof resp['error'] === 'string' ? resp['error'] : '';
+          if (AuthService.isWafBlockMessage(serverMsg)) {
+            throw new Error('WAF_BLOCKED:' + serverMsg);
+          }
+          throw new Error('NO_TOKEN');
+        }
+        return response;
+      }),
       tap((response) => {
         if (response?.token) {
           localStorage.setItem(this.tokenKey, response.token);
+          localStorage.setItem(this.userKey, JSON.stringify({
+            displayName: response.user?.displayName ?? '',
+            role: response.user?.role ?? 'editor',
+          }));
         }
       })
     );
   }
 
+  /** Returns true when the server message looks like a WAF / bot-protection block. */
+  static isWafBlockMessage(msg: string): boolean {
+    const lower = msg.toLowerCase();
+    return lower.includes('imunify') || lower.includes('bot-protection')
+      || lower.includes('access denied') || lower.includes('blocked')
+      || lower.includes('modsecurity') || lower.includes('cloudflare')
+      || lower.includes('captcha');
+  }
+
   logout(): void {
     localStorage.removeItem(this.tokenKey);
+    localStorage.removeItem(this.userKey);
+  }
+
+  private getStoredUser(): { displayName: string; role: string } | null {
+    const raw = localStorage.getItem(this.userKey);
+    if (!raw) return null;
+    try { return JSON.parse(raw); } catch { return null; }
+  }
+
+  getUserDisplayName(): string {
+    return this.getStoredUser()?.displayName ?? '';
+  }
+
+  getUserRole(): string {
+    return this.getStoredUser()?.role ?? 'editor';
+  }
+
+  /** Returns true only when the authenticated user has the WordPress administrator role. */
+  isAdmin(): boolean {
+    return this.isAuthenticated() && this.getUserRole() === 'administrator';
   }
 
   getToken(): string | null {
@@ -78,7 +139,16 @@ export class AuthService {
       return of(false);
     }
     const meUrl = `${this.wpBaseUrl}/wp-json/digital-newspaper/v1/auth/me`;
-    return this.http.get(meUrl, { headers }).pipe(
+    return this.http.get<MeResponse>(meUrl, { headers, withCredentials: true }).pipe(
+      tap((user) => {
+        // Refresh stored user info (role may have changed since last login).
+        if (user?.displayName !== undefined) {
+          localStorage.setItem(this.userKey, JSON.stringify({
+            displayName: user.displayName ?? '',
+            role: user.role ?? 'editor',
+          }));
+        }
+      }),
       map(() => true)
     );
   }

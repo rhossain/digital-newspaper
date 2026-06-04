@@ -1,4 +1,51 @@
 <div class="newspaper-container">
+
+  <!-- ===== UNDER MAINTENANCE PAGE ===== -->
+  <ng-container *ngIf="settings?.underMaintenance">
+    <header class="maintenance-header">
+      <div class="maintenance-header-inner">
+        <div class="logo-wrapper">
+          <img
+            *ngIf="settings?.logo?.url"
+            [src]="settings!.logo!.url"
+            [alt]="settings!.logo!.alt || 'Logo'"
+            class="logo-image"
+            (error)="onLogoError($event)"
+          />
+          <img
+            *ngIf="settings && !settings.logo?.url && !assetLogoError"
+            src="assets/logo.png"
+            [alt]="(settings.logo && settings.logo.alt) || 'Logo'"
+            class="logo-image"
+            (error)="onAssetLogoError()"
+          />
+          <svg *ngIf="settings && !settings.logo?.url && assetLogoError" class="logo-icon" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+            <polyline points="14 2 14 8 20 8"></polyline>
+          </svg>
+        </div>
+      </div>
+    </header>
+
+    <main class="maintenance-body">
+      <div class="maintenance-card">
+        <div class="maintenance-icon">
+          <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path>
+          </svg>
+        </div>
+        <h1 class="maintenance-title">Under Maintenance</h1>
+        <p class="maintenance-message">
+          {{ settings?.maintenanceMessage || 'We are currently performing scheduled maintenance. We\'ll be back shortly. Thank you for your patience.' }}
+        </p>
+      </div>
+    </main>
+  </ng-container>
+  <!-- ===== END MAINTENANCE PAGE ===== -->
+
+  <!-- ===== NORMAL CONTENT (hidden during maintenance) ===== -->
+  <ng-container *ngIf="!settings?.underMaintenance">
+
   <!-- Fixed Header -->
   <header class="panel-header">
     <div class="header-inner">
@@ -24,7 +71,7 @@
       <div class="available-dates" *ngIf="availableDates.length > 1">
         <span class="dates-label">{{ 'header.jumpTo' | translate }}</span>
         <select [(ngModel)]="selectedDate" (change)="onDateChange()" class="dates-dropdown">
-          <option *ngFor="let date of availableDates" [value]="date">
+          <option *ngFor="let date of availableDates; trackBy: trackByDate" [value]="date">
             {{ date | localeDate:'short' }}
           </option>
         </select>
@@ -52,23 +99,36 @@
         </svg>
       </button>
       <div class="logo-container">
-        <img
-          *ngIf="settings?.logo?.url"
-          [src]="settings!.logo!.url"
-          [alt]="settings?.logo?.alt || 'Logo'"
-          class="logo-image"
-        />
-        <svg *ngIf="settings && !settings.logo?.url" class="logo-icon" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <a [href]="logoHref" class="logo-link" aria-label="Homepage">
+        <div class="logo-wrapper">
+          <img
+            *ngIf="settings?.logo?.url"
+            [src]="settings!.logo!.url"
+            [alt]="settings!.logo!.alt || 'Logo'"
+            class="logo-image"
+            (error)="onLogoError($event)"
+          />
+          <img
+            *ngIf="settings && !settings.logo?.url && !assetLogoError"
+            src="assets/logo.png"
+            [alt]="(settings.logo && settings.logo.alt) || 'Logo'"
+            class="logo-image"
+            (error)="onAssetLogoError()"
+          />
+          <svg *ngIf="settings && !settings.logo?.url && assetLogoError" class="logo-icon" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
           <polyline points="14 2 14 8 20 8"></polyline>
           <line x1="16" y1="13" x2="8" y2="13"></line>
           <line x1="16" y1="17" x2="8" y2="17"></line>
           <line x1="10" y1="9" x2="8" y2="9"></line>
         </svg>
-        <div class="header-text" *ngIf="settings && !settings.logo?.url">
-          <h1 class="newspaper-title">{{ settings.logo?.alt || 'Digital Newspaper' }}</h1>
+          <span class="logo-beta-badge" *ngIf="settings?.showBetaBadge">beta</span>
+        </div>
+        <div class="header-text" *ngIf="settings && !settings.logo?.url && assetLogoError">
+          <h1 class="newspaper-title">{{ settings.logo?.alt || 'Dainik Sangram' }}</h1>
           <p class="newspaper-date">{{ todayDisplayDate }}</p>
         </div>
+        </a>
       </div>
     </div>
     
@@ -144,7 +204,7 @@
         <div class="available-dates" *ngIf="availableDates.length > 1">
           <span class="dates-label">{{ 'header.jumpTo' | translate }}</span>
           <select [(ngModel)]="selectedDate" (change)="onDateChange()" class="dates-dropdown">
-            <option *ngFor="let date of availableDates" [value]="date">
+            <option *ngFor="let date of availableDates; trackBy: trackByDate" [value]="date">
               {{ date | localeDate:'short' }}
             </option>
           </select>
@@ -239,10 +299,10 @@
 
       <div class="thumbnail-list" *ngIf="pages.length > 0">
         <div
-          *ngFor="let page of pages"
+          *ngFor="let page of pages; trackBy: trackByPageId"
           class="thumbnail-item"
           [class.active]="currentPage?.id === page.id"
-          (click)="selectPage(page)"
+          (click)="onPageClick(page)"
         >
           <div class="thumbnail-image-wrapper">
             <div class="skeleton-loader" *ngIf="thumbnailsLoading[page.id]"></div>
@@ -250,6 +310,8 @@
               *ngIf="pageThumbnailSrcs[page.id]"
               [src]="pageThumbnailSrcs[page.id]"
               [alt]="'Page ' + page.id"
+              loading="lazy"
+              decoding="async"
               (load)="onThumbnailLoad(page.id)"
               (error)="onThumbnailLoad(page.id)"
               [style.opacity]="thumbnailsLoading[page.id] ? '0' : '1'"
@@ -258,7 +320,17 @@
           <span class="page-number">{{ ts.toLocaleDigits(page.id) }}</span>
         </div>
       </div>
-      <div class="empty-state" *ngIf="pages.length === 0">
+
+      <!-- Skeleton thumbnails while API data is loading -->
+      <div class="thumbnail-list" *ngIf="isLoading && pages.length === 0">
+        <div class="thumbnail-item skeleton-thumbnail-item" *ngFor="let n of [1,2,3,4]; trackBy: trackByIndex">
+          <div class="thumbnail-image-wrapper">
+            <div class="skeleton-loader"></div>
+          </div>
+          <div class="skeleton-page-number"></div>
+        </div>
+      </div>
+      <div class="empty-state" *ngIf="pages.length === 0 && !isLoading">
         <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
           <polyline points="14 2 14 8 20 8"></polyline>
@@ -270,7 +342,13 @@
 
     <!-- Center Panel: Main Page View -->
     <div class="center-panel">
-    <div class="empty-state" *ngIf="!currentPage && pages.length === 0">
+
+    <!-- Skeleton fill while API data is loading -->
+    <div class="center-panel-loading-skeleton" *ngIf="isLoading && !currentPage">
+      <div class="skeleton-loader"></div>
+    </div>
+
+    <div class="empty-state" *ngIf="!currentPage && pages.length === 0 && !isLoading">
       <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
         <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
         <circle cx="8.5" cy="8.5" r="1.5"></circle>
@@ -305,7 +383,7 @@
             </div>
             <div class="edition-dropdown" *ngIf="editionsForDate.length > 1 && editionDropdownOpen">
               <button
-                *ngFor="let ed of editionsForDate"
+                *ngFor="let ed of editionsForDate; trackBy: trackByEditionKey"
                 class="edition-option"
                 [class.active]="selectedEditionNumber === (ed.edition || 1)"
                 (click)="onEditionChange(ed.edition || 1)"
@@ -333,10 +411,10 @@
             </div>
             <div class="edition-dropdown" *ngIf="pages.length > 1 && pageDropdownOpen">
               <button
-                *ngFor="let page of pages"
+                *ngFor="let page of pages; trackBy: trackByPageId"
                 class="edition-option"
                 [class.active]="currentPage.id === page.id"
-                (click)="selectPage(page); pageDropdownOpen = false"
+                (click)="onPageClick(page); pageDropdownOpen = false"
               >
                 {{ getPageLabel(page) }}
               </button>
@@ -378,7 +456,7 @@
       <div class="page-pagination" *ngIf="pages.length > 1 && settings?.showPagePagination !== false">
         <button
           class="pagination-btn"
-          (click)="selectPage(pages[pages.indexOf(currentPage) - 1])"
+          (click)="onPageClick(pages[pages.indexOf(currentPage) - 1])"
           [disabled]="pages.indexOf(currentPage) === 0"
           title="Previous Page"
         >
@@ -386,10 +464,10 @@
         </button>
 
         <button
-          *ngFor="let page of pages"
+          *ngFor="let page of pages; trackBy: trackByPageId"
           class="pagination-page-btn"
           [class.active]="currentPage.id === page.id"
-          (click)="selectPage(page)"
+          (click)="onPageClick(page)"
           [title]="ts.t('viewer.page') + ' ' + ts.toLocaleDigits(page.id)"
         >
           {{ ts.toLocaleDigits(page.id) }}
@@ -397,7 +475,7 @@
 
         <button
           class="pagination-btn"
-          (click)="selectPage(pages[pages.indexOf(currentPage) + 1])"
+          (click)="onPageClick(pages[pages.indexOf(currentPage) + 1])"
           [disabled]="pages.indexOf(currentPage) === pages.length - 1"
           title="Next Page"
         >
@@ -421,7 +499,7 @@
           <!-- Clickable sections overlay -->
           <div class="sections-overlay" *ngIf="imageLoaded">
             <div
-              *ngFor="let section of currentPage.sections"
+              *ngFor="let section of currentPage.sections; trackBy: trackBySectionId"
               class="clickable-section"
               [style.left.%]="section.x"
               [style.top.%]="section.y"
@@ -486,6 +564,22 @@
         <span>&times;</span>
       </button>
 
+      <div class="read-article-section">
+        <button 
+          class="read-article-button"
+          (click)="openContentModal()"
+           *ngIf="selectedSection.content && selectedSection.showCaption !== false"
+        >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+              <polyline points="14 2 14 8 20 8"></polyline>
+              <line x1="16" y1="13" x2="8" y2="13"></line>
+              <line x1="16" y1="17" x2="8" y2="17"></line>
+            </svg>
+            <span>{{ 'viewer.readArticle' | translate }}</span>
+          </button>
+      </div>
+
       <!-- Full Section Image -->
       <div class="section-image-container" *ngIf="currentPage">
         <div class="section-item">
@@ -528,7 +622,7 @@
         <div class="linked-sections" *ngIf="linkedSections.length > 0">
           <div class="linked-section-list">
             <div 
-              *ngFor="let linkedSection of linkedSections"
+              *ngFor="let linkedSection of linkedSections; trackBy: trackByLinkedSectionId"
               class="linked-section-item"
             >
               <div class="linked-section-wrapper" (click)="openLinkedSectionImage(linkedSection)" [title]="ts.t('viewer.clickToViewFull')">
@@ -537,6 +631,7 @@
                   [src]="getCroppedImageForSection(linkedSection)!" 
                   [alt]="linkedSection.title"
                   class="linked-section-image"
+                  (error)="onLinkedSectionImageError($event)"
                 />
                 <div *ngIf="!getCroppedImageForSection(linkedSection)" class="linked-section-placeholder">
                   <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -573,23 +668,21 @@
         </div>
       </div>
 
-      <div class="read-article-section" *ngIf="selectedSection.content && selectedSection.showCaption !== false">
-        <button 
-          class="read-article-button"
-          (click)="openContentModal()"
-        >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-              <polyline points="14 2 14 8 20 8"></polyline>
-              <line x1="16" y1="13" x2="8" y2="13"></line>
-              <line x1="16" y1="17" x2="8" y2="17"></line>
-            </svg>
-            <span>{{ 'viewer.readArticle' | translate }}</span>
-          </button>
-      </div>
     </div>
 
-    <div *ngIf="!selectedSection" class="placeholder">
+    <!-- Skeleton fill while API data is loading -->
+    <div class="right-panel-loading-skeleton" *ngIf="isLoading && !selectedSection">
+      <div class="rp-skeleton-image"><div class="skeleton-loader"></div></div>
+      <!-- <div class="rp-skeleton-lines">
+        <div class="rp-skeleton-line rp-line-title"><div class="skeleton-loader"></div></div>
+        <div class="rp-skeleton-line rp-line-short"><div class="skeleton-loader"></div></div>
+        <div class="rp-skeleton-line"><div class="skeleton-loader"></div></div>
+        <div class="rp-skeleton-line"><div class="skeleton-loader"></div></div>
+        <div class="rp-skeleton-line rp-line-short"><div class="skeleton-loader"></div></div>
+      </div> -->
+    </div>
+
+    <div *ngIf="!isLoading && !selectedSection" class="placeholder">
       <div class="placeholder-content">
         <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor">
           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
@@ -615,7 +708,15 @@
         *ngIf="selectedSection" 
         [section]="selectedSection" 
         [selectedDate]="selectedDate"
-        [logo]="settings?.logo">
+        [pageSlug]="getPageSlug(currentPage!)"
+        [editionSlug]="getEditionSlug(selectedEditionNumber)"
+        [logo]="settings?.logo"
+        [imageUrl]="shareImageUrl || undefined"
+        [siteName]="settings?.logo?.alt"
+        [showPrint]="true"
+        [showDownload]="true"
+        (printClicked)="printAllModalImages()"
+        (downloadClicked)="downloadAllModalImages()">
       </app-share-buttons>
       
       <div class="modal-images-container">
@@ -625,53 +726,19 @@
             [src]="modalImage" 
             [alt]="modalImageTitle"
             class="modal-full-image"
+            (error)="onModalImageError($event)"
           />
-          <div class="modal-image-actions">
-            <button class="modal-img-action-btn" (click)="printImage(modalImage!, modalImageTitle)">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polyline points="6 9 6 2 18 2 18 9"></polyline>
-                <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
-                <rect x="6" y="14" width="12" height="8"></rect>
-              </svg>
-              {{ 'viewer.print' | translate }}
-            </button>
-            <button class="modal-img-action-btn" (click)="downloadImage(modalImage!, modalImageTitle)">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                <polyline points="7 10 12 15 17 10"></polyline>
-                <line x1="12" y1="15" x2="12" y2="3"></line>
-              </svg>
-              {{ 'viewer.download' | translate }}
-            </button>
-          </div>
           <!-- <div class="modal-image-label" *ngIf="modalImageTitle">{{ modalImageTitle }}</div> -->
         </div>
         
         <!-- Linked Section Images -->
-        <div class="modal-image-item" *ngFor="let linkedSection of modalLinkedSections">
+        <div class="modal-image-item" *ngFor="let linkedSection of modalLinkedSections; trackBy: trackByLinkedSectionId; let isLast = last">
           <img 
             [src]="getCroppedImageForSection(linkedSection)!" 
             [alt]="linkedSection.title"
             class="modal-full-image"
+            (error)="onModalImageError($event)"
           />
-          <div class="modal-image-actions">
-            <button class="modal-img-action-btn" (click)="printImage(getCroppedImageForSection(linkedSection)!, linkedSection.title)">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polyline points="6 9 6 2 18 2 18 9"></polyline>
-                <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
-                <rect x="6" y="14" width="12" height="8"></rect>
-              </svg>
-              {{ 'viewer.print' | translate }}
-            </button>
-            <button class="modal-img-action-btn" (click)="downloadImage(getCroppedImageForSection(linkedSection)!, linkedSection.title)">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                <polyline points="7 10 12 15 17 10"></polyline>
-                <line x1="12" y1="15" x2="12" y2="3"></line>
-              </svg>
-              {{ 'viewer.download' | translate }}
-            </button>
-          </div>
           <!-- <div class="modal-image-label">{{ linkedSection.title }}</div> -->
         </div>
       </div>
@@ -690,13 +757,23 @@
         *ngIf="selectedSection" 
         [section]="selectedSection" 
         [selectedDate]="selectedDate"
-        [logo]="settings?.logo">
+        [pageSlug]="getPageSlug(currentPage!)"
+        [editionSlug]="getEditionSlug(selectedEditionNumber)"
+        [logo]="settings?.logo"
+        [imageUrl]="shareImageUrl || undefined"
+        [siteName]="settings?.logo?.alt"
+        [showPrint]="true"
+        (printClicked)="printContent(selectedSection!.content!, selectedSection!.title)">
       </app-share-buttons>
       
       <div class="modal-body" *ngIf="selectedSection">
-        <div class="article-body" [innerHTML]="selectedSection.content"></div>
+        <div class="article-body" [innerHTML]="normalizeContent(selectedSection.content)"></div>
       </div>
     </div>
   </div>
   </div>
+
+  </ng-container>
+  <!-- ===== END NORMAL CONTENT ===== -->
+
 </div>

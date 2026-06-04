@@ -1,7 +1,8 @@
-import { Component, OnInit, OnDestroy, ChangeDetectorRef, ElementRef, ViewChild } from '@angular/core';
-import { CommonModule, Location } from '@angular/common';
+import { Component, OnInit, OnDestroy, ChangeDetectorRef, ElementRef, ViewChild, Inject } from '@angular/core';
+import { CommonModule, Location, DOCUMENT } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { Router, ActivatedRoute } from '@angular/router';
+import { ActivatedRoute } from '@angular/router';
+import { Meta, Title } from '@angular/platform-browser';
 import { NewspaperDataService, NewsSection, NewspaperPage, NewspaperEdition, GlobalSettings } from './services/newspaper-data.service';
 import { ToasterService } from './services/toaster.service';
 import { ShareButtonsComponent } from './shared/share-buttons/share-buttons.component';
@@ -24,6 +25,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   currentPage: NewspaperPage | null = null;
   selectedSection: NewsSection | null = null;
   imageLoaded = false;
+  assetLogoError = false;
   croppedSectionImage: string | null = null;
   showContentModal = false;
   showImageModal = false;
@@ -35,17 +37,28 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   modalImageTitle: string = '';
   modalLinkedSections: NewsSection[] = [];
   pendingSectionSlug: string | null = null;
+  pendingPageSlug: string | null = null;
+  pendingEditionSlug: string | null = null;
+  private startedFromBaseUrl = false;
+  private userNavigated = false;
 
   // Mobile/tablet responsive state
   isMobileView = false;
   mobileHeaderMenuOpen = false;
   pendingMobileModal = false;
   private resizeListener?: () => void;
+  private resizeDebounceTimer?: ReturnType<typeof setTimeout>;
+
+  // Performance caches
+  private cropCache = new Map<string, string>();
+  private resolvedUrlCache = new Map<string, string>();
   
   // Image loading states
   thumbnailsLoading: { [key: number]: boolean } = {};
   /** Pre-resolved thumbnail src for each page (thumbnail → fullImage fallback). */
   pageThumbnailSrcs: { [pageId: number]: string } = {};
+  /** Queue of pages whose thumbnails have not yet been requested (sequential loading). */
+  private thumbnailLoadQueue: NewspaperPage[] = [];
   sectionImageLoading = false;
   sectionImageError = false;
   
@@ -73,51 +86,55 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     private dataService: NewspaperDataService,
     private toaster: ToasterService,
     private cdr: ChangeDetectorRef,
-    private router: Router,
     private route: ActivatedRoute,
     private translationService: TranslationService,
-    private location: Location
+    private location: Location,
+    private meta: Meta,
+    private titleService: Title,
+    @Inject(DOCUMENT) private document: Document
   ) {}
 
   /** Expose TranslationService to the template. */
   get ts(): TranslationService { return this.translationService; }
 
+  /** URL for the logo anchor. Uses the configured link, falling back to the app's base URL. */
+  get logoHref(): string {
+    return this.settings?.logo?.link?.trim() || document.baseURI;
+  }
+
   ngOnInit() {
     this.todayDate = this.dataService.getTodayDate();
-    
-    // Subscribe to route parameters
+
+    // Detect if the app was opened at the base URL (no path segments)
+    this.startedFromBaseUrl = !this.route.snapshot.routeConfig?.path;
+
+    // Subscribe to route parameters — only apply pending slugs before initial load
+    // completes; after that all URL updates use location.replaceState() which
+    // does NOT re-fire paramMap, so this guard is purely defensive.
     const routeSubscription = this.route.paramMap.subscribe(params => {
-      const dateParam = params.get('date');
+      if (this.initialLoadComplete) return;
+
+      const dateParam    = params.get('date');
+      const pageParam    = params.get('page');
+      const editionParam = params.get('edition');
       const sectionParam = params.get('section');
-      
+
       if (dateParam) {
         this.selectedDate = dateParam;
         this.dataService.setCurrentDate(dateParam);
       }
-      
-      // Store section parameter for later use after data loads
-      if (sectionParam) {
-        this.pendingSectionSlug = sectionParam;
-      }
+      if (pageParam)    this.pendingPageSlug    = pageParam;
+      if (editionParam) this.pendingEditionSlug = editionParam;
+      if (sectionParam) this.pendingSectionSlug = sectionParam;
     });
     this.subscriptions.push(routeSubscription);
 
-    // Subscribe to query parameters (edition number)
-    const querySubscription = this.route.queryParamMap.subscribe(params => {
-      const editionParam = params.get('e');
-      this.selectedEditionNumber = editionParam ? parseInt(editionParam, 10) : 1;
-    });
-    this.subscriptions.push(querySubscription);
-    
-    // Subscribe to date changes
+    // Subscribe to date changes — URL is updated via selectPage()/selectSection()
+    // after loadCurrentEdition() resolves, avoiding interim incorrect URLs.
     const dateSubscription = this.dataService.currentDate$.subscribe(date => {
       this.selectedDate = date;
       this.updateDisplayDate();
       this.checkIfToday();
-      // Update URL when date changes (unless there's a pending section to navigate to)
-      if (!this.pendingSectionSlug) {
-        this.updateUrl();
-      }
     });
     this.subscriptions.push(dateSubscription);
     
@@ -140,12 +157,16 @@ export class NewspaperComponent implements OnInit, OnDestroy {
 
     // Detect mobile/tablet view and keep it updated on resize
     this.updateIsMobileView();
-    this.resizeListener = () => this.updateIsMobileView();
+    this.resizeListener = () => {
+      clearTimeout(this.resizeDebounceTimer);
+      this.resizeDebounceTimer = setTimeout(() => this.updateIsMobileView(), 150);
+    };
     window.addEventListener('resize', this.resizeListener);
   }
 
   ngOnDestroy() {
     this.subscriptions.forEach(sub => sub.unsubscribe());
+    clearTimeout(this.resizeDebounceTimer);
     if (this.resizeListener) {
       window.removeEventListener('resize', this.resizeListener);
     }
@@ -215,6 +236,12 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   }
 
   loadCurrentEdition() {
+    // Resolve pending edition slug first so getCurrentEdition() uses the correct number
+    if (this.pendingEditionSlug) {
+      this.selectedEditionNumber = this.getEditionFromSlug(this.pendingEditionSlug);
+      this.pendingEditionSlug = null;
+    }
+
     // Reset main view so the image element gets recreated when date changes
     this.currentPage = null;
     this.selectedSection = null;
@@ -222,6 +249,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     this.croppedSectionImage = null;
     this.imageLoaded = false;
     this.sectionImageLoading = false;
+    this.cropCache.clear();
 
     // Populate edition tabs for current date
     this.editionsForDate = this.dataService.getEditionsByDate(this.selectedDate);
@@ -229,27 +257,39 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     const edition = this.dataService.getCurrentEdition(this.selectedEditionNumber);
     if (edition) {
       this.pages = edition.pages;
-      // Pre-resolve thumbnail sources once, handling PHP [] → '' coercion and
-      // falling back from thumbnail → fullImage.
+      // Sequential thumbnail loading: resolve one page at a time so the
+      // browser only fetches one thumbnail per round-trip instead of
+      // hammering all of them simultaneously.
       this.thumbnailsLoading = {};
       this.pageThumbnailSrcs = {};
-      this.pages.forEach(page => {
-        const thumb = typeof page.thumbnail === 'string' ? page.thumbnail.trim() : '';
-        const full  = typeof page.fullImage  === 'string' ? page.fullImage.trim()  : '';
-        const src   = this.resolveImageUrl(thumb || full);
-        this.pageThumbnailSrcs[page.id] = src;
-        this.thumbnailsLoading[page.id] = !!src;
-      });
+      this.thumbnailLoadQueue = [];
+      // Mark every page as pending (skeleton shows)
+      this.pages.forEach(page => { this.thumbnailsLoading[page.id] = true; });
       if (this.pages.length > 0) {
-        // Navigate to section if pendingSectionSlug exists, otherwise select first page
+        // Kick off page 1 immediately; the rest wait in the queue
+        this.thumbnailLoadQueue = this.pages.slice(1);
+        this.seedThumbnail(this.pages[0]);
+      }
+      if (this.pages.length > 0) {
+        // Resolve target page from pending page slug (default: first page)
+        let targetPage = this.pages[0];
+        if (this.pendingPageSlug) {
+          const resolvedPage = this.getPageFromSlug(this.pendingPageSlug);
+          if (resolvedPage) targetPage = resolvedPage;
+          this.pendingPageSlug = null;
+        }
+
         if (this.pendingSectionSlug) {
-          const found = this.navigateToSection(this.pendingSectionSlug);
-          this.pendingSectionSlug = null; // Clear after use
+          // Navigate to section; fall back to target page with no section selected
+          const sectionSlug = this.pendingSectionSlug;
+          this.pendingSectionSlug = null;
+          const found = this.navigateToSection(sectionSlug);
           if (!found) {
-            this.selectPage(this.pages[0]);
+            this.selectPage(targetPage);
           }
         } else {
-          this.selectPage(this.pages[0]);
+          // No section pending — show page without auto-selecting a section
+          this.selectPage(targetPage);
         }
       } else {
         this.currentPage = null;
@@ -269,29 +309,41 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   }
 
   navigateToSection(sectionSlug: string): boolean {
-    let found = false;
-    // Find the section across all pages by ID or title-based slug
+    // Accept canonical post IDs plus legacy IDs from older links.
+    const slugValue = (sectionSlug || '').trim();
+    const idsToFind = new Set<string>([slugValue]);
+
+    if (slugValue.startsWith('post-')) {
+      const suffix = slugValue.slice('post-'.length);
+      idsToFind.add(`section-${suffix}`);
+      idsToFind.add(suffix);
+    } else if (slugValue.startsWith('section-')) {
+      const suffix = slugValue.slice('section-'.length);
+      idsToFind.add(`post-${suffix}`);
+      idsToFind.add(suffix);
+    } else if (slugValue) {
+      idsToFind.add(`post-${slugValue}`);
+      idsToFind.add(`section-${slugValue}`);
+    }
+
     for (const page of this.pages) {
-      // First try to find by ID (for backward compatibility)
-      let section = page.sections.find(s => s.id === sectionSlug);
-      
-      // If not found by ID, try to match by title slug
+      // Try all known ID aliases first (post- / section- / bare ID)
+      let section = page.sections.find(s => idsToFind.has((s.id || '').trim()));
+
+      // Fall back to legacy title-based slug match so older shared links keep working.
       if (!section) {
         section = page.sections.find(s => {
-          const slug = this.createSectionSlug(s.title, s.id);
-          return slug === sectionSlug;
+          return this.createLegacySectionSlug(s.title, s.id) === slugValue;
         });
       }
-      
+
       if (section) {
-        // Select the page with the target section ID
         this.selectPage(page, section.id);
-        found = true;
-        break;
+        return true;
       }
     }
 
-    return found;
+    return false;
   }
 
   updateDisplayDate() {
@@ -335,8 +387,43 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     this.isToday = this.selectedDate === this.todayDate;
   }
 
+  // --- URL slug helpers ---
+
+  /** Returns the zero-padded URL slug for a page, e.g. 'page-01'. Public for use in template. */
+  getPageSlug(page: NewspaperPage): string {
+    const index = this.pages.indexOf(page);
+    const num = index >= 0 ? index + 1 : 1;
+    return `page-${String(num).padStart(2, '0')}`;
+  }
+
+  private getPageFromSlug(slug: string): NewspaperPage | null {
+    const match = /^page-(\d+)$/.exec(slug);
+    if (!match) return null;
+    const index = parseInt(match[1], 10) - 1;
+    return this.pages[index] ?? null;
+  }
+
+  /** Returns the zero-padded URL slug for an edition, e.g. 'edition-01'. Public for use in template. */
+  getEditionSlug(editionNumber: number): string {
+    return `edition-${String(editionNumber).padStart(2, '0')}`;
+  }
+
+  private getEditionFromSlug(slug: string): number {
+    const match = /^edition-(\d+)$/.exec(slug);
+    return match ? parseInt(match[1], 10) : 1;
+  }
+
+  // --- trackBy helpers for *ngFor performance ---
+  trackByPageId(_: number, page: NewspaperPage): number { return page.id; }
+  trackBySectionId(_: number, section: NewsSection): string { return section.id; }
+  trackByDate(_: number, date: string): string { return date; }
+  trackByEditionKey(_: number, ed: NewspaperEdition): string { return `${ed.date}-${ed.edition ?? 1}`; }
+  trackByLinkedSectionId(_: number, section: NewsSection): string { return section.id; }
+  trackByIndex(index: number): number { return index; }
+
   onDateChange() {
     this.selectedEditionNumber = 1;
+    this.userNavigated = true;
     this.dataService.setCurrentDate(this.selectedDate);
     this.loadCurrentEdition();
     this.checkIfToday();
@@ -366,8 +453,14 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   onEditionChange(editionNumber: number) {
     this.selectedEditionNumber = editionNumber;
     this.editionDropdownOpen = false;
+    this.userNavigated = true;
     this.loadCurrentEdition();
-    this.updateUrl();
+  }
+
+  /** Called when the user explicitly clicks a page thumbnail or pagination button. */
+  onPageClick(page: NewspaperPage) {
+    this.userNavigated = true;
+    this.selectPage(page);
   }
 
   editionDropdownOpen = false;
@@ -376,6 +469,19 @@ export class NewspaperComponent implements OnInit, OnDestroy {
 
   get currentEdition(): NewspaperEdition | null {
     return this.editionsForDate.find(e => (e.edition || 1) === this.selectedEditionNumber) || this.editionsForDate[0] || null;
+  }
+
+  /**
+   * Returns the best absolute HTTP(S) image URL for the selected section —
+   * safe to use as an OG image. Never returns a data: URL (which crawlers
+   * and social platforms cannot fetch).
+   */
+  get shareImageUrl(): string {
+    const sectionImg = this.selectedSection?.imageUrl?.trim() ?? '';
+    if (sectionImg) return this.resolveImageUrl(sectionImg);
+    const pageImg = this.currentPage?.fullImage?.trim() ?? '';
+    if (pageImg) return this.resolveImageUrl(pageImg);
+    return '';
   }
 
   /** Returns the display label for an edition in the current UI language. */
@@ -407,36 +513,65 @@ export class NewspaperComponent implements OnInit, OnDestroy {
         this.onImageLoad();
       }
     }, 0);
-    
-    // If a target section is specified, select it; otherwise select the first section
-    if (page.sections && page.sections.length > 0) {
-      let sectionToSelect = page.sections[0];
-      
-      if (targetSectionId) {
+
+    if (targetSectionId) {
+      // Section explicitly requested — find and select it
+      if (page.sections && page.sections.length > 0) {
         const targetSection = page.sections.find(s => s.id === targetSectionId);
-        if (targetSection) {
-          sectionToSelect = targetSection;
-        }
+        this.selectSection(targetSection ?? page.sections[0]);
+        setTimeout(() => {
+          const rightPanel = document.querySelector('.right-panel');
+          if (rightPanel) rightPanel.scrollTop = 0;
+        }, 0);
+      } else {
+        this.selectedSection = null;
+        this.linkedSections = [];
+        this.croppedSectionImage = null;
+        this.sectionImageLoading = false;
+        this.updateUrl();
+        this.updateMetaTags(null);
       }
-      
-      // Use selectSection to properly initialize everything including linked sections
-      this.selectSection(sectionToSelect);
-      
-      // Scroll right panel to top when page changes
-      setTimeout(() => {
-        const rightPanel = document.querySelector('.right-panel');
-        if (rightPanel) {
-          rightPanel.scrollTop = 0;
-        }
-      }, 0);
     } else {
+      // No section: clear section state and show the placeholder panel
       this.selectedSection = null;
       this.linkedSections = [];
+      this.croppedSectionImage = null;
+      this.sectionImageLoading = false;
+      this.sectionImageError = false;
+      this.showContentModal = false;
+      this.showImageModal = false;
+      setTimeout(() => {
+        const rightPanel = document.querySelector('.right-panel');
+        if (rightPanel) rightPanel.scrollTop = 0;
+      }, 0);
+      this.updateUrl();
+      this.updateMetaTags(null);
     }
   }
 
   onThumbnailLoad(pageId: number) {
     this.thumbnailsLoading[pageId] = false;
+    this.loadNextThumbnail();
+  }
+
+  /** Resolve and assign the src for a single page thumbnail. */
+  private seedThumbnail(page: NewspaperPage): void {
+    const thumb = typeof page.thumbnail === 'string' ? page.thumbnail.trim() : '';
+    const full  = typeof page.fullImage  === 'string' ? page.fullImage.trim()  : '';
+    const src   = this.resolveImageUrl(thumb || full);
+    this.pageThumbnailSrcs[page.id] = src;
+    if (!src) {
+      // No image for this page — mark done and immediately load the next
+      this.thumbnailsLoading[page.id] = false;
+      this.loadNextThumbnail();
+    }
+  }
+
+  /** Dequeue and start loading the next pending thumbnail. */
+  private loadNextThumbnail(): void {
+    if (this.thumbnailLoadQueue.length === 0) return;
+    const next = this.thumbnailLoadQueue.shift()!;
+    this.seedThumbnail(next);
   }
 
   onImageLoad() {
@@ -519,6 +654,8 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     
     // Update URL with section
     this.updateUrl();
+    // Update social sharing meta tags
+    this.updateMetaTags(section);
   }
 
   onSectionImageLoad() {
@@ -545,15 +682,54 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     this.cdr.detectChanges();
   }
 
+  onLogoError(event: Event): void {
+    (event.target as HTMLImageElement).style.display = 'none';
+  }
+
+  onAssetLogoError(): void {
+    this.assetLogoError = true;
+  }
+
+  onLinkedSectionImageError(event: Event): void {
+    (event.target as HTMLImageElement).style.display = 'none';
+  }
+
+  onModalImageError(event: Event): void {
+    (event.target as HTMLImageElement).style.display = 'none';
+  }
+
   resolveImageUrl(url: string): string {
     // Guard: PHP may serialize empty fields as [] (truthy array) instead of "".
     if (!url || typeof url !== 'string') return '';
-    if (url.startsWith('data:')) return url;
-    if (url.startsWith('http://') || url.startsWith('https://')) return url;
-    // Relative URL — prepend the WordPress base URL so the browser resolves it
-    // against the WP host rather than the Angular dev server.
-    const base = this.dataService.getApiBaseUrl();
-    return url.startsWith('/') ? `${base}${url}` : `${base}/${url}`;
+    const cached = this.resolvedUrlCache.get(url);
+    if (cached !== undefined) return cached;
+
+    let resolved: string;
+    if (url.startsWith('data:')) {
+      resolved = url;
+    } else if (url.startsWith('http://') || url.startsWith('https://')) {
+      // Normalize WordPress uploads absolute URLs to the current WP origin.
+      // This fixes images after a domain migration: source_url saved with the
+      // old domain is rewritten to the current WP_BASE_URL host so the browser
+      // can resolve them without touching the database.
+      if (url.includes('/wp-content/uploads/')) {
+        try {
+          const wpOrigin = new URL(this.dataService.getApiBaseUrl()).origin;
+          const pathMatch = url.match(/^https?:\/\/[^/]+(\/.*)$/);
+          resolved = pathMatch ? wpOrigin + pathMatch[1] : url;
+        } catch { resolved = url; /* malformed URL — fall through and return as-is */ }
+      } else {
+        resolved = url;
+      }
+    } else {
+      // Relative URL — prepend the WordPress base URL so the browser resolves it
+      // against the WP host rather than the Angular dev server.
+      const base = this.dataService.getApiBaseUrl();
+      resolved = url.startsWith('/') ? `${base}${url}` : `${base}/${url}`;
+    }
+
+    this.resolvedUrlCache.set(url, resolved);
+    return resolved;
   }
 
   closeSection() {
@@ -564,9 +740,12 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     this.linkedSections = [];
     this.sectionImageLoading = false;
     this.pendingMobileModal = false;
-    
-    // Update URL to remove section
+
+    // User explicitly closed the section — update URL to page/edition only
+    this.userNavigated = true;
     this.updateUrl();
+    // Reset social sharing meta tags to site defaults
+    this.updateMetaTags(null);
   }
 
   openContentModal() {
@@ -610,27 +789,174 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     this.modalLinkedSections = [];
   }
 
-  printImage(imageUrl: string, title: string): void {
+  private getPrintDocument(contentHtml: string, styles: string = ''): string {
+    // <thead> repeats at top of every page (no overlap). <tfoot> spacer bounds tbody so it
+    // cannot flow under the position:fixed footer. The visible footer is outside the table.
+    return `<!DOCTYPE html><html><head><title></title><style>${this.getPrintStyles()}${styles}</style></head><body><table class="print-table"><thead><tr><td><div class="print-header"><div class="print-header-left"></div><span class="print-header-date"></span></div></td></tr></thead><tbody><tr><td><main class="print-content">${contentHtml}</main></td></tr></tbody><tfoot><tr><td><div class="print-footer-spacer"></div></td></tr></tfoot></table><div class="print-footer"></div></body></html>`;
+  }
+
+  private getPrintStyles(): string {
+    return `*{box-sizing:border-box;}html,body{margin:0;padding:0;background:white;color:#000;font-family:sans-serif;font-size:16px;line-height:1.7;}.print-table{width:100%;border-collapse:collapse;border-spacing:0;}.print-table thead td,.print-table tfoot td{padding:0;margin:0;}.print-table tbody td{padding:0;vertical-align:top;}.print-header{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 20px;border-bottom:2px solid #ccc;background:white;font-family:sans-serif;}.print-header-left{display:flex;align-items:center;gap:12px;min-width:0;}.logo-img{height:40px;width:auto;max-width:220px;object-fit:contain;}.logo-text{font-size:20px;font-weight:600;overflow-wrap:anywhere;}.print-header-date{font-size:14px;color:#444;white-space:nowrap;}.print-content{padding:16px 20px;}.print-footer{padding:12px 20px;border-top:2px solid #ccc;font-size:14px;line-height:1.5;color:#555;background:white;font-family:sans-serif;}.footer-editor{font-weight:bold;display:block;margin-bottom:4px;}.footer-detail{display:block;overflow-wrap:anywhere;}h1{font-size:22px;line-height:1.3;margin:0 0 14px;}article{font-family:serif;overflow-wrap:anywhere;}article p{margin:0 0 10px;}img{max-width:100%;height:auto;}@media print{*{-webkit-print-color-adjust:exact;print-color-adjust:exact;}@page{margin:15mm;}.print-footer{position:fixed;bottom:0;left:0;right:0;z-index:100;}.print-footer-spacer{display:block;}h1,img{break-inside:avoid;page-break-inside:avoid;}img{max-height:185mm;width:auto;}}`;
+  }
+
+  printContent(content: string, title: string): void {
     const win = window.open('', '_blank');
     if (!win) return;
-    // Write a minimal skeleton with no user content to avoid XSS
-    win.document.write('<!DOCTYPE html><html><head><title></title><style>body{margin:0;display:flex;justify-content:center;align-items:flex-start;background:white;}img{max-width:100%;height:auto;display:block;}@media print{body{margin:0;}}</style></head><body><img/></body></html>');
+    win.document.write(this.getPrintDocument('<h1></h1><article></article>'));
     win.document.close();
-    // Set values via DOM APIs (safe — no HTML interpretation)
+    this.populatePrintHeaderFooter(win);
     const titleEl = win.document.querySelector('title');
     if (titleEl) titleEl.textContent = title;
-    const imgEl = win.document.querySelector('img') as HTMLImageElement | null;
-    if (imgEl) {
-      imgEl.alt = title;
-      imgEl.src = imageUrl;
-      imgEl.onload = () => { win.print(); win.close(); };
+    const h1El = win.document.querySelector('h1');
+    if (h1El) h1El.textContent = title;
+    const articleEl = win.document.querySelector('article');
+    if (!articleEl) return;
+    articleEl.innerHTML = this.normalizeContent(content);
+
+    // Defer print until the header logo image has loaded; otherwise the logo is
+    // blank because win.print() fires before the network request completes.
+    const doPrint = () => { this.applyPrintContentPadding(win); win.print(); win.close(); };
+    const logoImg = win.document.querySelector('.logo-img') as HTMLImageElement | null;
+    if (logoImg && !logoImg.complete) {
+      logoImg.onload  = doPrint;
+      logoImg.onerror = doPrint; // still print even if logo fails to load
+    } else {
+      doPrint();
     }
   }
 
+  /** Replace &nbsp; entities and Unicode non-breaking spaces with regular spaces
+   *  so text wraps naturally in the article viewer and print window. */
+  normalizeContent(content: string | undefined | null): string {
+    if (!content) return '';
+    return content
+      .replace(/&nbsp;/g, ' ')
+      .replace(/\u00a0/g, ' ');
+  }
+
+  printImage(imageUrl: string, title: string): void {
+    const win = window.open('', '_blank');
+    if (!win) return;
+    win.document.write(this.getPrintDocument('<div class="img-container"><img/></div>', '.img-container{display:flex;justify-content:center;align-items:flex-start;}.img-container img{display:block;max-width:100%;max-height:185mm;height:auto;object-fit:contain;}'));
+    win.document.close();
+    this.populatePrintHeaderFooter(win);
+    const titleEl = win.document.querySelector('title');
+    if (titleEl) titleEl.textContent = title;
+    const imgEl = win.document.querySelector('.img-container img') as HTMLImageElement | null;
+    if (imgEl) {
+      imgEl.alt = title;
+      imgEl.src = imageUrl;
+      imgEl.onload = () => { this.applyPrintContentPadding(win); win.print(); win.close(); };
+    }
+  }
+
+  printAllModalImages(): void {
+    const images: { src: string; alt: string }[] = [];
+    if (this.modalImage) {
+      images.push({ src: this.modalImage, alt: this.modalImageTitle });
+    }
+    for (const linked of this.modalLinkedSections) {
+      const src = this.getCroppedImageForSection(linked);
+      if (src) images.push({ src, alt: linked.title });
+    }
+    if (images.length === 0) return;
+
+    const win = window.open('', '_blank');
+    if (!win) return;
+
+    // Write a minimal skeleton — no user content injected as HTML
+    win.document.write(this.getPrintDocument('<div class="images-container"></div>', '.images-container{display:flex;flex-direction:column;gap:30px;align-items:center;}.print-image{width:100%;max-width:100%;max-height:185mm;height:auto;object-fit:contain;display:block;break-inside:avoid;page-break-inside:avoid;}'));
+    win.document.close();
+
+    this.populatePrintHeaderFooter(win);
+
+    // Add all images; print once all are loaded
+    const container = win.document.querySelector('.images-container')!;
+    let loadedCount = 0;
+    const checkPrint = () => {
+      loadedCount++;
+      if (loadedCount >= images.length) { this.applyPrintContentPadding(win); win.print(); win.close(); }
+    };
+    for (const img of images) {
+      const el = win.document.createElement('img');
+      el.className = 'print-image';
+      el.alt = img.alt;
+      el.onload = checkPrint;
+      el.onerror = checkPrint;
+      el.src = img.src;
+      container.appendChild(el);
+    }
+  }
+
+  /** Measures the footer at A4 content width (680 px ≈ 180 mm) and sets the <tfoot> spacer
+   *  to the same height so <tbody> content is always bounded above the position:fixed footer. */
+  private applyPrintContentPadding(win: Window): void {
+    const body = win.document.body;
+    const savedWidth    = body.style.width;
+    const savedOverflow = body.style.overflow;
+    body.style.width    = '680px';
+    body.style.overflow = 'hidden';
+
+    const footerEl = win.document.querySelector('.print-footer') as HTMLElement | null;
+    const footerH  = (footerEl?.offsetHeight ?? 90) + 12; // 12 px breathing room
+
+    body.style.width    = savedWidth;
+    body.style.overflow = savedOverflow;
+
+    const spacerEl = win.document.querySelector('.print-footer-spacer') as HTMLElement | null;
+    if (spacerEl) spacerEl.style.height = footerH + 'px';
+  }
+
+  private populatePrintHeaderFooter(win: Window): void {
+    const headerLeft = win.document.querySelector('.print-header-left')!;
+    const logo = this.settings?.logo;
+    if (logo?.url) {
+      const logoImg = win.document.createElement('img');
+      logoImg.className = 'logo-img';
+      logoImg.alt = logo.alt || 'Logo';
+      logoImg.src = logo.url;
+      headerLeft.appendChild(logoImg);
+    } else {
+      const logoText = win.document.createElement('span');
+      logoText.className = 'logo-text';
+      logoText.textContent = logo?.alt || 'Digital Newspaper';
+      headerLeft.appendChild(logoText);
+    }
+    const dateEl = win.document.querySelector('.print-header-date')!;
+    dateEl.textContent = this.displayDate;
+    const footerEl = win.document.querySelector('.print-footer')!;
+    const editorEl = win.document.createElement('strong');
+    editorEl.className = 'footer-editor';
+    editorEl.textContent = 'সম্পাদকঃ আযম মীর শাহীদুল আহসান';
+    footerEl.appendChild(editorEl);
+    const detailEl = win.document.createElement('span');
+    detailEl.className = 'footer-detail';
+    detailEl.textContent = 'বাংলাদেশ পাবলিকেশন লিঃ- এর পক্ষে আবুল আসাদ কর্তৃক আল ফালাহ প্রিন্টিং প্রেস, ৪২৩ বড় মগবাজার, ঢাকা-১২১৭ থেকে মুদ্রিত ও প্রকাশিত। পিএবিএক্সঃ 02222226448, 02222226362, 02222226862, 0248318128, 0248321073, 0258310013, 01775489135 (বিজ্ঞাপন)। ই-মেইল : news@dailysangram.com, ad@dailysangram.com (বিজ্ঞাপন)';
+    footerEl.appendChild(detailEl);
+  }
+
   async downloadImage(imageUrl: string, title: string): Promise<void> {
-    try {
-      const response = await fetch(imageUrl);
-      const blob = await response.blob();
+    const tryFetch = async (url: string): Promise<Blob | null> => {
+      try {
+        const resp = await fetch(url);
+        if (!resp.ok) return null;
+        return await resp.blob();
+      } catch {
+        return null;
+      }
+    };
+
+    // Try direct fetch; fall back to proxy for cross-origin images
+    let blob = await tryFetch(imageUrl);
+    if (!blob) {
+      const isExternal = imageUrl.startsWith('http://') || imageUrl.startsWith('https://');
+      if (isExternal) {
+        const proxyUrl = `${this.dataService.getApiBaseUrl()}/wp-json/digital-newspaper/v1/proxy?url=${encodeURIComponent(imageUrl)}`;
+        blob = await tryFetch(proxyUrl);
+      }
+    }
+
+    if (blob) {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -640,8 +966,26 @@ export class NewspaperComponent implements OnInit, OnDestroy {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-    } catch {
+    } else {
       window.open(imageUrl, '_blank');
+    }
+  }
+
+  async downloadAllModalImages(): Promise<void> {
+    const images: { src: string; alt: string }[] = [];
+    if (this.modalImage) {
+      images.push({ src: this.modalImage, alt: this.modalImageTitle });
+    }
+    for (const linked of this.modalLinkedSections) {
+      const src = this.getCroppedImageForSection(linked);
+      if (src) images.push({ src, alt: linked.title });
+    }
+    for (let i = 0; i < images.length; i++) {
+      await this.downloadImage(images[i].src, images[i].alt);
+      // Brief pause between downloads so the browser registers each one separately
+      if (i < images.length - 1) {
+        await new Promise<void>(resolve => setTimeout(resolve, 400));
+      }
     }
   }
 
@@ -698,13 +1042,19 @@ export class NewspaperComponent implements OnInit, OnDestroy {
       const pageB = b.pageId || 0;
       return pageA - pageB;
     });
+
+    // Trigger canvas cropping for linked sections that don't have their own imageUrl
+    for (const linked of this.linkedSections) {
+      if (!linked.imageUrl) {
+        this.cropLinkedSectionImage(linked);
+      }
+    }
   }
 
   selectLinkedSection(linkedSection: NewsSection) {
-    // Navigate to the page containing the linked section
     const targetPage = this.pages.find(p => p.id === linkedSection.pageId);
     if (targetPage) {
-      // Pass the linked section ID to selectPage so it selects the right section
+      this.userNavigated = true;
       this.selectPage(targetPage, linkedSection.id);
     }
   }
@@ -713,9 +1063,61 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     if (section.imageUrl) {
       return section.imageUrl;
     }
-    // For sections without imageUrl, we'll need to crop dynamically
-    // This is a simplified version - in production you'd want to cache these
-    return null;
+    // Check if we have a cached crop for this section
+    const cacheKey = `${section.pageId}:${section.id}`;
+    return this.cropCache.get(cacheKey) ?? null;
+  }
+
+  private cropLinkedSectionImage(section: NewsSection): void {
+    if (!section.pageId || section.imageUrl) return;
+
+    const cacheKey = `${section.pageId}:${section.id}`;
+    if (this.cropCache.has(cacheKey)) {
+      this.cdr.detectChanges();
+      return;
+    }
+
+    const page = this.pages.find(p => p.id === section.pageId);
+    const fullImageUrl = page?.fullImage;
+    if (!fullImageUrl) return;
+
+    const isExternalUrl = fullImageUrl.startsWith('http://') || fullImageUrl.startsWith('https://');
+    const wpBaseUrl = this.dataService.getApiBaseUrl();
+    const srcUrl = isExternalUrl
+      ? `${wpBaseUrl}/wp-json/digital-newspaper/v1/proxy?url=${encodeURIComponent(fullImageUrl)}`
+      : fullImageUrl;
+
+    const img = new Image();
+    if (isExternalUrl) img.crossOrigin = 'anonymous';
+
+    img.onload = () => {
+      const cropX = Math.round((section.x / 100) * img.naturalWidth);
+      const cropY = Math.round((section.y / 100) * img.naturalHeight);
+      const cropWidth = Math.round((section.width / 100) * img.naturalWidth);
+      const cropHeight = Math.round((section.height / 100) * img.naturalHeight);
+
+      if (cropWidth <= 0 || cropHeight <= 0) return;
+
+      const canvas = document.createElement('canvas');
+      canvas.width = cropWidth;
+      canvas.height = cropHeight;
+      const ctx = canvas.getContext('2d', { willReadFrequently: false });
+      if (!ctx) return;
+
+      // Disable image smoothing to preserve source pixel fidelity
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(img, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+      try {
+        // Use PNG (lossless) to avoid double JPEG compression artifacts and color shift
+        const dataUrl = canvas.toDataURL('image/png');
+        this.cropCache.set(cacheKey, dataUrl);
+        this.cdr.detectChanges();
+      } catch (error) {
+        console.error('Failed to crop linked section image:', error);
+      }
+    };
+
+    img.src = srcUrl;
   }
 
   private cropSectionImage() {
@@ -736,6 +1138,20 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     const section = this.selectedSection;
     const fullImageUrl = this.currentPage.fullImage;
     if (!fullImageUrl) return;
+
+    // Return a previously computed crop immediately without re-fetching the image.
+    const cacheKey = `${this.currentPage.id}:${section.id}`;
+    const cachedCrop = this.cropCache.get(cacheKey);
+    if (cachedCrop) {
+      this.croppedSectionImage = cachedCrop;
+      this.sectionImageLoading = false;
+      this.cdr.detectChanges();
+      if (this.pendingMobileModal) {
+        this.pendingMobileModal = false;
+        setTimeout(() => this.openImageModal(), 0);
+      }
+      return;
+    }
 
     // For cross-origin images (WP media), fetch via proxy so canvas.toDataURL() doesn't
     // throw a tainted-canvas error. The display <img> tag has no crossorigin attribute
@@ -760,22 +1176,27 @@ export class NewspaperComponent implements OnInit, OnDestroy {
       const naturalWidth = img.naturalWidth;
       const naturalHeight = img.naturalHeight;
 
-      const cropX = (section.x / 100) * naturalWidth;
-      const cropY = (section.y / 100) * naturalHeight;
-      const cropWidth = (section.width / 100) * naturalWidth;
-      const cropHeight = (section.height / 100) * naturalHeight;
+      const cropX = Math.round((section.x / 100) * naturalWidth);
+      const cropY = Math.round((section.y / 100) * naturalHeight);
+      const cropWidth = Math.round((section.width / 100) * naturalWidth);
+      const cropHeight = Math.round((section.height / 100) * naturalHeight);
 
       const canvas = document.createElement('canvas');
       canvas.width = cropWidth;
       canvas.height = cropHeight;
 
-      const ctx = canvas.getContext('2d');
+      const ctx = canvas.getContext('2d', { willReadFrequently: false });
       if (!ctx) return;
 
+      // Disable image smoothing to preserve source pixel fidelity
+      ctx.imageSmoothingEnabled = false;
       ctx.drawImage(img, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
 
       try {
-        this.croppedSectionImage = canvas.toDataURL('image/jpeg', 0.9);
+        // Use PNG (lossless) to avoid double JPEG compression artifacts and color shift
+        const dataUrl = canvas.toDataURL('image/png');
+        this.cropCache.set(cacheKey, dataUrl);
+        this.croppedSectionImage = dataUrl;
         this.sectionImageLoading = false;
         this.cdr.detectChanges();
         if (this.pendingMobileModal) {
@@ -821,40 +1242,112 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   }
 
   private updateUrl() {
-    // Update URL with current date, optional edition, and section if selected
-    if (this.selectedDate) {
-      const queryParams = this.selectedEditionNumber > 1 ? { e: this.selectedEditionNumber } : {};
-      if (this.selectedSection) {
-        // Use title-based slug with section ID fallback
-        const slug = this.createSectionSlug(this.selectedSection.title, this.selectedSection.id);
-        this.router.navigate(['/', this.selectedDate, slug], { queryParams, replaceUrl: true });
-      } else if (this.selectedEditionNumber > 1) {
-        this.router.navigate(['/', this.selectedDate], { queryParams, replaceUrl: true });
-      } else {
-        // Use Location.replaceState instead of router.navigate so that
-        // paramMap does NOT fire — this prevents the cascade:
-        // paramMap → setCurrentDate → currentDate$ → loadCurrentEdition
-        // → selectPage → selectSection → updateUrl (loop back to section URL)
-        this.location.replaceState('/' + this.selectedDate + '/');
-      }
+    if (!this.selectedDate || !this.currentPage) return;
+
+    const date        = this.selectedDate;
+    const pageSlug    = this.getPageSlug(this.currentPage);
+    const editionSlug = this.getEditionSlug(this.selectedEditionNumber);
+
+    if (this.selectedSection) {
+      // Full URL: /date/page-XX/edition-XX/post-xxxx/
+      const sectionSlug = this.createSectionSlug(this.selectedSection.title, this.selectedSection.id);
+      this.location.replaceState(`/${date}/${pageSlug}/${editionSlug}/${sectionSlug}/`);
+    } else if (!this.startedFromBaseUrl || this.userNavigated) {
+      // Page + edition URL: /date/page-XX/edition-XX/
+      // (either started from a full URL path, or user has interacted)
+      this.location.replaceState(`/${date}/${pageSlug}/${editionSlug}/`);
+    } else {
+      // Keep base URL for the first visit before any user interaction
+      this.location.replaceState('/');
     }
   }
 
-  private createSectionSlug(title: string, sectionId: string): string {
+  /** Update Open Graph and Twitter Card meta tags for the selected section.
+   *  Pass null to reset to site-level defaults. */
+  private updateMetaTags(section: NewsSection | null): void {
+    const siteName = this.settings?.logo?.alt || 'ইপেপার - দৈনিক সংগ্রাম';
+    const pageUrl = window.location.href;
+
+    if (section) {
+      // Title
+      const title = `${section.title} | ${siteName}`;
+      this.titleService.setTitle(title);
+
+      // Description: strip HTML tags, collapse whitespace, truncate to 155 chars
+      const rawContent = section.content || '';
+      const plainText = rawContent.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+      const description = plainText.length > 155 ? plainText.slice(0, 152) + '...' : (plainText || siteName);
+
+      // Image: prefer section's own imageUrl, fall back to full page image
+      const imageUrl = this.resolveImageUrl(
+        (section.imageUrl && section.imageUrl.trim()) ||
+        (this.currentPage?.fullImage?.trim() ?? '')
+      );
+
+      // Open Graph
+      this.meta.updateTag({ property: 'og:site_name', content: siteName });
+      this.meta.updateTag({ property: 'og:type',      content: 'article' });
+      this.meta.updateTag({ property: 'og:title',     content: section.title });
+      this.meta.updateTag({ property: 'og:description', content: description });
+      this.meta.updateTag({ property: 'og:url',       content: pageUrl });
+      this.meta.updateTag({ property: 'og:image',        content: imageUrl });
+      this.meta.updateTag({ property: 'og:image:secure_url', content: imageUrl });
+      this.meta.updateTag({ property: 'og:image:width',  content: '' });
+      this.meta.updateTag({ property: 'og:image:height', content: '' });
+
+      // Twitter Card
+      this.meta.updateTag({ name: 'twitter:card',        content: 'summary_large_image' });
+      this.meta.updateTag({ name: 'twitter:site',        content: siteName });
+      this.meta.updateTag({ name: 'twitter:title',       content: section.title });
+      this.meta.updateTag({ name: 'twitter:description', content: description });
+      this.meta.updateTag({ name: 'twitter:creator',     content: siteName });
+      this.meta.updateTag({ name: 'twitter:image',       content: imageUrl });
+    } else {
+      // Reset to site-level defaults
+      this.titleService.setTitle(siteName);
+
+      this.meta.updateTag({ property: 'og:site_name', content: siteName });
+      this.meta.updateTag({ property: 'og:type',      content: 'article' });
+      this.meta.updateTag({ property: 'og:title',     content: siteName });
+      this.meta.updateTag({ property: 'og:description', content: siteName });
+      this.meta.updateTag({ property: 'og:url',       content: pageUrl });
+      this.meta.updateTag({ property: 'og:image',        content: '' });
+      this.meta.updateTag({ property: 'og:image:secure_url', content: '' });
+      this.meta.updateTag({ property: 'og:image:width',  content: '' });
+      this.meta.updateTag({ property: 'og:image:height', content: '' });
+
+      this.meta.updateTag({ name: 'twitter:card',        content: 'summary_large_image' });
+      this.meta.updateTag({ name: 'twitter:site',        content: siteName });
+      this.meta.updateTag({ name: 'twitter:title',       content: siteName });
+      this.meta.updateTag({ name: 'twitter:description', content: siteName });
+      this.meta.updateTag({ name: 'twitter:creator',     content: siteName });
+      this.meta.updateTag({ name: 'twitter:image',       content: '' });
+    }
+  }
+
+  private createSectionSlug(_: string, sectionId: string): string {
+    const rawId = (sectionId || '').trim();
+    if (!rawId) return 'post-unknown';
+    if (rawId.startsWith('post-')) return rawId;
+    return rawId.startsWith('section-')
+      ? 'post-' + rawId.slice('section-'.length)
+      : `post-${rawId}`;
+  }
+
+  private createLegacySectionSlug(title: string, sectionId: string): string {
     // Preserve Unicode characters for non-ASCII languages like Bengali
     let slug = title
       .toLowerCase()
       .trim()
-      .replace(/\s+/g, '-')           // Replace spaces with hyphens
-      .replace(/[^\w\u0980-\u09FF-]/g, '') // Keep alphanumeric, Bengali Unicode, and hyphens
-      .replace(/-+/g, '-')            // Replace multiple hyphens with single hyphen
-      .replace(/^-|-$/g, '');         // Remove leading/trailing hyphens
-    
-    // If slug is empty, use section ID
+      .replace(/\s+/g, '-')
+      .replace(/[^\w\u0980-\u09FF-]/g, '')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '');
+
     if (!slug || slug.length === 0) {
-      slug = sectionId;
+      slug = this.createSectionSlug('', sectionId);
     }
-    
+
     return slug;
   }
 }

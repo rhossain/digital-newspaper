@@ -1,15 +1,15 @@
 import { bootstrapApplication } from '@angular/platform-browser';
-import { provideHttpClient } from '@angular/common/http';
+import { provideHttpClient, withInterceptors } from '@angular/common/http';
 import { provideRouter, Routes, UrlSerializer, DefaultUrlSerializer, UrlTree } from '@angular/router';
 import { AppComponent } from './app/app.component';
 import { NewspaperComponent } from './app/newspaper.component';
-import { AdminComponent } from './app/admin/admin.component';
+import { wpApiInterceptor } from './app/interceptors/wp-api.interceptor';
 
 const routes: Routes = [
   { path: '', component: NewspaperComponent },
-  { path: 'admin', component: AdminComponent },
-  { path: ':date', component: NewspaperComponent },
-  { path: ':date/:section', component: NewspaperComponent },
+  { path: 'admin', loadComponent: () => import('./app/admin/admin.component').then(m => m.AdminComponent) },
+  { path: ':date/:page/:edition', component: NewspaperComponent },
+  { path: ':date/:page/:edition/:section', component: NewspaperComponent },
   { path: '**', redirectTo: '' }
 ];
 
@@ -26,7 +26,7 @@ class TrailingSlashUrlSerializer extends DefaultUrlSerializer {
 
 bootstrapApplication(AppComponent, {
   providers: [
-    provideHttpClient(),
+    provideHttpClient(withInterceptors([wpApiInterceptor])),
     provideRouter(routes),
     { provide: UrlSerializer, useClass: TrailingSlashUrlSerializer },
   ]

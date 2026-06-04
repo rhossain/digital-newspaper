@@ -1,24 +1,16 @@
-<div class="admin-container">
-  <!-- Header -->
-  <header class="admin-header">
+<div class="admin-container" [attr.data-admin-theme]="adminTheme">
+  <!-- Standard Header (hidden when vintage theme is active) -->
+  <header class="admin-header" *ngIf="adminTheme !== 'vintage'">
     <div class="header-content">
       <h1>📰 Newspaper Admin Panel</h1>
       <div class="header-actions">
-        <button class="btn btn-secondary" (click)="goToViewer()">
+        <button class="btn btn-secondary" (click)="goToViewer()" [disabled]="isSavingCrop" [title]="isSavingCrop ? 'Please wait — cropped image is being saved…' : ''">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M15 18l-6-6 6-6"/>
           </svg>
           Back to Viewer
         </button>
-        <button class="btn btn-success" (click)="saveAllData()">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
-            <polyline points="17 21 17 13 7 13 7 21"></polyline>
-            <polyline points="7 3 7 8 15 8"></polyline>
-          </svg>
-          Save All
-        </button>
-        <button class="btn btn-primary" *ngIf="isAuthenticated" (click)="downloadJSON()" title="Export a local JSON backup of all WordPress data">
+        <button class="btn btn-primary" *ngIf="isAdmin" (click)="openExportModal()" title="Export a JSON backup of WordPress data">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
             <polyline points="7 10 12 15 17 10"></polyline>
@@ -26,14 +18,7 @@
           </svg>
           Export Backup
         </button>
-        <input
-          #importFileInput
-          type="file"
-          accept=".json,application/json"
-          style="display:none"
-          (change)="importBackup($event)"
-        />
-        <button class="btn btn-warning" *ngIf="isAuthenticated" (click)="importFileInput.click()" title="Import a JSON backup and overwrite WordPress data">
+        <button class="btn btn-warning" *ngIf="isAdmin" (click)="importFileInput.click()" title="Import a JSON backup and overwrite WordPress data">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
             <polyline points="17 8 12 3 7 8"></polyline>
@@ -41,12 +26,149 @@
           </svg>
           Import Backup
         </button>
+        <button class="btn btn-secondary" *ngIf="isAdmin" (click)="rebuildFromSectionPosts()" [disabled]="isSavingCrop" title="Rebuild JSON data from mirrored WordPress section posts">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="23 4 23 10 17 10"></polyline>
+            <polyline points="1 20 1 14 7 14"></polyline>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"></path>
+            <path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"></path>
+          </svg>
+          Rebuild From Posts
+        </button>
         <button class="btn btn-danger" *ngIf="isAuthenticated" (click)="logout()">
           Logout
         </button>
       </div>
     </div>
   </header>
+
+  <!-- Vintage Header ──────────────────────────────────────────────── -->
+  <header class="admin-header-vintage" *ngIf="adminTheme === 'vintage'">
+    <div class="vhdr-inner">
+
+      <!-- Left: Logo / Title -->
+      <div class="vhdr-logo">
+        <img *ngIf="settingsForm.logo?.url"
+             [src]="settingsForm.logo?.url"
+             [alt]="settingsForm.logo?.alt || 'Newspaper Logo'"
+             class="vhdr-logo-img" />
+        <span *ngIf="!settingsForm.logo?.url" class="vhdr-logo-text">📰 Newspaper Admin</span>
+      </div>
+
+      <!-- Right: Actions + Dropdown -->
+      <div class="vhdr-actions" #vintageMenuPanel>
+
+        <!-- Back to Viewer (opens in new window) -->
+        <button class="vhdr-icon-btn" (click)="goToViewerNewWindow()" title="Open Viewer in new window">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+            <polyline points="15 3 21 3 21 9"></polyline>
+            <line x1="10" y1="14" x2="21" y2="3"></line>
+          </svg>
+        </button>
+
+        <span class="vhdr-sep" aria-hidden="true">|</span>
+
+        <!-- Authenticated user name -->
+        <span class="vhdr-user">{{ currentUserName }}</span>
+
+        <span class="vhdr-sep" aria-hidden="true">|</span>
+
+        <!-- Logout -->
+        <button class="vhdr-text-btn" (click)="logout()">Logout</button>
+
+        <span class="vhdr-sep" aria-hidden="true">|</span>
+
+        <!-- Menu toggle -->
+        <button class="vhdr-menu-toggle"
+                (click)="toggleMenu(); $event.stopPropagation()"
+                [class.open]="isMenuOpen"
+                aria-haspopup="true"
+                [attr.aria-expanded]="isMenuOpen">
+          Menu <span class="vhdr-caret">▾</span>
+        </button>
+
+        <!-- Dropdown panel -->
+        <div class="vhdr-dropdown" *ngIf="isMenuOpen" (click)="$event.stopPropagation()" role="menu">
+
+          <!-- E-paper -->
+          <div class="vhdr-menu-group">
+            <span class="vhdr-group-label">E-paper</span>
+            <button class="vhdr-menu-item" (click)="menuGoToPages()" role="menuitem">All Pages</button>
+            <button class="vhdr-menu-item" (click)="menuAddNewPage()" role="menuitem">Add New Page</button>
+          </div>
+
+          <!-- Edition -->
+          <div class="vhdr-menu-group">
+            <span class="vhdr-group-label">Edition</span>
+            <button class="vhdr-menu-item" (click)="menuGoToEditions()" role="menuitem">All Editions</button>
+            <button class="vhdr-menu-item" (click)="menuAddNewEdition()" role="menuitem">Add New Edition</button>
+          </div>
+
+          <!-- Dates -->
+          <div class="vhdr-menu-group">
+            <span class="vhdr-group-label">Dates</span>
+            <button class="vhdr-menu-item" (click)="menuGoToDates()" role="menuitem">All Dates</button>
+            <button class="vhdr-menu-item" (click)="menuAddNewDate()" role="menuitem">Add New Date</button>
+          </div>
+
+          <!-- E-post (scope TBD — items functional shell only) -->
+          <div class="vhdr-menu-group">
+            <span class="vhdr-group-label">E-post</span>
+            <button class="vhdr-menu-item vhdr-menu-item--soon" (click)="closeMenu()" role="menuitem">All E-posts</button>
+            <button class="vhdr-menu-item vhdr-menu-item--soon" (click)="closeMenu()" role="menuitem">Add New E-post</button>
+            <button class="vhdr-menu-item vhdr-menu-item--soon" (click)="closeMenu()" role="menuitem">Add Bulk E-post</button>
+          </div>
+
+          <!-- Admin-only section -->
+          <ng-container *ngIf="isAdmin">
+            <div class="vhdr-menu-divider"></div>
+
+            <!-- E-category (scope TBD — items functional shell only) -->
+            <div class="vhdr-menu-group">
+              <span class="vhdr-group-label">E-category <span class="vhdr-admin-badge">Admin</span></span>
+              <button class="vhdr-menu-item vhdr-menu-item--soon" (click)="closeMenu()" role="menuitem">All E-categories</button>
+              <button class="vhdr-menu-item vhdr-menu-item--soon" (click)="closeMenu()" role="menuitem">Add New E-category</button>
+            </div>
+
+            <!-- Global Settings -->
+            <button class="vhdr-menu-item vhdr-menu-item--toplevel" (click)="menuGoToSettings()" role="menuitem">
+              Global Settings <span class="vhdr-admin-badge">Admin</span>
+            </button>
+
+            <!-- Export Backup -->
+            <button class="vhdr-menu-item vhdr-menu-item--toplevel" (click)="menuExportBackup()" role="menuitem">
+              Export Backup <span class="vhdr-admin-badge">Admin</span>
+            </button>
+
+            <!-- Import Backup -->
+            <button class="vhdr-menu-item vhdr-menu-item--toplevel" (click)="menuImportBackup()" role="menuitem">
+              Import Backup <span class="vhdr-admin-badge">Admin</span>
+            </button>
+
+            <!-- Rebuild From Posts -->
+            <button class="vhdr-menu-item vhdr-menu-item--toplevel"
+                    [disabled]="isSavingCrop"
+                    (click)="menuRebuildFromPosts()"
+                    role="menuitem">
+              Rebuild From Posts <span class="vhdr-admin-badge">Admin</span>
+            </button>
+          </ng-container>
+
+        </div><!-- /vhdr-dropdown -->
+      </div><!-- /vhdr-actions -->
+    </div><!-- /vhdr-inner -->
+  </header>
+  <!-- /Vintage Header ─────────────────────────────────────────────── -->
+
+  <!-- Hidden file input: always in DOM, shared by both themes for Import Backup -->
+  <input
+    #importFileInput
+    type="file"
+    accept=".json,application/json"
+    style="display:none"
+    (change)="importBackup($event)"
+  />
 
   <!-- Auth Overlay -->
   <div class="auth-overlay" *ngIf="!isAuthenticated">
@@ -68,8 +190,8 @@
   </div>
 
   <!-- Date Selector Bar -->
-  <div class="date-selector-bar" *ngIf="isAuthenticated">
-    <div class="main-tabs">
+  <div class="date-selector-bar" [class.date-selector-bar--centered]="adminTheme === 'vintage'" *ngIf="isAuthenticated">
+    <div class="main-tabs" *ngIf="adminTheme !== 'vintage'">
       <button 
         class="main-tab" 
         [class.active]="activeMainTab === 'content'"
@@ -77,6 +199,7 @@
         📄 Content Management
       </button>
       <button 
+        *ngIf="isAdmin"
         class="main-tab" 
         [class.active]="activeMainTab === 'settings'"
         (click)="activeMainTab = 'settings'">
@@ -84,16 +207,35 @@
       </button>
     </div>
 
-    <div class="date-info" *ngIf="activeMainTab === 'content'">
+    <!-- Standard theme: show formatted date -->
+    <div class="date-info" *ngIf="activeMainTab === 'content' && adminTheme !== 'vintage'">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
         <line x1="16" y1="2" x2="16" y2="6"></line>
         <line x1="8" y1="2" x2="8" y2="6"></line>
         <line x1="3" y1="10" x2="21" y2="10"></line>
       </svg>
-      <span class="date-label">Editing Edition:</span>
+      <span class="date-label">Edition:</span>
       <strong class="current-date">{{ formatDisplayDate(selectedDate) }}</strong>
     </div>
+
+    <!-- Vintage theme: show edition name, dropdown when multiple editions exist -->
+    <div class="date-info" *ngIf="activeMainTab === 'content' && adminTheme === 'vintage'">
+      <span class="date-label">Edition:</span>
+      <!-- Single edition — static label -->
+      <strong class="current-date" *ngIf="editionsForDate.length <= 1">{{ getCurrentEditionLabel() }}</strong>
+      <!-- Multiple editions — dropdown selector -->
+      <select *ngIf="editionsForDate.length > 1"
+              [ngModel]="selectedEditionNumber"
+              (ngModelChange)="onEditionChange($event)"
+              class="date-select edition-select-inline">
+        <option *ngFor="let ed of editionsForDate" [ngValue]="ed.edition || 1">
+          {{ getEditionLabel(ed) }}
+        </option>
+      </select>
+    </div>
+
+    <span class="vhdr-sep date-bar-sep" *ngIf="activeMainTab === 'content' && adminTheme === 'vintage'" aria-hidden="true">|</span>
     
     <div class="date-controls" *ngIf="activeMainTab === 'content'">
       <label class="date-control-label">Select Date:</label>
@@ -103,7 +245,7 @@
         </option>
       </select>
       
-      <button class="btn btn-sm btn-primary" (click)="createNewDate()">
+      <button class="btn btn-sm btn-primary" (click)="createNewDate()" *ngIf="adminTheme !== 'vintage'">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <line x1="12" y1="5" x2="12" y2="19"></line>
           <line x1="5" y1="12" x2="19" y2="12"></line>
@@ -112,8 +254,8 @@
       </button>
     </div>
 
-    <!-- Edition selector (shown when a date has multiple editions) -->
-    <div class="edition-bar" *ngIf="activeMainTab === 'content' && editionsForDate.length > 0">
+    <!-- Edition selector (shown when a date has multiple editions; hidden in vintage — managed via All Editions view) -->
+    <div class="edition-bar" *ngIf="activeMainTab === 'content' && editionsForDate.length > 0 && adminTheme !== 'vintage'">
       <span class="edition-bar-label">Edition:</span>
       <ng-container *ngFor="let ed of editionsForDate">
         <button
@@ -173,9 +315,37 @@
     </div>
   </div>
 
-  <div class="admin-body" *ngIf="isAuthenticated && activeMainTab === 'content'">
+  <div class="admin-body" [class.maximized]="isBodyMaximized" *ngIf="isAuthenticated && activeMainTab === 'content'">
+    <!-- Floating maximize button (visible only in normal mode) -->
+    <button
+      *ngIf="!isBodyMaximized"
+      class="maximize-btn floating-maximize-btn"
+      (click)="isBodyMaximized = true"
+      title="Maximize panel"
+    >
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polyline points="15 3 21 3 21 9"></polyline>
+        <polyline points="9 21 3 21 3 15"></polyline>
+        <line x1="21" y1="3" x2="14" y2="10"></line>
+        <line x1="3" y1="21" x2="10" y2="14"></line>
+      </svg>
+    </button>
+    <!-- Floating minimize button (visible only in maximized mode) -->
+    <button
+      *ngIf="isBodyMaximized"
+      class="maximize-btn floating-minimize-btn"
+      (click)="isBodyMaximized = false"
+      title="Minimize panel"
+    >
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polyline points="4 14 10 14 10 20"></polyline>
+        <polyline points="20 10 14 10 14 4"></polyline>
+        <line x1="10" y1="14" x2="3" y2="21"></line>
+        <line x1="21" y1="3" x2="14" y2="10"></line>
+      </svg>
+    </button>
     <!-- Sidebar -->
-    <aside class="sidebar">
+    <aside class="sidebar" *ngIf="adminTheme !== 'vintage'">
       <div class="sidebar-header">
         <h2>Pages</h2>
         <button class="btn btn-sm btn-primary" (click)="newPage()">+ Add Page</button>
@@ -199,6 +369,12 @@
             <p>{{ page.sections.length }} sections</p>
           </div>
           <div class="page-actions">
+            <button class="btn-icon btn-preview" (click)="openPagePreview(page, $event)" title="Preview full image">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                <circle cx="12" cy="12" r="3"></circle>
+              </svg>
+            </button>
             <button class="btn-icon" (click)="editPage(page); $event.stopPropagation()" title="Edit">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
@@ -216,6 +392,52 @@
       </div>
     </aside>
 
+    <!-- Section Image Preview Lightbox (vintage post cards) -->
+    <div class="lightbox-overlay" *ngIf="previewSectionUrl" (click)="closeSectionPreview()">
+      <div class="lightbox-content lightbox-content--section" (click)="$event.stopPropagation()">
+        <button class="lightbox-close" (click)="closeSectionPreview()" title="Close">&times;</button>
+        <div class="lightbox-img-wrap">
+          <img [src]="previewSectionUrl" alt="Post image preview" />
+        </div>
+      </div>
+    </div>
+
+    <!-- Page Image Preview Lightbox -->
+    <div class="lightbox-overlay" *ngIf="previewPageUrl" (click)="closePagePreview()">
+      <div class="lightbox-content" (click)="$event.stopPropagation()">
+        <button class="lightbox-close" (click)="closePagePreview()" title="Close">&times;</button>
+        <div class="lightbox-img-wrap">
+          <img [src]="previewPageUrl" alt="Full page preview" />
+          <!-- Section overlays (only for sections that have been cropped) -->
+          <ng-container *ngIf="previewPage?.sections?.length">
+            <ng-container *ngFor="let sec of previewPage.sections">
+              <div
+                *ngIf="sec.width > 0"
+                class="preview-section-box"
+                [style.left.%]="sec.x"
+                [style.top.%]="sec.y"
+                [style.width.%]="sec.width"
+                [style.height.%]="sec.height"
+                [title]="sec.title"
+              >
+                <span class="preview-sec-label">{{ sec.title }}</span>
+                <div class="preview-sec-actions">
+                  <button class="sec-btn sec-edit-btn" (click)="previewEditSection(sec)" title="Edit section">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5l3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                    Edit
+                  </button>
+                  <button class="sec-btn sec-del-btn" (click)="previewDeleteSection(sec)" title="Delete section">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+                    Delete
+                  </button>
+                </div>
+              </div>
+            </ng-container>
+          </ng-container>
+        </div>
+      </div>
+    </div>
+
     <!-- Main Content -->
     <main class="main-content">
       <!-- Page Editor Modal -->
@@ -231,7 +453,7 @@
               <input type="number" [(ngModel)]="pageForm.id" [disabled]="isEditingDisabled()" class="form-control" />
             </div>
             <div class="form-group">
-              <label>Full Image</label>
+              <label>Full Image <span style="color:#e53935">*</span></label>
               <div class="input-mode-options">
                 <label class="radio-option">
                   <input type="radio" name="fullImageMode" value="url" [(ngModel)]="fullImageInputMode" />
@@ -246,7 +468,8 @@
                 *ngIf="fullImageInputMode === 'url'" 
                 type="text" 
                 [(ngModel)]="pageForm.fullImage" 
-                (ngModelChange)="onFullImageUrlChange($event)"
+                (ngModelChange)="onFullImageUrlChange($event); pageFormErrors.fullImage = false"
+                [class.input-error]="pageFormErrors.fullImage"
                 class="form-control" 
                 placeholder="https://example.com/page-image.jpg" 
               />
@@ -258,6 +481,39 @@
                 class="form-control" 
               />
             </div>
+            <!-- <div class="form-group">
+              <label>
+                Full Image — High Resolution
+                <span class="label-optional">(optional · used in crop selector only)</span>
+              </label>
+              <div class="input-mode-options">
+                <label class="radio-option">
+                  <input type="radio" name="fullImageHiResMode" value="url" [(ngModel)]="fullImageHiResInputMode" />
+                  <span>External URL</span>
+                </label>
+                <label class="radio-option">
+                  <input type="radio" name="fullImageHiResMode" value="file" [(ngModel)]="fullImageHiResInputMode" />
+                  <span>Upload File</span>
+                </label>
+              </div>
+              <input
+                *ngIf="fullImageHiResInputMode === 'url'"
+                type="text"
+                [(ngModel)]="pageForm.fullImageHiRes"
+                class="form-control"
+                placeholder="https://example.com/page-image-hires.jpg"
+              />
+              <input
+                *ngIf="fullImageHiResInputMode === 'file'"
+                type="file"
+                (change)="onFullImageHiResFileSelected($event)"
+                accept="image/*"
+                class="form-control"
+              />
+              <p *ngIf="pageForm.fullImageHiRes" class="field-hint">
+                ✓ High-res image set — crop selector will use this image.
+              </p>
+            </div> -->
             <div class="form-group">
               <label>Thumbnail (optional)</label>
               <div class="input-mode-options">
@@ -291,8 +547,18 @@
             </div>
             <!-- Page Name (multilingual) -->
             <div class="form-group" style="margin-top: 16px;">
-              <label>Page Name <span style="font-weight:400; color:#888">(optional)</span></label>
-              <div class="edition-label-fields">
+              <label>Page Name <span style="color:#e53935">*</span></label>
+              <select
+                [ngModel]="pageNameSelect"
+                (ngModelChange)="onPageNameSelectChange($event); pageFormErrors.pageName = false"
+                [class.input-error]="pageFormErrors.pageName"
+                class="form-control"
+              >
+                <option value="">-- Select page name --</option>
+                <option *ngFor="let item of predefinedPageNames" [value]="item.bn">{{ item.bn }} — {{ item.en }}</option>
+                <option value="__custom__">Custom...</option>
+              </select>
+              <div *ngIf="pageNameSelect === '__custom__'" class="edition-label-fields" style="margin-top: 8px;">
                 <label class="edition-label-field">
                   <span class="edition-label-lang">EN</span>
                   <input
@@ -322,10 +588,10 @@
       </div>
 
       <!-- Section Editor -->
-      <div class="content-panel" *ngIf="selectedPage && !isEditingSection">
+      <div class="content-panel" *ngIf="selectedPage && !isEditingSection && adminTheme !== 'vintage'">
         <div class="panel-header">
-          <h2>Page {{ selectedPage.id }} - Sections</h2>
-          <button class="btn btn-primary" (click)="newSection()">+ Add Section</button>
+          <h2>Page {{ selectedPage.id }} - News items</h2>
+          <button class="btn btn-primary" (click)="newSection()">+ Add news item</button>
         </div>
 
         <div class="sections-grid">
@@ -334,9 +600,11 @@
             class="section-card"
           >
             <div class="section-preview" *ngIf="section.imageUrl">
-              <img [src]="section.imageUrl" [alt]="section.title" />
+              <img [src]="resolveImageUrl(section.imageUrl)" [alt]="section.title" />
             </div>
-            <div class="section-preview placeholder" *ngIf="!section.imageUrl">
+            <div class="section-preview" *ngIf="!section.imageUrl && section.width && section.height" [ngStyle]="getSectionCardPreviewStyle(section)">
+            </div>
+            <div class="section-preview placeholder" *ngIf="!section.imageUrl && (!section.width || !section.height)">
               <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                 <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
                 <circle cx="8.5" cy="8.5" r="1.5"></circle>
@@ -376,14 +644,14 @@
       <div class="content-panel" *ngIf="isEditingSection">
         <div class="panel-header">
           <h2>{{ selectedSection ? 'Edit' : 'New' }} Section</h2>
-          <button class="btn btn-secondary" (click)="cancelSectionEdit()">Cancel</button>
+          <button class="btn btn-secondary" (click)="cancelSectionEdit()" [disabled]="isSavingCrop" [title]="isSavingCrop ? 'Please wait — cropped image is being saved…' : ''">Cancel</button>
         </div>
 
         <div class="section-form">
-          <div class="form-row">
+          <div class="form-row" style="margin-bottom: 0;">
             <div class="form-group">
               <label>Section ID</label>
-              <input type="text" [(ngModel)]="sectionForm.id" [disabled]="!!selectedSection" class="form-control" />
+              <input type="text" [(ngModel)]="sectionForm.id" readonly class="form-control" />
             </div>
             <div class="form-group">
               <label>Title *</label>
@@ -391,16 +659,21 @@
             </div>
           </div>
 
-          <div class="form-group">            <label class="checkbox-label">
-              <input type="checkbox" [(ngModel)]="sectionForm.showCaption" class="form-checkbox" />
-              <span>Show caption in viewer</span>
-            </label>
-            <small class="form-help">Display section title and page number below the image</small>
+          <div class="form-group">
+            <label style="width: 100%;">Content (HTML) *</label>
+            <quill-editor
+              [(ngModel)]="sectionForm.content"
+              [modules]="quillModules"
+              [styles]="{ 'min-height': '200px' }"
+              placeholder="Enter section content..."
+              class="quill-content-editor"
+              style="width: 100%;">
+            </quill-editor>
           </div>
 
-          <div class="form-group">            <label>Position & Size</label>
+          <div class="form-group">            <label>Crop the news section Image</label>
             <div class="crop-controls">
-              <div class="form-row">
+              <!-- <div class="form-row">
                 <div class="form-group-sm">
                   <label>X (%)</label>
                   <input type="number" [(ngModel)]="sectionForm.x" min="0" max="100" class="form-control" />
@@ -417,14 +690,32 @@
                   <label>Height (%)</label>
                   <input type="number" [(ngModel)]="sectionForm.height" min="0" max="100" class="form-control" />
                 </div>
-              </div>
-              <button class="btn btn-primary btn-full" (click)="openImageCropper()">
+              </div> -->
+              <button class="btn btn-primary btn-full" style="margin-top: 0;" (click)="openImageCropper()">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
                   <circle cx="12" cy="13" r="4"></circle>
                 </svg>
                 Visual Crop Selector
               </button>
+              <div class="section-crop-preview-wrapper" *ngIf="selectedPage && (sectionForm.width ?? 0) > 0 && (sectionForm.height ?? 0) > 0">
+                <div class="section-crop-preview" [ngStyle]="getSectionCropPreviewStyle()">
+                  <span class="section-crop-preview-badge">Preview</span>
+                </div>
+                <div class="section-crop-preview-meta">
+                  <div class="section-crop-preview-title">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                    Crop Region Set
+                  </div>
+                  <div class="section-crop-preview-chips">
+                    <span class="crop-chip"><span class="chip-key">X</span><strong>{{ sectionForm.x }}%</strong></span>
+                    <span class="crop-chip"><span class="chip-key">Y</span><strong>{{ sectionForm.y }}%</strong></span>
+                    <span class="crop-chip"><span class="chip-key">W</span><strong>{{ sectionForm.width }}%</strong></span>
+                    <span class="crop-chip"><span class="chip-key">H</span><strong>{{ sectionForm.height }}%</strong></span>
+                  </div>
+                  <p class="section-crop-preview-hint">Coordinates applied on save</p>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -462,9 +753,11 @@
             </div>
           </div>
 
-          <div class="form-group">
-            <label>Content (HTML) *</label>
-            <textarea [(ngModel)]="sectionForm.content" class="form-control" rows="10" placeholder="<h2>Title</h2><p>Content...</p>"></textarea>
+          <div class="form-group">            <label class="checkbox-label">
+              <input type="checkbox" [(ngModel)]="sectionForm.showCaption" class="form-checkbox" />
+              <span>Show caption in viewer</span>
+            </label>
+            <small class="form-help">Display section title and page number below the image</small>
           </div>
 
           <div class="form-group">
@@ -486,14 +779,18 @@
           </div>
 
           <div class="form-actions">
-            <button class="btn btn-secondary" (click)="cancelSectionEdit()">Cancel</button>
-            <button class="btn btn-primary" (click)="saveSection()">Save Section</button>
+            <button class="btn btn-secondary" (click)="cancelSectionEdit()" [disabled]="isSavingCrop" [title]="isSavingCrop ? 'Please wait — cropped image is being saved…' : ''">Cancel</button>
+            <button class="btn btn-primary" (click)="saveSection()" [disabled]="isSavingCrop" [title]="isSavingCrop ? 'Please wait — cropped image is being saved…' : ''">Save Section</button>
+          </div>
+          <div class="crop-saving-notice" *ngIf="isSavingCrop">
+            <div class="crop-saving-spinner"></div>
+            <span>Saving cropped image… please wait</span>
           </div>
         </div>
       </div>
 
       <!-- Welcome State -->
-      <div class="content-panel" *ngIf="!selectedPage">
+      <div class="content-panel" *ngIf="!selectedPage && adminTheme !== 'vintage'">
         <div class="welcome-state">
           <svg width="120" height="120" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
             <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
@@ -505,11 +802,397 @@
           <p>Select a page from the sidebar or create a new one to get started</p>
         </div>
       </div>
+
+      <!-- ═══════════════════════════════════════════════════════════
+           VINTAGE THEME CONTENT AREA
+           ═══════════════════════════════════════════════════════════ -->
+      <div class="vintage-content-area" *ngIf="adminTheme === 'vintage' && !isEditingPage && !isEditingSection">
+
+        <!-- ── Combined top bar: breadcrumb + title + action ────── -->
+        <div class="vintage-top-bar">
+
+          <!-- Pages view -->
+          <ng-container *ngIf="vintageView === 'pages'">
+            <div class="vtb-nav">
+              <h2 class="vtb-title">All Pages</h2>
+              <span class="vtb-dot" aria-hidden="true"></span>
+              <span class="vtb-meta">{{ pages.length }} page{{ pages.length !== 1 ? 's' : '' }} · {{ getCurrentEditionLabel() }} · {{ formatDisplayDate(selectedDate) }}</span>
+            </div>
+            <button class="btn btn-primary btn-sm" (click)="newPage()">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <line x1="12" y1="5" x2="12" y2="19"></line>
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+              </svg>
+              Add Page
+            </button>
+          </ng-container>
+
+          <!-- Sections view -->
+          <ng-container *ngIf="vintageView === 'sections' && selectedPage">
+            <div class="vtb-nav">
+              <button class="vtb-crumb-link" (click)="vintageBackToPages()">All Pages</button>
+              <span class="vtb-sep" aria-hidden="true">›</span>
+              <h2 class="vtb-title">{{ getPageLabel(selectedPage) }}</h2>
+              <span class="vtb-dot" aria-hidden="true"></span>
+              <span class="vtb-meta">{{ selectedPage.sections.length }} post{{ selectedPage.sections.length !== 1 ? 's' : '' }}</span>
+            </div>
+            <button class="btn btn-primary btn-sm" (click)="newSection()">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <line x1="12" y1="5" x2="12" y2="19"></line>
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+              </svg>
+              Add Post
+            </button>
+          </ng-container>
+
+          <!-- Section detail view -->
+          <ng-container *ngIf="vintageView === 'section-detail'">
+            <div class="vtb-nav">
+              <button class="vtb-crumb-link" (click)="vintageBackToPages()">All Pages</button>
+              <span class="vtb-sep" aria-hidden="true">›</span>
+              <button class="vtb-crumb-link" (click)="vintageBackToSections()">{{ selectedPage ? getPageLabel(selectedPage) : '' }}</button>
+              <span class="vtb-sep" aria-hidden="true">›</span>
+              <h2 class="vtb-title vtb-title--truncate">{{ vintageSelectedSection?.title || 'Post Detail' }}</h2>
+            </div>
+          </ng-container>
+
+          <!-- Editions view -->
+          <ng-container *ngIf="vintageView === 'editions'">
+            <div class="vtb-nav">
+              <h2 class="vtb-title">All Editions</h2>
+              <span class="vtb-dot" aria-hidden="true"></span>
+              <span class="vtb-meta">{{ editionsForDate.length }} edition{{ editionsForDate.length !== 1 ? 's' : '' }} · {{ formatDisplayDate(selectedDate) }}</span>
+            </div>
+            <button class="btn btn-primary btn-sm" (click)="createNewEdition()">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <line x1="12" y1="5" x2="12" y2="19"></line>
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+              </svg>
+              Add Edition
+            </button>
+          </ng-container>
+
+        </div><!-- /vintage-top-bar -->
+
+        <!-- ── PAGES GRID ───────────────────────────────────────── -->
+        <ng-container *ngIf="vintageView === 'pages'">
+
+          <div class="vintage-page-grid">
+            <article class="vpc-card" *ngFor="let page of pages" (click)="vintageSelectPage(page)" role="button" tabindex="0" (keydown.enter)="vintageSelectPage(page)">
+              <div class="vpc-thumb">
+                <img *ngIf="page.thumbnail || page.fullImage"
+                     [src]="page.thumbnail || page.fullImage"
+                     [alt]="getPageLabel(page)"
+                     loading="lazy" decoding="async" />
+                <div class="vpc-thumb-fallback" *ngIf="!page.thumbnail && !page.fullImage">
+                  <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                    <polyline points="14 2 14 8 20 8"></polyline>
+                  </svg>
+                </div>
+              </div>
+              <div class="vpc-body">
+                <div class="vpc-meta-row vpc-meta-row--primary">
+                  <span class="vpc-page-name">{{ getPageLabel(page) }}</span>
+                </div>
+                <div class="vpc-meta-row vpc-meta-row--secondary">
+                  <span class="vpc-date">{{ formatDisplayDate(selectedDate) }}</span>
+                  <span class="vpc-post-count">{{ page.sections.length }} post{{ page.sections.length !== 1 ? 's' : '' }}</span>
+                </div>
+                <div class="vpc-actions" (click)="$event.stopPropagation()">
+                  <button class="vpc-btn vpc-btn--preview" (click)="openPagePreview(page, $event)" title="Preview page">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                      <circle cx="12" cy="12" r="3"></circle>
+                    </svg>
+                    Preview
+                  </button>
+                  <button class="vpc-btn vpc-btn--edit" (click)="editPage(page)" title="Edit page">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                    </svg>
+                    Edit
+                  </button>
+                </div>
+              </div>
+            </article>
+
+            <!-- Skeleton while loading -->
+            <ng-container *ngIf="isLoadingEdition && pages.length === 0">
+              <article class="vpc-card vpc-card--skeleton" *ngFor="let n of [1,2,3,4]">
+                <div class="vpc-thumb"><div class="skeleton-loader"></div></div>
+                <div class="vpc-body">
+                  <div class="vpc-skeleton-line vpc-skeleton-line--wide"></div>
+                  <div class="vpc-skeleton-line vpc-skeleton-line--narrow"></div>
+                </div>
+              </article>
+            </ng-container>
+          </div>
+
+          <div class="vintage-empty-state" *ngIf="pages.length === 0 && !isLoadingEdition">
+            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+              <polyline points="14 2 14 8 20 8"></polyline>
+            </svg>
+            <p>No pages yet for this edition</p>
+            <button class="btn btn-primary" (click)="newPage()">Add First Page</button>
+          </div>
+        </ng-container>
+
+        <!-- ── POSTS GRID ────────────────────────────────────────── -->
+        <ng-container *ngIf="vintageView === 'sections' && selectedPage">
+
+          <div class="vintage-post-grid">
+            <article class="vpost-card" *ngFor="let section of selectedPage.sections" (click)="vintageSelectSection(section)" role="button" tabindex="0" (keydown.enter)="vintageSelectSection(section)">
+              <!-- Thumbnail: explicit imageUrl > crop from page > fallback icon -->
+              <div class="vpost-thumb">
+                <img *ngIf="section.imageUrl"
+                     [src]="resolveImageUrl(section.imageUrl)"
+                     [alt]="section.title"
+                     loading="lazy" decoding="async" />
+                <div *ngIf="!section.imageUrl && section.width && section.height"
+                     class="vpost-thumb-crop"
+                     [ngStyle]="getSectionCardPreviewStyle(section)">
+                </div>
+                <div class="vpost-thumb-fallback" *ngIf="!section.imageUrl && (!section.width || !section.height)">
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <rect x="3" y="3" width="18" height="18" rx="2"></rect>
+                    <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                    <polyline points="21 15 16 10 5 21"></polyline>
+                  </svg>
+                </div>
+              </div>
+              <div class="vpost-body">
+                <h3 class="vpost-title">{{ section.title }}</h3>
+                <div class="vpost-meta">
+                  <span class="vpost-meta-item">
+                    <span class="vpost-meta-label">Position</span>
+                    <span class="vpost-meta-value">{{ section.x }}%, {{ section.y }}%</span>
+                  </span>
+                  <span class="vpost-meta-sep" aria-hidden="true">|</span>
+                  <span class="vpost-meta-item">
+                    <span class="vpost-meta-label">Size</span>
+                    <span class="vpost-meta-value">{{ section.width }}% × {{ section.height }}%</span>
+                  </span>
+                </div>
+                <div class="vpost-links" *ngIf="(section.linkedSectionIds?.length || 0) > 0">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+                    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+                  </svg>
+                  {{ section.linkedSectionIds!.length }} linked post{{ section.linkedSectionIds!.length !== 1 ? 's' : '' }}
+                </div>
+                <div class="vpc-actions" (click)="$event.stopPropagation()">
+                  <button *ngIf="section.imageUrl" class="vpc-btn vpc-btn--preview" (click)="openSectionPreview(section, $event)" title="Preview post image">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                      <circle cx="12" cy="12" r="3"></circle>
+                    </svg>
+                    Preview
+                  </button>
+                  <button class="vpc-btn vpc-btn--delete" (click)="deleteSection(section)" title="Delete post">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <polyline points="3 6 5 6 21 6"></polyline>
+                      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
+                      <path d="M10 11v6"></path>
+                      <path d="M14 11v6"></path>
+                      <path d="M9 6V4h6v2"></path>
+                    </svg>
+                    Delete
+                  </button>
+                </div>
+              </div>
+            </article>
+          </div>
+
+          <div class="vintage-empty-state" *ngIf="selectedPage.sections.length === 0">
+            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <rect x="3" y="3" width="18" height="18" rx="2"></rect>
+              <line x1="9" y1="9" x2="15" y2="15"></line>
+              <line x1="15" y1="9" x2="9" y2="15"></line>
+            </svg>
+            <p>No posts yet for this page</p>
+            <button class="btn btn-primary" (click)="newSection()">Add First Post</button>
+          </div>
+        </ng-container>
+
+        <!-- ── POST DETAIL ───────────────────────────────────────── -->
+        <ng-container *ngIf="vintageView === 'section-detail' && vintageSelectedSection">
+          <div class="vintage-post-detail">
+            <div class="vpd-thumb-wrap">
+              <img *ngIf="vintageSelectedSection.imageUrl"
+                   [src]="resolveImageUrl(vintageSelectedSection.imageUrl)"
+                   [alt]="vintageSelectedSection.title" />
+              <div *ngIf="!vintageSelectedSection.imageUrl && vintageSelectedSection.width && vintageSelectedSection.height && selectedPage"
+                   class="vpd-thumb-crop"
+                   [ngStyle]="getSectionCardPreviewStyle(vintageSelectedSection)">
+              </div>
+              <div class="vpd-thumb-fallback" *ngIf="!vintageSelectedSection.imageUrl && (!vintageSelectedSection.width || !vintageSelectedSection.height)">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                  <rect x="3" y="3" width="18" height="18" rx="2"></rect>
+                  <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                  <polyline points="21 15 16 10 5 21"></polyline>
+                </svg>
+              </div>
+            </div>
+            <div class="vpd-info">
+              <h2 class="vpd-title">{{ vintageSelectedSection.title }}</h2>
+              <dl class="vpd-meta-list">
+                <div class="vpd-meta-item">
+                  <dt>Position</dt>
+                  <dd>{{ vintageSelectedSection.x }}%, {{ vintageSelectedSection.y }}%</dd>
+                </div>
+                <div class="vpd-meta-item">
+                  <dt>Size</dt>
+                  <dd>{{ vintageSelectedSection.width }}% × {{ vintageSelectedSection.height }}%</dd>
+                </div>
+                <div class="vpd-meta-item" *ngIf="(vintageSelectedSection.linkedSectionIds?.length || 0) > 0">
+                  <dt>Linked posts</dt>
+                  <dd>{{ vintageSelectedSection.linkedSectionIds!.length }}</dd>
+                </div>
+              </dl>
+              <p class="vpd-coming-soon">Full post details coming soon.</p>
+              <div class="vpd-actions">
+                <button class="btn btn-primary" (click)="editSection(vintageSelectedSection)">Edit Post</button>
+                <button class="btn btn-danger" (click)="deleteSection(vintageSelectedSection); vintageBackToSections()">Delete Post</button>
+              </div>
+            </div>
+          </div>
+        </ng-container>
+
+        <!-- ── ALL EDITIONS LIST ─────────────────────────────────── -->
+        <ng-container *ngIf="vintageView === 'editions'">
+          <div class="veditions-list">
+
+            <div class="vedition-row" *ngFor="let ed of editionsForDate">
+
+              <!-- Top: icon + info -->
+              <div class="vedition-card-top">
+                <div class="vedition-icon">
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                    <polyline points="14 2 14 8 20 8"></polyline>
+                    <line x1="16" y1="13" x2="8" y2="13"></line>
+                    <line x1="16" y1="17" x2="8" y2="17"></line>
+                    <polyline points="10 9 9 9 8 9"></polyline>
+                  </svg>
+                </div>
+                <div class="vedition-info">
+                  <span class="vedition-label">{{ getEditionLabel(ed) }}</span>
+                  <span class="vedition-meta">
+                    {{ ed.pages.length }} page{{ ed.pages.length !== 1 ? 's' : '' }} &middot; Edition {{ ed.edition || 1 }}
+                    <span class="vedition-active-badge" *ngIf="selectedEditionNumber === (ed.edition || 1)">Active</span>
+                  </span>
+                </div>
+              </div>
+
+              <!-- Middle: inline label editor (shown when editing) -->
+              <div class="vedition-label-editor" *ngIf="editingEditionLabel && editingEditionLabel.edition === ed.edition" (click)="$event.stopPropagation()">
+                <div class="vedition-label-fields">
+                  <label class="vedition-label-field">
+                    <span class="vedition-label-lang">EN</span>
+                    <input type="text" [(ngModel)]="editionLabelForm.en" class="edition-label-input" placeholder="e.g. Morning" />
+                  </label>
+                  <label class="vedition-label-field">
+                    <span class="vedition-label-lang">বাং</span>
+                    <input type="text" [(ngModel)]="editionLabelForm.bn" class="edition-label-input" placeholder="যেমন: সকাল" />
+                  </label>
+                </div>
+                <div class="vedition-label-actions">
+                  <button class="btn btn-sm btn-success" (click)="saveEditionLabels()">Save Labels</button>
+                  <button class="btn btn-sm btn-secondary" (click)="editingEditionLabel = null">Cancel</button>
+                </div>
+              </div>
+
+              <!-- Bottom: action buttons -->
+              <div class="vedition-card-footer">
+                <div class="vedition-actions">
+                  <button class="btn btn-sm btn-outline"
+                          (click)="onEditionChange(ed.edition || 1); vintageView = 'pages'"
+                          title="View pages in this edition">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                      <circle cx="12" cy="12" r="3"></circle>
+                    </svg>
+                    View
+                  </button>
+                  <button class="btn btn-sm btn-primary"
+                          (click)="openEditionLabelEditor(ed); $event.stopPropagation()"
+                          title="Edit edition labels">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                    </svg>
+                    Edit Labels
+                  </button>
+                  <button class="btn btn-sm btn-danger"
+                          (click)="deleteEditionEntry(ed)"
+                          [disabled]="editionsForDate.length <= 1"
+                          [title]="editionsForDate.length <= 1 ? 'Cannot delete the only edition' : 'Delete this edition'">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <polyline points="3 6 5 6 21 6"></polyline>
+                      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
+                      <path d="M10 11v6"></path>
+                      <path d="M14 11v6"></path>
+                      <path d="M9 6V4h6v2"></path>
+                    </svg>
+                    Delete
+                  </button>
+                </div>
+              </div>
+
+            </div>
+
+            <!-- Empty state -->
+            <div class="vintage-empty-state" *ngIf="editionsForDate.length === 0">
+              <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                <polyline points="14 2 14 8 20 8"></polyline>
+              </svg>
+              <p>No editions yet for this date</p>
+              <button class="btn btn-primary" (click)="createNewEdition()">Create First Edition</button>
+            </div>
+
+          </div>
+        </ng-container>
+
+      </div>
+      <!-- /VINTAGE THEME CONTENT AREA -->
+
     </main>
   </div>
 
   <!-- Global Settings Panel -->
-  <div class="admin-body settings-panel" *ngIf="isAuthenticated && activeMainTab === 'settings'">
+  <div class="admin-body settings-panel" [class.maximized]="isBodyMaximized" *ngIf="isAuthenticated && activeMainTab === 'settings'">
+    <!-- Floating maximize button (visible only in normal mode) -->
+    <button
+      *ngIf="!isBodyMaximized"
+      class="maximize-btn floating-maximize-btn"
+      (click)="isBodyMaximized = true"
+      title="Maximize panel"
+    >
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polyline points="15 3 21 3 21 9"></polyline>
+        <polyline points="9 21 3 21 3 15"></polyline>
+        <line x1="21" y1="3" x2="14" y2="10"></line>
+        <line x1="3" y1="21" x2="10" y2="14"></line>
+      </svg>
+    </button>
+    <!-- Floating minimize button (visible only in maximized mode) -->
+    <button
+      *ngIf="isBodyMaximized"
+      class="maximize-btn floating-minimize-btn"
+      (click)="isBodyMaximized = false"
+      title="Minimize panel"
+    >
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polyline points="4 14 10 14 10 20"></polyline>
+        <polyline points="20 10 14 10 14 4"></polyline>
+        <line x1="10" y1="14" x2="3" y2="21"></line>
+        <line x1="21" y1="3" x2="14" y2="10"></line>
+      </svg>
+    </button>
     <div class="settings-container">
       <div class="settings-header">
         <h2>⚙️ Global Settings</h2>
@@ -523,7 +1206,7 @@
         </button>
       </div>
 
-      <div class="settings-content">
+      <div class="settings-content" (input)="onSettingsFormChanged()" (change)="onSettingsFormChanged()">
         <!-- Language Settings -->
         <div class="settings-section">
           <h3>Language / ভাষা</h3>
@@ -603,8 +1286,50 @@
             <label>Logo Alt Text</label>
             <input type="text" [(ngModel)]="settingsForm.logo!.alt" class="form-control" placeholder="Digital Newspaper" />
           </div>
+          <div class="form-group">
+            <label>Logo Link URL</label>
+            <input type="url" [(ngModel)]="settingsForm.logo!.link" class="form-control" placeholder="https://example.com (leave empty to use app base URL)" />
+            <small class="hint-text">When clicked, the logo will navigate to this URL. Leave empty to use the current app URL.</small>
+          </div>
           <div class="logo-preview" *ngIf="settingsForm.logo?.url">
             <img [src]="settingsForm.logo!.url" [alt]="settingsForm.logo!.alt || 'Logo'" />
+          </div>
+          <div class="form-group" style="margin-top: 12px;">
+            <label class="toggle-label">
+              <input type="checkbox" [(ngModel)]="settingsForm.showBetaBadge" />
+              <span>Show "beta" badge on logo</span>
+            </label>
+            <p class="hint-text">When enabled, a small "beta" label appears at the bottom-right corner of the logo in the header.</p>
+          </div>
+        </div>
+
+        <!-- Under Maintenance -->
+        <div class="settings-section settings-section--maintenance" [class.settings-section--maintenance-active]="settingsForm.underMaintenance">
+          <h3>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:6px;">
+              <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+              <line x1="12" y1="9" x2="12" y2="13"></line>
+              <line x1="12" y1="17" x2="12.01" y2="17"></line>
+            </svg>
+            Under Maintenance
+          </h3>
+          <div class="form-group">
+            <label class="toggle-label">
+              <input type="checkbox" [(ngModel)]="settingsForm.underMaintenance" />
+              <span>Enable Maintenance Mode</span>
+            </label>
+            <p class="hint-text">
+              When enabled, visitors will see a maintenance page instead of the newspaper. The header will show only the logo. <strong>Save All</strong> to apply.
+            </p>
+          </div>
+          <div class="form-group" *ngIf="settingsForm.underMaintenance">
+            <label>Maintenance Message</label>
+            <textarea
+              [(ngModel)]="settingsForm.maintenanceMessage"
+              class="form-control"
+              rows="4"
+              placeholder="We are currently performing scheduled maintenance. We'll be back shortly. Thank you for your patience."></textarea>
+            <p class="hint-text">Leave empty to use the default message.</p>
           </div>
         </div>
 
@@ -721,77 +1446,473 @@
             <input type="url" [(ngModel)]="settingsForm.address!.website" class="form-control" placeholder="https://yournewspaper.com" />
           </div>
         </div>
+
+        <!-- Analytics / Head Scripts -->
+        <div class="settings-section">
+          <h3>Analytics &amp; Head Scripts</h3>
+          <div class="form-group">
+            <label>Custom &lt;head&gt; Scripts</label>
+            <textarea
+              [(ngModel)]="settingsForm.headScripts"
+              class="form-control"
+              rows="8"
+              style="font-family: monospace; font-size: 12px; resize: vertical;"
+              placeholder="<!-- Paste Google Analytics, Facebook Pixel, or any other <script> tags here -->
+<!-- Example: Google Analytics -->
+<!-- <script async src=&quot;https://www.googletagmanager.com/gtag/js?id=G-XXXXXXXXXX&quot;></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-XXXXXXXXXX');
+</script> -->"></textarea>
+            <p class="hint-text">
+              Scripts entered here are injected into <code>&lt;head&gt;</code> on every page load.
+              Leave empty to disable dynamic script injection (the static tag in index.html will still run).
+            </p>
+          </div>
+        </div>
+
+        <!-- Export History -->
+        <div class="settings-section">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+            <h3 style="margin:0;">Export History</h3>
+            <button class="btn btn-sm btn-secondary" *ngIf="backupHistory.length > 0" (click)="clearBackupHistory()">Clear History</button>
+          </div>
+          <div class="backup-history-empty" *ngIf="backupHistory.length === 0">
+            No exports yet. Use the Export Backup button in the header to create your first backup.
+          </div>
+          <div class="backup-history-list" *ngIf="backupHistory.length > 0">
+            <div class="backup-history-item" *ngFor="let entry of backupHistory">
+              <div class="backup-history-meta">
+                <div class="backup-history-filename">{{ entry.filename }}</div>
+                <div class="backup-history-details">
+                  {{ formatExportDate(entry.exportedAt) }} &bull; {{ entry.editionCount }} edition(s) &bull; {{ entry.sizeKb }} KB
+                </div>
+              </div>
+              <span class="backup-type-badge">{{ entry.exportType }}</span>
+              <button class="btn btn-sm btn-primary" (click)="reExport(entry)" title="Re-export with same options (fresh data)">Export Again</button>
+            </div>
+          </div>
+          <p class="hint-text" *ngIf="backupHistory.length > 0" style="margin-top:8px;">Last {{ backupHistory.length }} export(s) recorded locally in this browser.</p>
+        </div>
+
       </div>
     </div>
   </div>
 </div>
 
-<!-- Image Cropper Modal -->
-<div class="modal-overlay cropper-overlay" *ngIf="showImageCropper">
-  <div class="modal modal-large">
+<!-- Export Backup Modal -->
+<div class="modal-overlay" *ngIf="showExportModal">
+  <div class="modal">
     <div class="modal-header">
-      <h2>Visual Crop Selector</h2>
-      <button class="btn-close" (click)="closeCropper()">&times;</button>
+      <h2>📤 Export Backup</h2>
+      <button class="btn-close" (click)="closeExportModal()">&times;</button>
     </div>
-    <div class="modal-body cropper-body">
-      <div class="cropper-instructions">
-        <p>📍 Click and drag on the image to select the section area</p>
-        <p>The coordinates will be automatically calculated in percentages</p>
-        <div class="cropper-zoom">
-          <label>Zoom: {{ (cropperZoom * 100) | number:'1.0-0' }}%</label>
-          <input type="range" min="1" max="3" step="0.1" [(ngModel)]="cropperZoom" />
-          <div class="zoom-buttons">
-            <button class="btn btn-sm btn-secondary" (click)="zoomOut()">-</button>
-            <button class="btn btn-sm btn-secondary" (click)="zoomIn()">+</button>
-          </div>
+    <div class="modal-body export-modal-body">
+
+      <div class="form-group">
+        <label>Export Type</label>
+        <div class="input-mode-options" style="flex-direction:column; gap:6px;">
+          <label class="radio-option">
+            <input type="radio" name="exportType" value="full" [(ngModel)]="exportOptions.exportType" />
+            <span>Full Backup <small class="hint-text">&mdash; settings + all editions</small></span>
+          </label>
+          <label class="radio-option">
+            <input type="radio" name="exportType" value="settings-only" [(ngModel)]="exportOptions.exportType" />
+            <span>Settings Only <small class="hint-text">&mdash; logo, social links, language, etc.</small></span>
+          </label>
+          <label class="radio-option">
+            <input type="radio" name="exportType" value="editions-only" [(ngModel)]="exportOptions.exportType" />
+            <span>Editions Only <small class="hint-text">&mdash; news data, no settings</small></span>
+          </label>
         </div>
       </div>
-      
-      <div class="cropper-container">
-        <div class="cropper-stage" [style.transform]="'scale(' + cropperZoom + ')'">
-          <img 
-            #cropperImage
-            [src]="selectedPage?.fullImage" 
-            alt="Full page"
-            (load)="onCropperImageLoad($event)"
-          />
-          <div 
-            class="crop-overlay"
-            (mousedown)="onCropperMouseDown($event)"
-            (mousemove)="onCropperMouseMove($event)"
-            (mouseup)="onCropperMouseUp()"
-            (mouseleave)="onCropperMouseUp()"
-          ></div>
-          <div 
-            class="crop-selection"
-            [style.left]="getCropStyle().left"
-            [style.top]="getCropStyle().top"
-            [style.width]="getCropStyle().width"
-            [style.height]="getCropStyle().height"
-            [style.display]="(isDrawing || (cropperEndX > 0 && cropperEndY > 0)) ? 'block' : 'none'"
-          ></div>
+
+      <div class="form-group" *ngIf="exportOptions.exportType !== 'settings-only'">
+        <label>Editions Scope</label>
+        <div class="input-mode-options" style="flex-direction:column; gap:6px;">
+          <label class="radio-option">
+            <input type="radio" name="exportScope" value="full" [(ngModel)]="exportOptions.exportScope" />
+            <span>All Editions</span>
+          </label>
+          <label class="radio-option">
+            <input type="radio" name="exportScope" value="current-date" [(ngModel)]="exportOptions.exportScope" />
+            <span>Current Date Only <small class="hint-text">({{ selectedDate }})</small></span>
+          </label>
+          <label class="radio-option">
+            <input type="radio" name="exportScope" value="date-range" [(ngModel)]="exportOptions.exportScope" />
+            <span>Date Range</span>
+          </label>
         </div>
       </div>
+
+      <div class="form-row" *ngIf="exportOptions.exportType !== 'settings-only' && exportOptions.exportScope === 'date-range'">
+        <div class="form-group">
+          <label>From Date</label>
+          <input type="date" [(ngModel)]="exportOptions.dateFrom" class="form-control" />
+        </div>
+        <div class="form-group">
+          <label>To Date</label>
+          <input type="date" [(ngModel)]="exportOptions.dateTo" class="form-control" />
+        </div>
+      </div>
+
+      <p class="hint-text" style="margin-top:12px; padding:10px; background:#f0f9ff; border-radius:8px; border:1px solid #bae6fd;">
+        💡 A metadata envelope (source URL, timestamp, schema version) is embedded automatically for safe import.
+      </p>
     </div>
-    <div class="modal-footer modal-image-selection">
-      <div class="crop-info" *ngIf="sectionForm && (sectionForm.width ?? 0) > 0">
-        <div class="info-item">
-          <strong>X:</strong> {{ sectionForm.x }}%
-        </div>
-        <div class="info-item">
-          <strong>Y:</strong> {{ sectionForm.y }}%
-        </div>
-        <div class="info-item">
-          <strong>Width:</strong> {{ sectionForm.width }}%
-        </div>
-        <div class="info-item">
-          <strong>Height:</strong> {{ sectionForm.height }}%
-        </div>
-      </div>
-      <div class="actions">
-        <button class="btn btn-secondary" (click)="closeCropper()">Cancel</button>
-        <button class="btn btn-primary" (click)="applyCrop()" [disabled]="(sectionForm.width ?? 0) === 0">Apply Selection</button>
-      </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" (click)="closeExportModal()">Cancel</button>
+      <button class="btn btn-primary" (click)="confirmExport()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+          <polyline points="7 10 12 15 17 10"></polyline>
+          <line x1="12" y1="15" x2="12" y2="3"></line>
+        </svg>
+        Download
+      </button>
     </div>
   </div>
+</div>
+
+<!-- Import Preview Modal -->
+<div class="modal-overlay" *ngIf="showImportPreviewModal">
+  <div class="modal modal-import-preview">
+    <div class="modal-header">
+      <h2>📥 Import Preview</h2>
+      <button class="btn-close" (click)="closeImportModal()">&times;</button>
+    </div>
+    <div class="modal-body import-modal-body">
+
+      <!-- Validation Errors -->
+      <div class="import-validation-errors" *ngIf="importValidation && importValidation.errors.length > 0">
+        <h4>❌ Validation Errors ({{ importValidation.errors.length }})</h4>
+        <ul>
+          <li *ngFor="let e of importValidation.errors">{{ e }}</li>
+        </ul>
+        <p style="margin:8px 0 0; font-size:13px;">Fix the errors above before importing.</p>
+      </div>
+
+      <!-- Validation Warnings -->
+      <div class="import-validation-warnings" *ngIf="importValidation && importValidation.warnings.length > 0">
+        <h4>⚠️ Warnings ({{ importValidation.warnings.length }})</h4>
+        <ul>
+          <li *ngFor="let w of importValidation.warnings">{{ w }}</li>
+        </ul>
+      </div>
+
+      <!-- Preview (valid only) -->
+      <ng-container *ngIf="importPreview && importValidation?.valid">
+
+        <div class="import-preview-section">
+          <h4>Backup Info</h4>
+          <table class="import-preview-table">
+            <tr><td>Exported At</td><td>{{ formatExportDate(importPreview.exportedAt) }}</td></tr>
+            <tr><td>Schema Version</td><td>{{ importPreview.schemaVersion }}</td></tr>
+            <tr><td>Export Type</td><td>{{ importPreview.exportType }}</td></tr>
+            <tr><td>Source URL</td><td><code>{{ importPreview.sourceUrl }}</code></td></tr>
+          </table>
+        </div>
+
+        <!-- URL Mismatch Warning -->
+        <div class="import-url-warning" *ngIf="importPreview.urlMismatch">
+          <h4>⚠️ Image URL Mismatch Detected</h4>
+          <p>Images in this backup point to: <code>{{ importPreview.sourceUrl }}</code></p>
+          <p>This site's URL is: <code>{{ importPreview.currentUrl }}</code></p>
+          <p>Without rewriting, all images will continue loading from the <strong>old site</strong>.</p>
+          <label class="toggle-label" style="margin-top:10px;">
+            <input type="checkbox" [(ngModel)]="importOptions.rewriteUrls" />
+            <span>Rewrite all image URLs to this site's URL</span>
+          </label>
+          <p class="hint-text" *ngIf="importOptions.rewriteUrls" style="margin-top:6px;">
+            Thumbnail, fullImage, fullImageHiRes, section imageUrl, and logo URL will all be updated.
+          </p>
+        </div>
+
+        <!-- Editions Summary -->
+        <div class="import-preview-section" *ngIf="importPreview.hasEditions">
+          <h4>Editions Summary</h4>
+          <div class="import-diff-grid">
+            <div class="diff-card diff-card-info">
+              <span class="diff-count">{{ importPreview.currentEditionCount }}</span>
+              <span class="diff-label">Current Editions</span>
+            </div>
+            <div class="diff-card diff-card-new">
+              <span class="diff-count">{{ importPreview.newEditions.length }}</span>
+              <span class="diff-label">New Editions</span>
+            </div>
+            <div class="diff-card diff-card-conflict">
+              <span class="diff-count">{{ importPreview.conflictingEditions.length }}</span>
+              <span class="diff-label">Conflicting Dates</span>
+            </div>
+          </div>
+          <p class="hint-text" *ngIf="importPreview.incomingDateRange">
+            Incoming range: <strong>{{ importPreview.incomingDateRange.from }}</strong> &rarr; <strong>{{ importPreview.incomingDateRange.to }}</strong>
+          </p>
+        </div>
+
+        <!-- Import Options -->
+        <div class="import-preview-section">
+          <h4>Import Options</h4>
+          <div class="form-group" *ngIf="importPreview.hasSettings">
+            <label class="toggle-label">
+              <input type="checkbox" [(ngModel)]="importOptions.importSettings" />
+              <span>Import Settings <small class="hint-text">(logo, social links, language, etc.)</small></span>
+            </label>
+          </div>
+          <div class="form-group" *ngIf="importPreview.hasEditions">
+            <label class="toggle-label">
+              <input type="checkbox" [(ngModel)]="importOptions.importEditions" />
+              <span>Import Editions <small class="hint-text">(news data)</small></span>
+            </label>
+          </div>
+          <div class="form-group" *ngIf="importPreview.hasEditions && importOptions.importEditions">
+            <label>Merge Mode</label>
+            <div class="input-mode-options" style="flex-direction:column; gap:6px; margin-top:6px;">
+              <label class="radio-option">
+                <input type="radio" name="mergeMode" value="overwrite-all" [(ngModel)]="importOptions.mergeMode" />
+                <span>Overwrite All <small class="hint-text">&mdash; replace all current editions</small></span>
+              </label>
+              <label class="radio-option">
+                <input type="radio" name="mergeMode" value="add-new" [(ngModel)]="importOptions.mergeMode" />
+                <span>Add New Only <small class="hint-text">&mdash; skip conflicting dates</small></span>
+              </label>
+              <label class="radio-option">
+                <input type="radio" name="mergeMode" value="add-and-replace" [(ngModel)]="importOptions.mergeMode" />
+                <span>Add New + Replace Conflicts <small class="hint-text">&mdash; keep editions not in backup</small></span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div style="padding:10px; background:#f0fdf4; border-radius:8px; border:1px solid #86efac; font-size:13px;">
+          💾 A full auto-backup of your current data will be downloaded automatically before import starts.
+        </div>
+
+      </ng-container>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" (click)="closeImportModal()">Cancel</button>
+      <button
+        class="btn btn-warning"
+        (click)="confirmImport()"
+        *ngIf="importValidation?.valid"
+        [disabled]="isImporting || (!importOptions.importSettings && !importOptions.importEditions)"
+      >
+        {{ isImporting ? 'Importing…' : 'Import' }}
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Image Cropper Modal (Enhanced) -->
+<div class="modal-overlay cropper-overlay" *ngIf="showImageCropper">
+  <div class="modal modal-large cropper-modal">
+
+    <!-- ── Toolbar ──────────────────────────────────────────────────── -->
+    <div class="cropper-toolbar">
+      <div class="cropper-toolbar-left">
+        <span class="cropper-title-icon">✂️</span>
+        <div class="cropper-title-block">
+          <span class="cropper-title">Visual Crop Selector</span>
+          <span class="cropper-section-badge" *ngIf="sectionForm.title">{{ sectionForm.title }}</span>
+        </div>
+      </div>
+
+      <!-- Aspect ratio -->
+      <div class="cropper-aspect-group">
+        <span class="group-label">Ratio</span>
+        <button class="aspect-btn" [class.active]="cropAspectRatio === null"   (click)="setCropAspectRatio(null)"   title="Free crop">Free</button>
+        <button class="aspect-btn" [class.active]="cropAspectRatio === 1.7778" (click)="setCropAspectRatio(1.7778)" title="16:9">16:9</button>
+        <button class="aspect-btn" [class.active]="cropAspectRatio === 1.3333" (click)="setCropAspectRatio(1.3333)" title="4:3">4:3</button>
+        <button class="aspect-btn" [class.active]="cropAspectRatio === 1.5"    (click)="setCropAspectRatio(1.5)"    title="3:2">3:2</button>
+        <button class="aspect-btn" [class.active]="cropAspectRatio === 1"      (click)="setCropAspectRatio(1)"      title="1:1">1:1</button>
+        <button class="aspect-btn" [class.active]="cropAspectRatio === 0.6667" (click)="setCropAspectRatio(0.6667)" title="2:3">2:3</button>
+      </div>
+
+      <!-- Tools -->
+      <div class="cropper-tools">
+        <button class="tool-btn" [class.active]="showCropGrid" (click)="showCropGrid = !showCropGrid" title="Toggle rule-of-thirds grid">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <rect x="3" y="3" width="18" height="18" rx="1"/>
+            <line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/>
+            <line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/>
+          </svg>
+          Grid
+        </button>
+        <button class="tool-btn" [disabled]="cropUndoStack.length === 0" (click)="undoCrop()" title="Undo (Ctrl+Z)">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>
+          </svg>
+          Undo
+        </button>
+        <button class="tool-btn" [disabled]="cropRedoStack.length === 0" (click)="redoCrop()" title="Redo (Ctrl+Shift+Z)">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <path d="M15 14l5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/>
+          </svg>
+          Redo
+        </button>
+      </div>
+
+      <!-- Zoom -->
+      <div class="cropper-zoom">
+        <button class="zoom-step-btn" (click)="zoomOut()" title="Zoom out">−</button>
+        <span class="zoom-pct">{{ (cropperZoom * 100) | number:'1.0-0' }}%</span>
+        <input type="range" min="0.25" max="3" step="0.05" [(ngModel)]="cropperZoom" title="Drag to zoom" />
+        <button class="zoom-step-btn" (click)="zoomIn()" title="Zoom in">+</button>
+      </div>
+
+      <button class="btn-close" (click)="closeCropper()" title="Close (Esc)">&times;</button>
+    </div>
+
+    <!-- ── Hint bar ─────────────────────────────────────────────────── -->
+    <div class="cropper-hint-bar">
+      <span>🖱 Drag to draw</span>
+      <span class="hint-sep">│</span>
+      <span>↔ Drag handles to resize</span>
+      <span class="hint-sep">│</span>
+      <span>✋ Drag inside to move</span>
+      <span class="hint-sep">│</span>
+      <span>⌨ Arrow keys nudge • Shift+Arrow = 10px • Ctrl+Z undo • Esc close</span>
+    </div>
+
+    <!-- ── Body ────────────────────────────────────────────────────── -->
+    <div class="cropper-layout">
+
+      <!-- Canvas -->
+      <div class="cropper-canvas-wrap">
+        <div class="cropper-stage"
+               [style.transform]="'scale(' + cropperZoom + ')'"
+               [style.transform-origin]="'top left'">
+
+            <img
+              #cropperImage
+              [src]="selectedPage?.fullImageHiRes || selectedPage?.fullImage"
+              alt="Full page"
+              (load)="onCropperImageLoad($event)"
+              draggable="false"
+              style="display:block;width:100%;height:auto;user-select:none;"
+            />
+
+            <!-- Rule-of-thirds grid over full image -->
+            <div class="crop-global-grid" *ngIf="showCropGrid && cropperImageLoaded">
+              <div class="grid-line grid-v" style="left:33.333%"></div>
+              <div class="grid-line grid-v" style="left:66.666%"></div>
+              <div class="grid-line grid-h" style="top:33.333%"></div>
+              <div class="grid-line grid-h" style="top:66.666%"></div>
+            </div>
+
+            <!-- Existing sections overlay (other sections on this page) -->
+            <ng-container *ngIf="cropperImageLoaded">
+              <div
+                *ngFor="let sec of getExistingSectionsForCropper()"
+                class="existing-section-box"
+                [class.dragging]="cropMode !== 'idle'"
+                [ngStyle]="getExistingSectionBoxStyle(sec)"
+                (mousedown)="onExistingSectionMouseDown($event, sec)"
+              >
+                <span class="section-box-label">{{ sec.title }}</span>
+                <div class="section-box-actions" *ngIf="sec.id === sectionForm.id">
+                  <button class="sec-btn sec-edit-btn"  (click)="jumpToCropSection(sec)" title="Edit this section's crop">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5l3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                    Edit
+                  </button>
+                  <button class="sec-btn sec-del-btn" (click)="deleteFromCropper(sec)" title="Delete this section">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+                    Delete
+                  </button>
+                </div>
+              </div>
+            </ng-container>
+
+            <!-- Main interaction overlay (catches all mouse/touch events) -->
+            <div
+              class="crop-overlay"
+              [style.cursor]="cropperCursor"
+              (mousedown)="onCropperMouseDown($event)"
+              (mousemove)="onCropperMouseMove($event)"
+              (mouseup)="onCropperMouseUp()"
+              (mouseleave)="onCropperMouseLeave()"
+              (touchstart)="onCropperTouchStart($event)"
+              (touchmove)="onCropperTouchMove($event)"
+              (touchend)="onCropperTouchEnd($event)"
+            ></div>
+
+            <!-- Dimming mask around crop area -->
+            <ng-container *ngIf="hasCropBox()">
+              <div class="crop-dim-top"    [ngStyle]="{top:'0',left:'0',right:'0',height:getCropStyle().top}"></div>
+              <div class="crop-dim-bottom" [ngStyle]="{top:'calc('+getCropStyle().top+' + '+getCropStyle().height+')',left:'0',right:'0',bottom:'0'}"></div>
+              <div class="crop-dim-left"   [ngStyle]="{top:getCropStyle().top,left:'0',width:getCropStyle().left,height:getCropStyle().height}"></div>
+              <div class="crop-dim-right"  [ngStyle]="{top:getCropStyle().top,left:'calc('+getCropStyle().left+' + '+getCropStyle().width+')',right:'0',height:getCropStyle().height}"></div>
+            </ng-container>
+
+            <!-- Active crop selection box -->
+            <div
+              class="crop-selection"
+              [style.left]="getCropStyle().left"
+              [style.top]="getCropStyle().top"
+              [style.width]="getCropStyle().width"
+              [style.height]="getCropStyle().height"
+              [style.display]="hasCropBox() ? 'block' : 'none'"
+            >
+              <!-- Thirds inside selection -->
+              <div class="crop-sel-thirds" *ngIf="showCropGrid">
+                <div class="sel-line sel-v" style="left:33.333%"></div>
+                <div class="sel-line sel-v" style="left:66.666%"></div>
+                <div class="sel-line sel-h" style="top:33.333%"></div>
+                <div class="sel-line sel-h" style="top:66.666%"></div>
+              </div>
+              <!-- Corner markers -->
+              <div class="crop-corner crop-corner-tl"></div>
+              <div class="crop-corner crop-corner-tr"></div>
+              <div class="crop-corner crop-corner-bl"></div>
+              <div class="crop-corner crop-corner-br"></div>
+            </div>
+
+            <!-- Resize handles (visual only, z-index above overlay) -->
+            <ng-container *ngIf="hasCropBox() && cropperImageLoaded">
+              <div *ngFor="let h of ['nw','n','ne','e','se','s','sw','w']"
+                class="resize-handle"
+                [class]="'rh-' + h"
+                [ngStyle]="getResizeHandleStyle(h)"
+              ></div>
+            </ng-container>
+
+        </div><!-- /cropper-stage -->
+      </div><!-- /canvas-wrap -->
+
+    </div><!-- /cropper-layout -->
+
+    <!-- ── Footer ──────────────────────────────────────────────────── -->
+    <div class="cropper-footer">
+      <div class="crop-info-row" *ngIf="hasCropBox(); else noCropInfo">
+        <div class="info-chip"><span class="chip-k">X</span><span class="chip-v">{{ sectionForm.x | number:'1.0-1' }}%</span></div>
+        <div class="info-chip"><span class="chip-k">Y</span><span class="chip-v">{{ sectionForm.y | number:'1.0-1' }}%</span></div>
+        <div class="info-chip"><span class="chip-k">W</span><span class="chip-v">{{ sectionForm.width | number:'1.0-1' }}%</span></div>
+        <div class="info-chip"><span class="chip-k">H</span><span class="chip-v">{{ sectionForm.height | number:'1.0-1' }}%</span></div>
+        <div class="info-chip info-chip-px" *ngIf="getCropPixelDimensions().w > 0">
+          <span class="chip-k">PX</span>
+          <span class="chip-v">{{ getCropPixelDimensions().w }} × {{ getCropPixelDimensions().h }}</span>
+        </div>
+        <div class="info-chip info-chip-mode" *ngIf="cropAspectRatio">
+          <span class="chip-k">⛓</span>
+          <span class="chip-v">Locked</span>
+        </div>
+      </div>
+      <ng-template #noCropInfo>
+        <div class="crop-no-sel">Draw a selection on the image above</div>
+      </ng-template>
+      <div class="cropper-footer-actions">
+        <button class="btn btn-secondary" (click)="closeCropper()">Cancel</button>
+        <button class="btn btn-primary" (click)="applyCrop()" [disabled]="!hasCropBox()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="20 6 9 17 4 12"/></svg>
+          Apply Crop
+        </button>
+      </div>
+    </div>
+
+  </div>
+
+
 </div>

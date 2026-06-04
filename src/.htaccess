@@ -2,10 +2,43 @@
 <IfModule mod_rewrite.c>
   RewriteEngine On
   RewriteBase /
+
+  # ---------------------------------------------------------------
+  # Social media crawler detection
+  # Internal rewrite (no redirect) to the WordPress /social endpoint so
+  # crawlers receive proper OG / Twitter Card meta tags without running JS.
+  #
+  # WHY internal rewrite instead of 302 redirect:
+  #   LiteSpeed/Apache decodes the request URI before mod_rewrite processes
+  #   it, so backreferences ($1, $2) contain decoded text (raw Bengali Unicode).
+  #   A 302 redirect would put that raw Unicode into the Location: header,
+  #   violating RFC 7230. WhatsApp's crawler cannot follow such redirects and
+  #   falls back to the generic site image.  An internal rewrite passes the
+  #   request directly to WordPress with no Location header — no encoding issue.
+  #
+  # rest_route is used instead of the pretty-permalink /wp-json/ URL because
+  # the internal rewrite does not update REQUEST_URI, so WordPress cannot
+  # determine the REST route from the URL; the explicit rest_route param works
+  # regardless of permalink configuration.
+  # ---------------------------------------------------------------
+  RewriteCond %{HTTP_USER_AGENT} "facebookexternalhit|Facebot|Twitterbot|Xbot|LinkedInBot|WhatsApp|Slackbot|Slackbot-LinkExpanding|TelegramBot|Discordbot|Pinterest|vkShare|W3C_Validator|Googlebot-Image" [NC]
+  RewriteRule ^$ /wp/index.php?rest_route=/digital-newspaper/v1/social&homepage=1 [NE,L,QSA]
+
+  # New canonical article URL format:
+  #   /YYYY-MM-DD/page-XX/edition-XX/post-xxxx
+  RewriteCond %{HTTP_USER_AGENT} "facebookexternalhit|Facebot|Twitterbot|Xbot|LinkedInBot|WhatsApp|Slackbot|Slackbot-LinkExpanding|TelegramBot|Discordbot|Pinterest|vkShare|W3C_Validator|Googlebot-Image" [NC]
+  RewriteRule ^([0-9]{4}-[0-9]{2}-[0-9]{2})/(page-[^/]+)/((?:edition)-[^/]+)/([^/?]+)/?$ /wp/index.php?rest_route=/digital-newspaper/v1/social&date=$1&page=$2&edition=$3&slug=$4 [NE,L,QSA]
+
+  # Legacy format kept for backward compatibility:
+  #   /YYYY-MM-DD/section-slug
+  RewriteCond %{HTTP_USER_AGENT} "facebookexternalhit|Facebot|Twitterbot|Xbot|LinkedInBot|WhatsApp|Slackbot|Slackbot-LinkExpanding|TelegramBot|Discordbot|Pinterest|vkShare|W3C_Validator|Googlebot-Image" [NC]
+  RewriteRule ^([0-9]{4}-[0-9]{2}-[0-9]{2})/([^/?]+)/?$ /wp/index.php?rest_route=/digital-newspaper/v1/social&date=$1&slug=$2 [NE,L,QSA]
+
   # Serve existing files and directories directly
   RewriteRule ^index\.html$ - [L]
   RewriteCond %{REQUEST_FILENAME} !-f
   RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteCond %{REQUEST_URI}      !^/wp/ [NC]
   # Catch-all: send everything else (including /admin/, /2026-01-01/, etc.) to index.html
   RewriteRule ^ /index.html [L]
 </IfModule>

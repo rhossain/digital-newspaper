@@ -1,11 +1,12 @@
 /* Modal share header */
 .modal-share-header {
   display: flex;
-  justify-content: space-between;
+  flex-direction: column;
+  justify-content: center;
   align-items: center;
-  padding: 20px 40px 20px 24px;
+  padding: 20px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(255, 255, 255, 0.95);
+  background: #ffffff;
   backdrop-filter: blur(10px);
   border-radius: 12px 12px 0 0;
 }
@@ -13,11 +14,13 @@
 .modal-logo {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 12px;
+  margin-bottom: 6px;
 }
 
 .logo-img {
-  height: 32px;
+  height: 65px;
   width: auto;
   object-fit: contain;
   flex-shrink: 0;
@@ -37,12 +40,14 @@
 
 .modal-share-buttons {
   display: flex;
-  gap: 12px;
+  justify-content: center;
+  gap: 6px;
+  padding-top: 8px;
 }
 
 .share-btn {
-  width: 44px;
-  height: 44px;
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
   border: none;
   cursor: pointer;
@@ -113,4 +118,36 @@
     width: 24px;
     height: 24px;
   }
+}
+
+.action-divider {
+  display: inline-block;
+  width: 1px;
+  height: 24px;
+  background: var(--color-border-ui, #ddd);
+  margin: 0 4px;
+  align-self: center;
+}
+
+.action-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border-ui, #ddd);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
+  background: var(--color-bg-surface, #f5f5f5);
+  color: var(--color-text-dark, #222);
+  transition: background 0.2s ease;
+  white-space: nowrap;
+}
+
+.action-btn:hover {
+  background: var(--color-primary-light, #e8f0fe);
+  color: var(--color-primary, #1a73e8);
+  border-color: var(--color-primary, #1a73e8);
 }

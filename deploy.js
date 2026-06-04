@@ -163,11 +163,38 @@ if (!fs.existsSync(htaccessPath)) {
 <IfModule mod_rewrite.c>
   RewriteEngine On
   RewriteBase /
+
+  # Social crawler rewrites: serve OG/Twitter HTML from WordPress endpoint
+  RewriteCond %{HTTP_USER_AGENT} "facebookexternalhit|Facebot|Twitterbot|LinkedInBot|WhatsApp|Slackbot|TelegramBot|Discordbot|Pinterest|vkShare|W3C_Validator|Googlebot-Image" [NC]
+  RewriteRule ^$ /wp/index.php?rest_route=/digital-newspaper/v1/social&homepage=1 [NE,L,QSA]
+
+  RewriteCond %{HTTP_USER_AGENT} "facebookexternalhit|Facebot|Twitterbot|LinkedInBot|WhatsApp|Slackbot|TelegramBot|Discordbot|Pinterest|vkShare|W3C_Validator|Googlebot-Image" [NC]
+  RewriteRule ^([0-9]{4}-[0-9]{2}-[0-9]{2})/(page-[^/]+)/((?:edition)-[^/]+)/([^/?]+)/?$ /wp/index.php?rest_route=/digital-newspaper/v1/social&date=$1&page=$2&edition=$3&slug=$4 [NE,L,QSA]
+
+  RewriteCond %{HTTP_USER_AGENT} "facebookexternalhit|Facebot|Twitterbot|LinkedInBot|WhatsApp|Slackbot|TelegramBot|Discordbot|Pinterest|vkShare|W3C_Validator|Googlebot-Image" [NC]
+  RewriteRule ^([0-9]{4}-[0-9]{2}-[0-9]{2})/([^/?]+)/?$ /wp/index.php?rest_route=/digital-newspaper/v1/social&date=$1&slug=$2 [NE,L,QSA]
+
   RewriteRule ^index\\.html$ - [L]
   RewriteCond %{REQUEST_FILENAME} !-f
   RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteCond %{REQUEST_URI} !^/wp/ [NC]
   RewriteRule ^ /index.html [L]
-</IfModule>`;
+</IfModule>
+
+# ---- Digital Newspaper: disable ModSecurity for the WordPress REST API ----
+# Host-level WAF modules (Imunify360, ModSecurity) can block authenticated
+# POST requests to /wp/wp-json/ before they reach the plugin, causing login
+# and save failures for users with valid credentials.
+# These rules disable the rule engine only for the Digital Newspaper REST API
+# and the WordPress media API used by the admin panel.
+<IfModule mod_security2.c>
+  SecRuleEngine Off
+</IfModule>
+<IfModule mod_security.c>
+  SecFilterEngine Off
+  SecFilterScanPOST Off
+</IfModule>
+# ---- end Digital Newspaper WAF bypass ----`;
   fs.writeFileSync(htaccessPath, htaccessContent);
   log('✓ .htaccess created', colors.green);
 }
