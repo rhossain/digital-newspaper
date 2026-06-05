@@ -1,50 +1,97 @@
-.global-loader {
+/* ─── Invisible full-screen interaction blocker ───────────────────────────── */
+.loader-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 99990;
+  cursor: wait;
+  /* Intentionally transparent — only blocks pointer events */
+  background: transparent;
+}
+
+/* ─── Visible status pill (bottom-left) ───────────────────────────────────── */
+.loader-pill {
   position: fixed;
   bottom: 24px;
   left: 24px;
   z-index: 99999;
   display: flex;
-  align-items: center;
-  gap: 10px;
-  background: rgba(20, 20, 30, 0.88);
+  align-items: flex-start;
+  gap: 12px;
+  background: rgba(15, 15, 25, 0.93);
   color: #fff;
-  padding: 10px 18px 10px 14px;
-  border-radius: 32px;
+  padding: 12px 20px 12px 14px;
+  border-radius: 36px;
   font-size: 13px;
   font-weight: 500;
   letter-spacing: 0.01em;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
-  backdrop-filter: blur(6px);
-  animation: loader-fade-in 0.2s ease;
-  pointer-events: none; /* don't block clicks */
+  box-shadow:
+    0 4px 24px rgba(0, 0, 0, 0.45),
+    0 1px 4px rgba(0, 0, 0, 0.25);
+  backdrop-filter: blur(8px);
+  animation: pill-in 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
+  max-width: min(480px, calc(100vw - 48px));
 }
 
-.spinner {
+/* ─── Spinner ──────────────────────────────────────────────────────────────── */
+.loader-spinner {
   flex-shrink: 0;
+  margin-top: 1px;
   width: 18px;
   height: 18px;
-  border: 2.5px solid rgba(255, 255, 255, 0.25);
+  border: 2.5px solid rgba(255, 255, 255, 0.22);
   border-top-color: #ffffff;
   border-radius: 50%;
   animation: spin 0.65s linear infinite;
 }
 
-.loader-label {
-  white-space: nowrap;
-  opacity: 0.9;
+/* ─── Text area ────────────────────────────────────────────────────────────── */
+.loader-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
+.loader-message {
+  white-space: nowrap;
+  opacity: 0.95;
+  line-height: 1.4;
+}
+
+.loader-slow-warn {
+  font-size: 11px;
+  opacity: 0.65;
+  font-weight: 400;
+  white-space: normal;
+  line-height: 1.45;
+  max-width: 320px;
+  animation: pill-in 0.3s ease;
+}
+
+/* ─── Animations ───────────────────────────────────────────────────────────── */
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
 
-@keyframes loader-fade-in {
+@keyframes pill-in {
   from {
     opacity: 0;
-    transform: translateY(8px);
+    transform: translateY(10px) scale(0.96);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* ─── Mobile adjustments ───────────────────────────────────────────────────── */
+@media (max-width: 480px) {
+  .loader-pill {
+    bottom: 16px;
+    left: 16px;
+    right: 16px;
+    border-radius: 16px;
+  }
+  .loader-message {
+    white-space: normal;
   }
 }

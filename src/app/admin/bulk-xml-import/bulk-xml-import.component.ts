@@ -334,6 +334,64 @@ export class BulkXmlImportComponent implements OnInit {
     this.buildDateEditionGroups();
   }
 
+  /**
+   * Rebuild `dateEditionGroups` from the current `importRows`.
+   *
+   * Groups rows first by (date, edition), then by assignedPageId within each
+   * date-edition group.  Existing collapsed state is preserved for groups
+   * that still exist after the rebuild.
+   */
+  buildDateEditionGroups(): void {
+    // Preserve which (date:edition) keys were collapsed so a re-build doesn't
+    // reset the UI state.
+    const collapsedKeys = new Set(
+      this.dateEditionGroups
+        .filter(g => g.collapsed)
+        .map(g => `${g.date}:${g.edition}`)
+    );
+
+    // Group rows by date+edition key
+    const deMap = new Map<string, { date: string; edition: number; rows: XmlImportRow[] }>();
+    for (const row of this.importRows) {
+      const key = `${row.date}:${row.edition}`;
+      if (!deMap.has(key)) {
+        deMap.set(key, { date: row.date, edition: row.edition, rows: [] });
+      }
+      deMap.get(key)!.rows.push(row);
+    }
+
+    // For each date-edition, group rows further by assignedPageId
+    const groups: DateEditionGroup[] = [];
+    for (const [deKey, de] of deMap) {
+      const pageMap = new Map<number, XmlImportRow[]>();
+      for (const row of de.rows) {
+        if (!pageMap.has(row.assignedPageId)) {
+          pageMap.set(row.assignedPageId, []);
+        }
+        pageMap.get(row.assignedPageId)!.push(row);
+      }
+
+      const pageGroups: PageGroup[] = Array.from(pageMap.entries())
+        .sort(([a], [b]) => a - b)
+        .map(([pageId, rows]) => ({ date: de.date, edition: de.edition, pageId, rows }));
+
+      groups.push({
+        date: de.date,
+        edition: de.edition,
+        groups: pageGroups,
+        collapsed: collapsedKeys.has(deKey),
+      });
+    }
+
+    // Sort: newest date first, then edition ascending
+    groups.sort((a, b) => {
+      const d = b.date.localeCompare(a.date);
+      return d !== 0 ? d : a.edition - b.edition;
+    });
+
+    this.dateEditionGroups = groups;
+  }
+
   queuedCountForPage(pageId: number): number {
     return this.importRows.filter(r => r.assignedPageId === pageId).length;
   }

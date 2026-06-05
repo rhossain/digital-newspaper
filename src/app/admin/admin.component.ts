@@ -1,4 +1,4 @@
-import { Component, OnInit, ViewChild, ElementRef, ChangeDetectorRef, HostListener } from '@angular/core';
+import { Component, OnInit, OnDestroy, ViewChild, ElementRef, ChangeDetectorRef, HostListener } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
@@ -7,18 +7,23 @@ import { NewspaperDataService, NewspaperPage, NewsSection, GlobalSettings, Newsp
 import { AuthService } from '../services/auth.service';
 import { ToasterService } from '../services/toaster.service';
 import { LoaderService } from '../services/loader.service';
+import { LockService, LockInfo } from '../services/lock.service';
+import { ActivityLogService, ActivityLogEntry, ActivityLogFilters, ACTION_LABELS, ACTION_COLOR } from '../services/activity-log.service';
+import { ActionTrackerDirective } from '../directives/action-tracker.directive';
 import { TranslationService } from '../i18n/translation.service';
 import { ADMIN_THEME } from './themes.config';
 import { BulkXmlImportComponent } from './bulk-xml-import/bulk-xml-import.component';
+import { Observable, Subscription, Subject, of } from 'rxjs';
+import { map, takeUntil } from 'rxjs/operators';
 
 @Component({
   selector: 'app-admin',
   standalone: true,
-  imports: [CommonModule, FormsModule, QuillModule, BulkXmlImportComponent],
+  imports: [CommonModule, FormsModule, QuillModule, BulkXmlImportComponent, ActionTrackerDirective],
   templateUrl: './admin.component.html',
   styleUrls: ['./admin.component.css']
 })
-export class AdminComponent implements OnInit {
+export class AdminComponent implements OnInit, OnDestroy {
   /** Active theme — set in themes.config.ts */
   readonly adminTheme = ADMIN_THEME;
 
@@ -44,7 +49,7 @@ export class AdminComponent implements OnInit {
   
   // UI State
   activeTab: 'pages' | 'sections' = 'pages';
-  activeMainTab: 'content' | 'settings' = 'content';
+  activeMainTab: 'content' | 'settings' | 'logs' = 'content';
   isEditingPage = false;
   isEditingSection = false;
   showImageCropper = false;
@@ -57,6 +62,43 @@ export class AdminComponent implements OnInit {
   // Vintage theme navigation state
   vintageView: 'pages' | 'sections' | 'section-detail' | 'editions' = 'pages';
   vintageSelectedSection: NewsSection | null = null;
+
+  // ─── Activity log state ───────────────────────────────────────────────────
+  logEntries: ActivityLogEntry[] = [];
+  logTotal = 0;
+  logPage = 1;
+  logPerPage = 30;
+  logLoading = false;
+  logIsLoadingMore = false;
+  logSortBy: 'created_at' | 'user_id' | 'action' | 'display_name' = 'created_at';
+  logSortDir: 'asc' | 'desc' = 'desc';
+  logActionFilter = '';
+  logUserFilter = 0;
+  logSearchFilter = '';
+  logDateFrom = '';
+  logDateTo = '';
+  logKnownUsers: { userId: number; displayName: string }[] = [];
+  expandedLogId: string | null = null;
+  readonly logActionLabels = ACTION_LABELS;
+  readonly logActionColor  = ACTION_COLOR;
+  readonly logActionKeys   = Object.keys(ACTION_LABELS);
+
+  // ─── Locking state ────────────────────────────────────────────────────────
+  /** Resource ID of the lock WE currently hold (null if none). */
+  private heldLockResource: string | null = null;
+  /** True when the currently selected page is locked by another user. */
+  isPageLockedByOther = false;
+  /** Display name of the user who holds the lock on the current page. */
+  lockHeldByName = '';
+  /** All active locks — fetched by the poll, used for admin management panel. */
+  activeLocks: LockInfo[] = [];
+  private lockPollSub?: Subscription;
+  /** Per-resource poll sub — used by non-admin users to detect lock release. */
+  private resourceLockPollSub?: Subscription;
+  /** Cancels any in-flight activity-log HTTP request when a new one starts. */
+  private logLoad$ = new Subject<void>();
+  /** Emits once on ngOnDestroy to clean up all long-lived subscriptions. */
+  private destroy$ = new Subject<void>();
   
   // Form Data
   pageForm: Partial<NewspaperPage> = {
@@ -267,22 +309,51 @@ export class AdminComponent implements OnInit {
   }
 
   previewEditSection(sec: NewsSection) {
-    this.selectPage(this.previewPage);
-    this.editSection(sec);
-    this.closePagePreview();
-    this.cdr.detectChanges();
+    const page = this.previewPage;
+    if (!page) return;
+    // Acquire lock for this page first; only open section editor if we get it.
+    this.acquirePageLockAsync(page.id).subscribe(acquired => {
+      if (!acquired) {
+        this.toaster.error(`${this.lockHeldByName} is currently editing this page. Editing is disabled.`);
+        this.closePagePreview();
+        this.cdr.detectChanges();
+        return;
+      }
+      this.selectedPage = page;
+      this.selectedSection = null;
+      this.activeTab = 'sections';
+      this.activityLog.track('page_select', { pageId: String(page.id), pageLabel: this.getPageLabel(page) });
+      this.editSection(sec);
+      this.closePagePreview();
+      this.cdr.detectChanges();
+    });
   }
 
   previewDeleteSection(sec: NewsSection) {
+    const page = this.previewPage;
+    if (!page) return;
+    // Simple guard: if any other user holds the lock on this page, deny deletion.
+    if (this.isPageLockedByOther) {
+      this.toaster.error(`${this.lockHeldByName} is currently editing this page. Deletion is disabled.`);
+      this.closePagePreview();
+      return;
+    }
     if (!confirm(`Delete section "${sec.title}"?`)) return;
-    this.dataService.deleteSection(this.previewPage.id, sec.id, this.selectedDate, this.selectedEditionNumber);
-    this.markUnsavedChanges();
+    const previewPageId = this.previewPage.id;
+    this.dataService.deleteSection(previewPageId, sec.id, this.selectedDate, this.selectedEditionNumber);
     const edition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);
     if (edition) this.pages = edition.pages;
-    this.previewPage = this.pages.find((p: any) => p.id === this.previewPage?.id) ?? null;
+    this.previewPage = this.pages.find((p: any) => p.id === previewPageId) ?? null;
     if (!this.previewPage) { this.closePagePreview(); return; }
     this.toaster.success('Section deleted.');
     this.cdr.detectChanges();
+    // Atomic server delete
+    this.dataService.deleteSectionAtomically(previewPageId, sec.id, this.selectedDate, this.selectedEditionNumber).subscribe({
+      error: () => {
+        this.markUnsavedChanges();
+        this.toaster.warning('Section deletion could not sync to server — click Save All to retry.');
+      }
+    });
   }
 
   constructor(
@@ -292,7 +363,9 @@ export class AdminComponent implements OnInit {
     private toaster: ToasterService,
     private authService: AuthService,
     private translationService: TranslationService,
-    private loader: LoaderService
+    private loader: LoaderService,
+    private lockService: LockService,
+    private activityLog: ActivityLogService
   ) {}
 
   ngOnInit() {
@@ -301,6 +374,19 @@ export class AdminComponent implements OnInit {
     this.availableDates = this.selectedDate ? [this.selectedDate] : [];
     this.backupHistory = this.dataService.getBackupHistory();
     this.verifyAuth();
+  }
+
+  ngOnDestroy(): void {
+    this.releaseCurrentLock();
+    this.lockPollSub?.unsubscribe();
+    this.resourceLockPollSub?.unsubscribe();
+    this.dataService.stopVersionPoll();
+    // Cancel any in-flight log request
+    this.logLoad$.next();
+    this.logLoad$.complete();
+    // Tear down all long-lived subscriptions (version poll listener, etc.)
+    this.destroy$.next();
+    this.destroy$.complete();
   }
 
   private markUnsavedChanges(): void {
@@ -392,6 +478,9 @@ export class AdminComponent implements OnInit {
   }
 
   logout() {
+    this.activityLog.logClientEvent('logout');
+    this.releaseCurrentLock();
+    this.dataService.stopVersionPoll();
     this.authService.logout();
     this.authForm.password = '';
   }
@@ -414,11 +503,358 @@ export class AdminComponent implements OnInit {
         this.loadCurrentEdition();
         this.loadSettings();
         this.markSaved();
-        this.cdr.detectChanges(); // Explicitly trigger change detection
+        this.startLockPoll();
+        this.startVersionPoll();
+        this.cdr.detectChanges();
       },
       error: (error) => console.error('Error loading data:', error)
     });
   }
+
+  /**
+   * Poll the server's dataVersion every 30 s.
+   * - If nobody is editing (no held lock): silently reload and update UI.
+   * - If actively editing: show a non-blocking warning so the user can
+   *   save their work before refreshing.
+   */
+  private startVersionPoll(): void {
+    this.dataService.stopVersionPoll();
+    this.dataService.startVersionPoll(30_000);
+    this.dataService.remoteDataChanged$.pipe(takeUntil(this.destroy$)).subscribe(() => {
+      if (!this.heldLockResource && !this.isEditingPage && !this.isEditingSection) {
+        // Not mid-edit — reload silently then refresh UI
+        this.dataService.loadData().subscribe({
+          next: () => {
+            this.availableDates = this.dataService.getAvailableDates();
+            this.loadCurrentEdition();
+            this.cdr.detectChanges();
+            this.toaster.success('Content updated by another user — view refreshed.');
+          }
+        });
+      } else {
+        // Mid-edit — warn without disrupting the form
+        this.toaster.warning('Another user added content. Save your work, then click Refresh to see updates.');
+      }
+    });
+  }
+
+  // ─── Lock helpers ─────────────────────────────────────────────────────────
+
+  /** Build the lock resource ID for the current page. */
+  private buildLockResource(pageId: number): string {
+    return `${this.selectedDate}:${this.selectedEditionNumber}:${pageId}`;
+  }
+
+  /** Acquire a lock when the user enters a page edit context. */
+  private acquirePageLock(pageId: number): void {
+    this.acquirePageLockAsync(pageId).subscribe();
+  }
+
+  /**
+   * Acquire a lock and return Observable<true> on success or Observable<false>
+   * when another user holds the lock.  Use this when the caller needs to know
+   * the result before opening a form.
+   */
+  private acquirePageLockAsync(pageId: number): Observable<boolean> {
+    const resource = this.buildLockResource(pageId);
+
+    // Don't re-acquire if we already hold this exact lock
+    if (this.heldLockResource === resource) return of(true);
+
+    // Release any previously held lock (and any resource poll) first
+    this.releaseCurrentLock();
+
+    return this.lockService.acquireLock(resource).pipe(
+      map(result => {
+        if (result.lockedByOther) {
+          this.isPageLockedByOther = true;
+          this.lockHeldByName = result.heldBy ?? 'Another user';
+          // Poll this resource so we notice when it becomes free
+          this.startResourceLockPoll(resource);
+          this.cdr.detectChanges();
+          return false;
+        }
+        this.heldLockResource = resource;
+        this.isPageLockedByOther = false;
+        this.lockHeldByName = '';
+        this.lockService.startHeartbeat(resource);
+        this.cdr.detectChanges();
+        return true;
+      })
+    );
+  }
+
+  /** Release our currently held lock (if any). */
+  private releaseCurrentLock(): void {
+    this.stopResourceLockPoll();
+    if (this.heldLockResource) {
+      this.lockService.stopHeartbeat();
+      this.lockService.releaseLock(this.heldLockResource).subscribe();
+      this.heldLockResource = null;
+    }
+    this.isPageLockedByOther = false;
+    this.lockHeldByName = '';
+  }
+
+  /**
+   * Poll a specific resource every 10 s so the UI updates when another user's
+   * lock expires or is released.  Works for all authenticated users.
+   */
+  private startResourceLockPoll(resourceId: string): void {
+    this.stopResourceLockPoll();
+    this.resourceLockPollSub = this.lockService.pollResourceLock(resourceId).subscribe(info => {
+      if (!info) {
+        // Lock was released — allow editing again
+        this.isPageLockedByOther = false;
+        this.lockHeldByName = '';
+        this.stopResourceLockPoll();
+        this.toaster.success('The page is now available for editing.');
+      } else {
+        this.isPageLockedByOther = true;
+        this.lockHeldByName = info.displayName;
+      }
+      this.cdr.detectChanges();
+    });
+  }
+
+  private stopResourceLockPoll(): void {
+    this.resourceLockPollSub?.unsubscribe();
+    this.resourceLockPollSub = undefined;
+  }
+
+  /** Start polling active locks for the admin lock-management panel.
+   *  Only administrators can call GET /locks — non-admins skip this poll. */
+  private startLockPoll(): void {
+    if (!this.isAdmin) return;
+    // Unsubscribe any existing poll before creating a new one to prevent
+    // duplicate intervals when startLockPoll() is called after re-login.
+    this.lockPollSub?.unsubscribe();
+    this.lockPollSub = undefined;
+
+    this.lockPollSub = this.lockService.pollLocks().subscribe({
+      next: locks => {
+        // null is the sentinel emitted when GET /locks returns 404 (plugin not
+        // yet deployed on the server). The Observable auto-completes after this
+        // so no further requests are made.
+        if (locks === null) {
+          console.info(
+            '[Digital Newspaper] The lock-management endpoint was not found on the server ' +
+            '(GET /digital-newspaper/v1/locks → 404). ' +
+            'Upload the latest digital-newspaper.php to enable real-time locking. ' +
+            'Editing continues normally without it.'
+          );
+          this.activeLocks = [];
+          this.cdr.detectChanges();
+          return;
+        }
+
+        this.activeLocks = locks;
+
+        // Refresh the lock banner for the currently-selected page
+        if (this.selectedPage && this.heldLockResource === null) {
+          const resource = this.buildLockResource(this.selectedPage.id);
+          const held = locks.find(l => l.resource === resource);
+          this.isPageLockedByOther = !!held;
+          this.lockHeldByName      = held?.displayName ?? '';
+        }
+        this.cdr.detectChanges();
+      },
+    });
+  }
+
+  /** Admin: force-release a lock from the management panel. */
+  adminForceReleaseLock(resource: string): void {
+    this.lockService.forceReleaseLock(resource).subscribe(() => {
+      this.activeLocks = this.activeLocks.filter(l => l.resource !== resource);
+      this.toaster.success('Lock released.');
+      this.cdr.detectChanges();
+    });
+  }
+
+  /** Used in template for lock TTL countdown. */
+  nowMs(): number { return Date.now(); }
+
+  /** Exposed Math.ceil for use in template. */
+  readonly Math = Math;
+
+  // ─── Activity log ─────────────────────────────────────────────────────────
+
+  get logHasMore(): boolean {
+    return this.logEntries.length < this.logTotal;
+  }
+
+  loadActivityLog(): void {
+    if (!this.isAdmin) return;
+    // Cancel any in-flight request from a previous load / filter change.
+    this.logLoad$.next();
+    // Reset to first page and replace entries (used on initial load / filter / sort change)
+    this.logPage = 1;
+    this.logEntries = [];
+    this.logLoading = true;
+    this.activityLog.flush(); // push any queued client events before loading
+    this.cdr.detectChanges();
+    const filters: ActivityLogFilters = {
+      page:     1,
+      per_page: this.logPerPage,
+      sort_by:  this.logSortBy,
+      sort_dir: this.logSortDir,
+      action:   this.logActionFilter  || undefined,
+      userId:   this.logUserFilter    || undefined,
+      search:   this.logSearchFilter  || undefined,
+      from:     this.logDateFrom      || undefined,
+      to:       this.logDateTo        || undefined,
+    };
+    this.activityLog.getLogs(filters).pipe(takeUntil(this.logLoad$)).subscribe(res => {
+      this.logEntries    = res.entries;
+      this.logTotal      = res.total;
+      this.logKnownUsers = res.users ?? [];
+      this.logLoading    = false;
+      this.cdr.detectChanges();
+    });
+  }
+
+  loadMoreLog(): void {
+    if (!this.isAdmin || this.logIsLoadingMore || !this.logHasMore) return;
+    this.logIsLoadingMore = true;
+    this.logPage++;
+    this.cdr.detectChanges();
+    const filters: ActivityLogFilters = {
+      page:     this.logPage,
+      per_page: this.logPerPage,
+      sort_by:  this.logSortBy,
+      sort_dir: this.logSortDir,
+      action:   this.logActionFilter  || undefined,
+      userId:   this.logUserFilter    || undefined,
+      search:   this.logSearchFilter  || undefined,
+      from:     this.logDateFrom      || undefined,
+      to:       this.logDateTo        || undefined,
+    };
+    this.activityLog.getLogs(filters).subscribe(res => {
+      this.logEntries    = [...this.logEntries, ...res.entries];
+      this.logTotal      = res.total;
+      this.logIsLoadingMore = false;
+      this.cdr.detectChanges();
+    });
+  }
+
+  onLogsScroll(event: Event): void {
+    const el = event.target as HTMLElement;
+    const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 200;
+    if (nearBottom && this.logHasMore && !this.logIsLoadingMore && !this.logLoading) {
+      this.loadMoreLog();
+    }
+  }
+
+  applyLogFilters(): void { this.loadActivityLog(); }
+
+  clearLogFilters(): void {
+    this.logActionFilter = '';
+    this.logUserFilter   = 0;
+    this.logSearchFilter = '';
+    this.logDateFrom     = '';
+    this.logDateTo       = '';
+    this.loadActivityLog();
+  }
+
+  setLogSort(col: 'created_at' | 'user_id' | 'action' | 'display_name'): void {
+    if (this.logSortBy === col) {
+      this.logSortDir = this.logSortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+      this.logSortBy  = col;
+      this.logSortDir = 'desc';
+    }
+    this.loadActivityLog();
+  }
+
+  logSortIcon(col: string): string {
+    if (this.logSortBy !== col) return '↕';
+    return this.logSortDir === 'asc' ? '↑' : '↓';
+  }
+
+  /** @deprecated — kept for any stale template references; use loadMoreLog() instead */
+  logPrevPage(): void {}
+  /** @deprecated — kept for any stale template references; use loadMoreLog() instead */
+  logNextPage(): void {}
+
+  toggleLogRow(id: string): void {
+    this.expandedLogId = this.expandedLogId === id ? null : id;
+  }
+
+  confirmClearLog(): void {
+    if (!confirm('Clear the entire activity log? This cannot be undone.')) return;
+    this.activityLog.clearLogs().subscribe(() => {
+      this.logEntries    = [];
+      this.logTotal      = 0;
+      this.logKnownUsers = [];
+      this.toaster.success('Activity log cleared.');
+      this.cdr.detectChanges();
+    });
+  }
+
+  exportLogCsv(): void {
+    // Load all pages for the current filter, then export
+    this.activityLog.getLogs({
+      ...this.buildLogFilters(),
+      page: 1, per_page: 500
+    }).subscribe(res => this.activityLog.exportCsv(res.entries));
+  }
+
+  private buildLogFilters(): ActivityLogFilters {
+    return {
+      sort_by:  this.logSortBy,
+      sort_dir: this.logSortDir,
+      action:   this.logActionFilter  || undefined,
+      userId:   this.logUserFilter    || undefined,
+      search:   this.logSearchFilter  || undefined,
+      from:     this.logDateFrom      || undefined,
+      to:       this.logDateTo        || undefined,
+    };
+  }
+
+  getLogActionLabel(action: string): string { return this.activityLog.getActionLabel(action); }
+  getLogActionColor(action: string): string { return this.activityLog.getActionColor(action); }
+
+  formatLogTimestamp(ts: string): string {
+    if (!ts) return '—';
+    try {
+      // PHP now returns ISO-8601 (with 'c' format). For any legacy entries
+      // stored as MySQL 'YYYY-MM-DD HH:MM:SS' (no timezone), treat as UTC by
+      // replacing the space with 'T' and appending 'Z'. All modern browsers
+      // and Safari parse this form correctly.
+      const iso = ts.includes('T') ? ts : ts.replace(' ', 'T') + 'Z';
+      return new Date(iso).toLocaleString([], {
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+      });
+    } catch { return ts; }
+  }
+
+  hasLogDetails(details: Record<string, string>): boolean {
+    return !!details && Object.keys(details).length > 0;
+  }
+
+  /**
+   * Memoized — returns the same array reference for the same `details` object
+   * reference, preventing repeated array allocations on every change-detection
+   * cycle (called 3 times per row in the template).
+   */
+  private _detailCache = new WeakMap<object, { key: string; value: string }[]>();
+
+  logDetailEntries(details: Record<string, string>): { key: string; value: string }[] {
+    if (!details || typeof details !== 'object') return [];
+    const cached = this._detailCache.get(details);
+    if (cached) return cached;
+    const result = Object.entries(details).map(([key, value]) => ({ key, value: String(value ?? '') }));
+    this._detailCache.set(details, result);
+    return result;
+  }
+
+  // ── trackBy helpers (prevent unnecessary DOM re-creation on *ngFor) ──────
+  trackByPageId(_: number, page: NewspaperPage): number { return page.id; }
+  trackBySectionId(_: number, sec: NewsSection): string { return sec.id; }
+  trackByEditionNum(_: number, ed: NewspaperEdition): number { return ed.edition ?? 1; }
+  trackByDate(_: number, date: string): string { return date; }
+  trackByLogId(_: number, entry: ActivityLogEntry): string { return entry.id; }
 
   loadCurrentEdition() {
     this.isLoadingEdition = true;
@@ -443,6 +879,8 @@ export class AdminComponent implements OnInit {
   }
 
   onDateChange() {
+    this.releaseCurrentLock();
+    this.activityLog.track('date_change', { date: this.selectedDate });
     this.selectedEditionNumber = 1;
     this.loadCurrentEdition();
     this.selectedPage = null;
@@ -454,6 +892,8 @@ export class AdminComponent implements OnInit {
   }
 
   onEditionChange(editionNumber: number) {
+    this.releaseCurrentLock();
+    this.activityLog.track('edition_change', { edition: String(editionNumber), date: this.selectedDate });
     this.selectedEditionNumber = editionNumber;
     this.selectedPage = null;
     this.selectedSection = null;
@@ -467,6 +907,7 @@ export class AdminComponent implements OnInit {
   createNewEdition() {
     const editionNumbers = this.editionsForDate.map(e => e.edition || 1);
     const nextEditionNumber = editionNumbers.length > 0 ? Math.max(...editionNumbers) + 1 : 2;
+    this.activityLog.track('edition_add', { date: this.selectedDate, edition: String(nextEditionNumber) });
 
     this.dataService.getOrCreateEdition(this.selectedDate, nextEditionNumber);
     this.markUnsavedChanges();
@@ -497,7 +938,7 @@ export class AdminComponent implements OnInit {
         ? { ...e, editionLabels: { en: this.editionLabelForm.en.trim(), bn: this.editionLabelForm.bn.trim() } }
         : e
     );
-    this.dataService['dataSubject'].next({ ...data, editions });
+    this.dataService.updateEditions(editions);
     this.markUnsavedChanges();
     this.editingEditionLabel = null;
     this.loadCurrentEdition();
@@ -580,6 +1021,8 @@ export class AdminComponent implements OnInit {
     this.selectedPage = page;
     this.selectedSection = null;
     this.activeTab = 'sections';
+    this.acquirePageLock(page.id);
+    this.activityLog.track('page_select', { pageId: String(page.id), pageLabel: this.getPageLabel(page) });
   }
 
   onPageNameSelectChange(value: string) {
@@ -627,15 +1070,25 @@ export class AdminComponent implements OnInit {
   }
 
   editPage(page: NewspaperPage) {
-    this.isEditingPage = true;
-    this.pageForm = { ...page, pageLabels: { en: page.pageLabels?.['en'] ?? '', bn: page.pageLabels?.['bn'] ?? '' } };
-    this.initPageNameSelects();
-    this.fullImageInputMode = 'url';
-    this.fullImageHiResInputMode = 'url';
-    this.thumbnailInputMode = 'url';
-    this.fullImageFile = null;
-    this.fullImageHiResFile = null;
-    this.thumbnailFile = null;
+    // Acquire the lock first; only open the form if we get it.
+    this.acquirePageLockAsync(page.id).subscribe(acquired => {
+      if (!acquired) {
+        this.toaster.error(`${this.lockHeldByName} is currently editing this page. Editing is disabled.`);
+        this.cdr.detectChanges();
+        return;
+      }
+      this.isEditingPage = true;
+      this.pageForm = { ...page, pageLabels: { en: page.pageLabels?.['en'] ?? '', bn: page.pageLabels?.['bn'] ?? '' } };
+      this.initPageNameSelects();
+      this.fullImageInputMode = 'url';
+      this.fullImageHiResInputMode = 'url';
+      this.thumbnailInputMode = 'url';
+      this.fullImageFile = null;
+      this.fullImageHiResFile = null;
+      this.thumbnailFile = null;
+      this.activityLog.track('page_edit', { pageId: String(page.id), pageLabel: this.getPageLabel(page) });
+      this.cdr.detectChanges();
+    });
   }
 
   savePage() {
@@ -675,40 +1128,51 @@ export class AdminComponent implements OnInit {
       } else {
         this.dataService.addPage(page, this.selectedDate, this.selectedEditionNumber);
       }
-      this.markUnsavedChanges();
-      
-      // Update local pages immediately from service (no network call)
-      const edition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);
-      if (edition) {
-        this.pages = edition.pages;
-      }
 
-      // Re-sync selectedPage so the cropper reflects the latest saved data
+      // Update local pages immediately (in-memory, no network)
+      const edition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);
+      if (edition) this.pages = edition.pages;
       if (this.selectedPage?.id === page.id) {
         this.selectedPage = this.pages.find(p => p.id === page.id) || null;
       }
 
       this.cancelPageEdit();
       this.toaster.success('Page saved successfully!');
-      this.autoSaveForVintage();
+      this.activityLog.track('page_save', { pageId: String(page.id), date: this.selectedDate, edition: String(this.selectedEditionNumber) });
+
+      // Atomic server save — only updates THIS page; other users' pages are untouched.
+      this.dataService.savePageAtomically(page, this.selectedDate, this.selectedEditionNumber).subscribe({
+        error: () => {
+          this.markUnsavedChanges(); // flag for Save All fallback
+          this.toaster.warning('Page could not sync to server — click Save All to retry.');
+        }
+      });
     }
   }
 
   deletePage(page: NewspaperPage) {
+    if (this.isPageLockedByOther) {
+      this.toaster.error(`${this.lockHeldByName} is currently editing this page. Deletion is disabled.`);
+      return;
+    }
     if (confirm(`Delete page ${page.id}?`)) {
       this.dataService.deletePage(page.id, this.selectedDate, this.selectedEditionNumber);
-      this.markUnsavedChanges();
-      if (this.selectedPage?.id === page.id) {
-        this.selectedPage = null;
-      }
-      
-      // Update local pages immediately from service (no network call)
+      if (this.selectedPage?.id === page.id) this.selectedPage = null;
+
+      // Update local pages immediately (in-memory, no network)
       const edition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);
-      if (edition) {
-        this.pages = edition.pages;
-      }
+      if (edition) this.pages = edition.pages;
+
       this.toaster.success('Page deleted successfully!');
-      this.autoSaveForVintage();
+      this.activityLog.track('page_delete', { pageId: String(page.id), date: this.selectedDate });
+
+      // Atomic server delete — only removes THIS page.
+      this.dataService.deletePageAtomically(page.id, this.selectedDate, this.selectedEditionNumber).subscribe({
+        error: () => {
+          this.markUnsavedChanges();
+          this.toaster.warning('Page deletion could not sync to server — click Save All to retry.');
+        }
+      });
     }
   }
 
@@ -717,12 +1181,20 @@ export class AdminComponent implements OnInit {
     this.pageForm = { id: 0, thumbnail: '', fullImage: '', fullImageHiRes: '', sections: [], pageLabels: { en: '', bn: '' } };
     this.pageNameSelect = '';
     this.pageFormErrors = {};
+    // Only release if we're not staying on the page (e.g. sections still selected)
+    if (!this.selectedPage) {
+      this.releaseCurrentLock();
+    }
   }
 
   // Section Management
   newSection() {
     if (!this.selectedPage) {
       alert('Please select a page first');
+      return;
+    }
+    if (this.isPageLockedByOther) {
+      this.toaster.error(`${this.lockHeldByName} is currently editing this page. Adding sections is disabled.`);
       return;
     }
     
@@ -744,6 +1216,10 @@ export class AdminComponent implements OnInit {
   }
 
   editSection(section: NewsSection) {
+    if (this.isPageLockedByOther) {
+      this.toaster.error(`${this.lockHeldByName} is currently editing this page. Editing sections is disabled.`);
+      return;
+    }
     this.isEditingSection = true;
     this.selectedSection = section;
     this.sectionForm = {
@@ -762,6 +1238,13 @@ export class AdminComponent implements OnInit {
   }
 
   saveSection(closeForm = true) {
+    // Guard: lock must not be held by another user at save time
+    // (newSection/editSection check on open, but the lock could have been
+    // acquired by someone else while the form was already open).
+    if (this.isPageLockedByOther) {
+      this.toaster.error(`${this.lockHeldByName} is currently editing this page. Your changes were not saved.`);
+      return;
+    }
     if (this.selectedPage && this.sectionForm.id && this.sectionForm.title) {
       const normalizedSectionId = this.normalizeSectionId(this.sectionForm.id);
 
@@ -790,33 +1273,40 @@ export class AdminComponent implements OnInit {
       const originalSectionId = this.selectedSection?.id || normalizedSectionId;
       const existingSection = currentPage?.sections.find(s => s.id === originalSectionId);
       
+      // Capture identifiers before any state changes
+      const savePageId = this.selectedPage.id;
+      const saveDate    = this.selectedDate;
+      const saveEdition = this.selectedEditionNumber;
+
       if (existingSection) {
-        this.dataService.updateSection(this.selectedPage.id, originalSectionId, section, this.selectedDate, this.selectedEditionNumber);
+        this.dataService.updateSection(savePageId, originalSectionId, section, saveDate, saveEdition);
       } else {
-        this.dataService.addSection(this.selectedPage.id, section, this.selectedDate, this.selectedEditionNumber);
+        this.dataService.addSection(savePageId, section, saveDate, saveEdition);
       }
-      this.markUnsavedChanges();
 
       this.sectionForm.id = normalizedSectionId;
 
-      // Sync bidirectional links: ensure every section linked from A also links back to A,
-      // and every section no longer linked from A removes A from its links.
+      // Sync bidirectional links (in-memory only; server gets full section via atomic save)
       this.syncBidirectionalLinks(normalizedSectionId, section.linkedSectionIds || []);
-      
-      // Update local pages immediately from service (no network call)
-      const edition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);
-      if (edition) {
-        this.pages = edition.pages;
-      }
-      // Update selected page reference
-      this.selectedPage = this.pages.find(p => p.id === this.selectedPage?.id) || null;
-      
-      
+
+      // Update local pages immediately (in-memory, no network)
+      const edition = this.dataService.getEditionByDateAndNumber(saveDate, saveEdition);
+      if (edition) this.pages = edition.pages;
+      this.selectedPage = this.pages.find(p => p.id === savePageId) || null;
+
       if (closeForm) {
         this.cancelSectionEdit();
         this.toaster.success('Section saved successfully!');
-        this.autoSaveForVintage();
+        this.activityLog.track('section_save', { sectionId: normalizedSectionId, title: section.title, pageId: String(savePageId) });
       }
+
+      // Atomic server save — fire-and-forget; only updates THIS section.
+      this.dataService.saveSectionAtomically(savePageId, section, originalSectionId, saveDate, saveEdition).subscribe({
+        error: () => {
+          this.markUnsavedChanges();
+          if (closeForm) this.toaster.warning('Section could not sync to server — click Save All to retry.');
+        }
+      });
     } else {
       console.error('Missing required fields:', {
         hasPage: !!this.selectedPage,
@@ -828,20 +1318,32 @@ export class AdminComponent implements OnInit {
   }
 
   deleteSection(section: NewsSection) {
+    if (this.isPageLockedByOther) {
+      this.toaster.error(`${this.lockHeldByName} is currently editing this page. Deletion is disabled.`);
+      return;
+    }
     if (this.selectedPage && confirm(`Delete section "${section.title}"?`)) {
-      this.dataService.deleteSection(this.selectedPage.id, section.id, this.selectedDate, this.selectedEditionNumber);
-      this.markUnsavedChanges();
-      
-      // Update local pages immediately from service (no network call)
-      const edition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);
-      if (edition) {
-        this.pages = edition.pages;
-      }
-      // Update selected page reference
-      this.selectedPage = this.pages.find(p => p.id === this.selectedPage?.id) || null;
-      
+      const delPageId  = this.selectedPage.id;
+      const delDate    = this.selectedDate;
+      const delEdition = this.selectedEditionNumber;
+
+      this.dataService.deleteSection(delPageId, section.id, delDate, delEdition);
+
+      // Update local pages immediately (in-memory, no network)
+      const edition = this.dataService.getEditionByDateAndNumber(delDate, delEdition);
+      if (edition) this.pages = edition.pages;
+      this.selectedPage = this.pages.find(p => p.id === delPageId) || null;
+
       this.toaster.success('Section deleted successfully!');
-      this.autoSaveForVintage();
+      this.activityLog.track('section_delete', { sectionTitle: section.title, pageId: String(delPageId) });
+
+      // Atomic server delete — only removes THIS section.
+      this.dataService.deleteSectionAtomically(delPageId, section.id, delDate, delEdition).subscribe({
+        error: () => {
+          this.markUnsavedChanges();
+          this.toaster.warning('Section deletion could not sync to server — click Save All to retry.');
+        }
+      });
     }
   }
 
@@ -868,6 +1370,7 @@ export class AdminComponent implements OnInit {
       alert('Please save the page with a full image URL first');
       return;
     }
+    this.activityLog.track('cropper_open', { pageId: String(this.selectedPage?.id ?? ''), sectionId: this.sectionForm.id ?? '' });
     this.showImageCropper = true;
     this.cropperImageLoaded = false;
     this.cropperZoom = 1;
@@ -1271,14 +1774,34 @@ export class AdminComponent implements OnInit {
   }
 
   deleteFromCropper(section: NewsSection) {
-    if (!this.selectedPage || !confirm(`Delete section "${section.title}"?`)) return;
-    this.dataService.deleteSection(this.selectedPage.id, section.id, this.selectedDate, this.selectedEditionNumber);
+    if (!this.selectedPage) return;
+    // Guard: don't allow deletion while another user holds the lock.
+    if (this.isPageLockedByOther) {
+      this.toaster.error(`${this.lockHeldByName} is currently editing this page. Deletion is disabled.`);
+      return;
+    }
+    if (!confirm(`Delete section "${section.title}"?`)) return;
+
+    // Capture identifiers before any state change.
+    const delPageId  = this.selectedPage.id;
+    const delDate    = this.selectedDate;
+    const delEdition = this.selectedEditionNumber;
+
+    this.dataService.deleteSection(delPageId, section.id, delDate, delEdition);
     this.markUnsavedChanges();
-    const edition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);
+    const edition = this.dataService.getEditionByDateAndNumber(delDate, delEdition);
     if (edition) this.pages = edition.pages;
-    this.selectedPage = this.pages.find(p => p.id === this.selectedPage?.id) ?? null;
+    this.selectedPage = this.pages.find(p => p.id === delPageId) ?? null;
     this.toaster.success('Section deleted.');
     this.cdr.detectChanges();
+
+    // Atomic server delete — keeps server in sync without a full-blob overwrite.
+    this.dataService.deleteSectionAtomically(delPageId, section.id, delDate, delEdition).subscribe({
+      error: () => {
+        this.markUnsavedChanges();
+        this.toaster.warning('Section deletion could not sync to server — click Save All to retry.');
+      }
+    });
   }
 
   /**
@@ -1327,7 +1850,7 @@ export class AdminComponent implements OnInit {
   }
 
   async generateAndUploadCroppedImageFromFullSize(fullImageUrl: string) {
-    this.loader.show();
+    this.loader.show('Generating crop — please wait…');
     this.isSavingCrop = true;
     this.cdr.detectChanges();
     try {
@@ -1523,7 +2046,7 @@ export class AdminComponent implements OnInit {
 
   uploadImageFile(imageData: string, fileName: string) {
     const file = this.dataUrlToFile(imageData, fileName);
-    this.loader.show();
+    this.loader.show('Uploading image…');
     this.uploadMediaFile(file, fileName)
       .then((url) => {
         this.sectionForm = {
@@ -1804,6 +2327,7 @@ export class AdminComponent implements OnInit {
 
   applyCrop() {
     if (this.hasCropBox() && this.cropperImageRef && this.selectedPage) {
+      this.activityLog.track('cropper_apply', { pageId: String(this.selectedPage.id), sectionId: this.sectionForm.id ?? '' });
       this.calculateCropCoordinates();
 
       if (this.shouldGenerateCroppedPostImage()) {
@@ -1839,6 +2363,11 @@ export class AdminComponent implements OnInit {
   }
 
   // Data Management
+  // ─── Conflict modal state ────────────────────────────────────────
+  showConflictModal = false;
+  conflictLastSavedBy = '';
+  private conflictPendingData: any = null;
+
   saveAllData() {
     if (this.hasUnsavedSettingsChanges) {
       this.commitSettingsFormToData();
@@ -1849,37 +2378,47 @@ export class AdminComponent implements OnInit {
       return;
     }
 
-    // Get the latest data from service to ensure we have all changes
     const currentData = this.dataService.getData();
-    
-    
+
     if (!currentData.editions || currentData.editions.length === 0) {
-      console.warn('No data to save!');
       this.toaster.warning('No data to save');
       return;
     }
-    
-    // Show immediate feedback
-    this.toaster.success('Saving data...');
 
     this.persistAllData(currentData);
   }
 
-  private persistAllData(currentData: any) {
-    // Save asynchronously without blocking UI
-    this.dataService.saveData(currentData).subscribe({
-      next: (response) => {
-        console.log('Save successful:', response);
+  private persistAllData(currentData: any, opts: { forceVersionOverwrite?: boolean } = {}) {
+    this.dataService.saveData(currentData, {
+      forceVersionOverwrite: opts.forceVersionOverwrite,
+    }).subscribe({
+      next: () => {
         this.markSaved();
         this.toaster.success('All data saved successfully!');
-        // NO RELOAD - data is already updated locally
-        // Just ensure selected page reference is current
         if (this.selectedPage) {
           this.selectedPage = this.pages.find(p => p.id === this.selectedPage?.id) || null;
         }
       },
       error: (error) => {
-        console.error('Error saving data:', error);
+        // ── Concurrent-edit conflict (version mismatch) ───────────────
+        if (error?.status === 409) {
+          const body = error?.error ?? {};
+          if (body.conflictType === 'version-mismatch') {
+            this.conflictLastSavedBy = body.lastSavedBy || 'another user';
+            this.conflictPendingData = currentData;
+            this.showConflictModal = true;
+            this.cdr.detectChanges();
+            return;
+          }
+          // empty-overwrite guard from the server
+          if (body.conflictType === 'empty-overwrite') {
+            this.toaster.error(
+              'Save rejected: your current view has no pages. Reload the admin panel before saving again.'
+            );
+            return;
+          }
+        }
+
         if (this.isRecoveredDataSaveBlocked(error)) {
           const proceed = confirm(
             'This data was rebuilt temporarily from WordPress Media Library and may not include your cropped sections/content.\n\n' +
@@ -1888,9 +2427,10 @@ export class AdminComponent implements OnInit {
           );
           if (proceed) {
             this.persistRecoveredData(currentData);
-            return;
           }
+          return;
         }
+
         const errMsg: string = error?.message ?? '';
         if (errMsg.startsWith('WAF_BLOCKED:')) {
           const detail = errMsg.replace('WAF_BLOCKED:', '').trim();
@@ -1899,10 +2439,8 @@ export class AdminComponent implements OnInit {
           );
         } else if ((error?.status ?? -1) === 0) {
           this.toaster.error(
-            'Save failed: The WordPress server could not be reached (status 0). ' +
-            'This is usually a CORS policy block or a network connectivity issue. ' +
-            'Check that your WordPress CORS settings allow requests from this app\'s origin, ' +
-            'and that the server is online.'
+            'Save failed: The WordPress server could not be reached. ' +
+            'Check that your server is online and CORS settings allow this app.'
           );
         } else {
           this.toaster.error(errMsg || 'Failed to save data');
@@ -1911,11 +2449,37 @@ export class AdminComponent implements OnInit {
     });
   }
 
+  /** User chose to reload the latest server data, discarding their local changes. */
+  resolveConflictByReloading(): void {
+    this.showConflictModal = false;
+    this.conflictPendingData = null;
+    this.toaster.info('Reloading latest data from server…');
+    this.loadData();
+  }
+
+  /** Admin/power-user chose to force-save their local version over the server's. */
+  resolveConflictByForcing(): void {
+    const data = this.conflictPendingData;
+    this.showConflictModal = false;
+    this.conflictPendingData = null;
+    this.conflictLastSavedBy = '';
+    if (data) {
+      this.toaster.warning('Force-saving your version…');
+      this.persistAllData(data, { forceVersionOverwrite: true });
+    }
+  }
+
+  dismissConflictModal(): void {
+    this.showConflictModal = false;
+    this.conflictPendingData = null;
+    this.conflictLastSavedBy = '';
+    this.toaster.warning('Your changes are still pending — save again or reload.');
+  }
+
   private persistRecoveredData(currentData: any) {
-    this.toaster.warning('Saving recovered data by explicit confirmation...');
+    this.toaster.warning('Saving recovered data by explicit confirmation…');
     this.dataService.saveData(currentData, { allowRecoveredData: true }).subscribe({
-      next: (response) => {
-        console.log('Recovered data save successful:', response);
+      next: () => {
         this.markSaved();
         this.toaster.success('Recovered data saved successfully!');
         if (this.selectedPage) {
@@ -1923,7 +2487,6 @@ export class AdminComponent implements OnInit {
         }
       },
       error: (error) => {
-        console.error('Error saving recovered data:', error);
         this.toaster.error(error.message || 'Failed to save recovered data');
       }
     });
@@ -1959,6 +2522,7 @@ export class AdminComponent implements OnInit {
     this.toaster.success(`Exported: ${filename}`);
     this.backupHistory = this.dataService.getBackupHistory();
     this.showExportModal = false;
+    this.activityLog.logClientEvent('export_download', { filename });
   }
 
   // ─── Import ──────────────────────────────────────────────────────
@@ -1976,8 +2540,7 @@ export class AdminComponent implements OnInit {
     }
 
     // Give immediate feedback — large backup files can take a moment to read
-    this.loader.show();
-    this.toaster.info(`Reading backup file…`);
+    this.loader.show('Reading backup file…');
 
     const reader = new FileReader();
     reader.onload = (e) => {
@@ -2026,7 +2589,7 @@ export class AdminComponent implements OnInit {
   confirmImport() {
     if (!this.importParsed || !this.importValidation?.valid) return;
     this.isImporting = true;
-    this.loader.show();
+    this.loader.show('Importing backup — please wait…');
 
     // Auto-backup current data before overwriting
     this.dataService.downloadExport({ exportType: 'full', exportScope: 'full' });
@@ -2078,7 +2641,7 @@ export class AdminComponent implements OnInit {
     );
     if (!proceed) return;
 
-    this.loader.show();
+    this.loader.show('Rebuilding data — this may take a moment…');
     this.dataService.rebuildDataFromSectionPosts().subscribe({
       next: (result) => {
         this.toaster.success(
@@ -2144,6 +2707,10 @@ export class AdminComponent implements OnInit {
     if (this.isSavingCrop) {
       event.preventDefault();
     }
+    // Best-effort lock release on tab close
+    if (this.heldLockResource) {
+      this.lockService.releaseOnUnload(this.heldLockResource);
+    }
   }
 
   goToViewer() {
@@ -2183,15 +2750,27 @@ export class AdminComponent implements OnInit {
     this.selectedPage = page;
     this.vintageView = 'sections';
     this.vintageSelectedSection = null;
+    this.acquirePageLock(page.id);
   }
 
   vintageSelectSection(section: NewsSection): void {
-    // Keep vintageView as 'sections' so Cancel returns to the post list
+    if (this.isPageLockedByOther) {
+      // Page is locked — stay on the sections grid and inform the user.
+      // Do NOT navigate to section-detail (which could be confused with editing).
+      this.toaster.info(`🔒 ${this.lockHeldByName} is editing this page. Viewing only.`);
+      return;
+    }
     this.vintageSelectedSection = section;
+    // Keep vintageView as 'sections' so Cancel returns to the post list
     this.editSection(section);
   }
 
   vintageBackToPages(): void {
+    // Release the lock for the page we're leaving before going back to the
+    // pages grid. Without this, the lock lingers and the next DELETE (from
+    // cancelPageEdit) fires while autoSaveForVintage is about to run,
+    // causing the loader guard to skip the auto-save.
+    this.releaseCurrentLock();
     this.selectedPage = null;
     this.vintageSelectedSection = null;
     this.vintageView = 'pages';
@@ -2250,7 +2829,7 @@ export class AdminComponent implements OnInit {
     const data = this.dataService.getData();
     const targetNum = ed.edition || 1;
     const updatedEditions = data.editions.filter(e => !(e.date === this.selectedDate && (e.edition || 1) === targetNum));
-    (this.dataService as any)['dataSubject'].next({ ...data, editions: updatedEditions });
+    this.dataService.updateEditions(updatedEditions);
     this.markUnsavedChanges();
     // If the deleted edition was selected, switch to edition 1
     if (this.selectedEditionNumber === targetNum) {
@@ -2262,6 +2841,14 @@ export class AdminComponent implements OnInit {
   }
 
   private autoSaveForVintage(): void {
+    // Only auto-save when using the vintage theme (which has no explicit Save
+    // button in its main flow) and only when there are actual unsaved changes.
+    // Skip if a save is already in-flight (loader active) — that would cause
+    // the outgoing stale payload to race against the in-flight one and could
+    // overwrite newly-saved data from another user.
+    if (this.adminTheme !== 'vintage') return;
+    if (!this.hasUnsavedChanges) return;
+    if (this.loader.isSaving) return;   // guard defined below
     this.saveAllData();
   }
 
@@ -2277,6 +2864,12 @@ export class AdminComponent implements OnInit {
 
   menuGoToSettings(): void {
     this.activeMainTab = 'settings';
+    this.closeMenu();
+  }
+
+  menuGoToActivityLog(): void {
+    this.activeMainTab = 'logs';
+    this.loadActivityLog();
     this.closeMenu();
   }
 
@@ -2375,7 +2968,8 @@ export class AdminComponent implements OnInit {
       this.fullImageFile = input.files[0];
       const ext = this.fullImageFile.name.split('.').pop()?.toLowerCase() || 'jpg';
       const fileName = this.buildPageImageFilename(ext, 'full');
-      this.loader.show();
+      this.loader.show('Uploading page image…');
+      this.activityLog.track('image_upload_page', { fileName, pageId: String(this.pageForm.id ?? '') });
       this.uploadMediaFile(this.fullImageFile, fileName)
         .then((url) => {
           this.pageForm.fullImage = url;
@@ -2401,7 +2995,7 @@ export class AdminComponent implements OnInit {
       this.fullImageHiResFile = input.files[0];
       const ext = this.fullImageHiResFile.name.split('.').pop()?.toLowerCase() || 'jpg';
       const fileName = this.buildPageImageFilename(ext, 'hires');
-      this.loader.show();
+      this.loader.show('Uploading high-res image…');
       this.uploadMediaFile(this.fullImageHiResFile, fileName)
         .then((url) => {
           this.pageForm.fullImageHiRes = url;
@@ -2430,7 +3024,7 @@ export class AdminComponent implements OnInit {
       this.thumbnailFile = input.files[0];
       const ext = this.thumbnailFile.name.split('.').pop()?.toLowerCase() || 'jpg';
       const fileName = this.buildPageImageFilename(ext, 'thumb');
-      this.loader.show();
+      this.loader.show('Uploading thumbnail…');
       this.uploadMediaFile(this.thumbnailFile, fileName)
         .then((url) => {
           this.pageForm.thumbnail = url;
@@ -2535,6 +3129,7 @@ export class AdminComponent implements OnInit {
   }
 
   saveSettings(): void {
+    this.activityLog.track('settings_save');
     const completeSettings = this.commitSettingsFormToData();
 
     // Get the updated data after settings change
@@ -2563,7 +3158,8 @@ export class AdminComponent implements OnInit {
       this.logoFile = input.files[0];
       const ext = this.logoFile.name.split('.').pop()?.toLowerCase() || 'jpg';
       const fileName = `logo_${Date.now()}.${ext}`;
-      this.loader.show();
+      this.loader.show('Uploading logo…');
+      this.activityLog.track('image_upload_logo', { fileName });
       this.uploadMediaFile(this.logoFile, fileName)
         .then((url) => {
           if (this.settingsForm.logo) {

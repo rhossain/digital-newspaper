@@ -1,7 +1,7 @@
 import { Injectable } from '@angular/core';
 import { HttpClient, HttpResponse } from '@angular/common/http';
-import { Observable, BehaviorSubject, timer, forkJoin, of, throwError } from 'rxjs';
-import { tap, map, catchError, timeout, retry, switchMap } from 'rxjs/operators';
+import { Observable, BehaviorSubject, Subject, Subscription, timer, forkJoin, interval, of, throwError } from 'rxjs';
+import { tap, map, catchError, timeout, retry, switchMap, debounceTime, distinctUntilChanged } from 'rxjs/operators';
 import { AuthService } from './auth.service';
 import { WP_BASE_URL } from '../config';
 
@@ -92,6 +92,12 @@ export interface GlobalSettings {
 export interface NewspaperData {
   settings?: GlobalSettings;
   editions: NewspaperEdition[];
+  /**
+   * Monotonically-increasing float timestamp stamped by PHP on every save.
+   * Angular reads it on load and echoes it back on save; the server uses it
+   * to detect concurrent-edit conflicts (optimistic concurrency control).
+   */
+  dataVersion?: number;
 }
 
 interface WpMediaItem {
@@ -160,6 +166,8 @@ export interface ServerDataBackupSummary {
 export interface SaveDataOptions {
   allowRecoveredData?: boolean;
   forceEmptyOverwrite?: boolean;
+  /** Bypass the optimistic-concurrency version check (admin force-save). */
+  forceVersionOverwrite?: boolean;
 }
 
 export interface ImportValidationResult {
@@ -245,9 +253,19 @@ export class NewspaperDataService {
 
   private dataSubject!: BehaviorSubject<NewspaperData>;
   private currentDateSubject!: BehaviorSubject<string>;
-  
+
   currentDate$!: Observable<string>;
   public data$!: Observable<NewspaperData>;
+
+  /**
+   * Emits the server's new dataVersion whenever the version poll detects
+   * a remote change. Components subscribe to decide whether to silently
+   * reload or warn the user before doing so.
+   */
+  readonly remoteDataChanged$ = new Subject<number>();
+
+  private versionPollSub?: Subscription;
+  private readonly versionUrl = `${WP_BASE_URL}/wp-json/digital-newspaper/v1/data/version`;
   
   // WordPress REST API base
   private assetsUrl = '/assets/newspaper-data.json';
@@ -268,7 +286,10 @@ export class NewspaperDataService {
     this.currentDateSubject = new BehaviorSubject<string>(this.getTodayDate());
     this.currentDate$ = this.currentDateSubject.asObservable();
     this.data$ = this.dataSubject.asObservable();
-    this.dataSubject.subscribe(data => this.cacheEmergencyDraft(data));
+    // Debounce emergency-draft writes: atomic saves fire rapidly; serialising
+    // the full dataset to JSON on every emission is expensive. 2 s is enough
+    // to capture any crash that happens during active editing.
+    this.dataSubject.pipe(debounceTime(2000)).subscribe(data => this.cacheEmergencyDraft(data));
   }
 
   // Date helper methods
@@ -790,6 +811,58 @@ export class NewspaperDataService {
     return fallback || '';
   }
 
+  // ─── Atomic (granular) save methods ─────────────────────────────────────
+  // Each method posts only the changed record to a dedicated PHP endpoint that
+  // does a server-side read-modify-write.  Two users editing DIFFERENT pages
+  // can now save simultaneously without overwriting each other's work.
+
+  private readonly pageAtomicUrl    = `${this.wpBaseUrl}/wp-json/digital-newspaper/v1/data/page`;
+  private readonly sectionAtomicUrl = `${this.wpBaseUrl}/wp-json/digital-newspaper/v1/data/section`;
+
+  private patchDataVersion(res: any): void {
+    if (res?.newDataVersion) {
+      this.dataSubject.next({ ...this.dataSubject.value, dataVersion: res.newDataVersion });
+    }
+  }
+
+  /** Atomically upsert a single page on the server (PUT /data/page). */
+  savePageAtomically(page: NewspaperPage, date: string, edition: number): Observable<any> {
+    const headers = this.auth.getAuthHeaders();
+    return this.http.put<any>(this.pageAtomicUrl, { date, edition, page }, { headers }).pipe(
+      tap(res => this.patchDataVersion(res))
+    );
+  }
+
+  /** Atomically delete a single page on the server (DELETE /data/page). */
+  deletePageAtomically(pageId: number, date: string, edition: number): Observable<any> {
+    const headers = this.auth.getAuthHeaders();
+    return this.http.delete<any>(this.pageAtomicUrl, { headers, body: { date, edition, pageId } }).pipe(
+      tap(res => this.patchDataVersion(res))
+    );
+  }
+
+  /**
+   * Atomically upsert a single section on the server (PUT /data/section).
+   * @param originalSectionId  The section's ID before any normalization/rename.
+   *                           Pass the same value as section.id if unchanged.
+   */
+  saveSectionAtomically(
+    pageId: number, section: NewsSection, originalSectionId: string, date: string, edition: number
+  ): Observable<any> {
+    const headers = this.auth.getAuthHeaders();
+    return this.http.put<any>(this.sectionAtomicUrl,
+      { date, edition, pageId, originalSectionId, section }, { headers }
+    ).pipe(tap(res => this.patchDataVersion(res)));
+  }
+
+  /** Atomically delete a single section on the server (DELETE /data/section). */
+  deleteSectionAtomically(pageId: number, sectionId: string, date: string, edition: number): Observable<any> {
+    const headers = this.auth.getAuthHeaders();
+    return this.http.delete<any>(this.sectionAtomicUrl,
+      { headers, body: { date, edition, pageId, sectionId } }
+    ).pipe(tap(res => this.patchDataVersion(res)));
+  }
+
   saveData(data: NewspaperData, options: SaveDataOptions = {}): Observable<any> {
     if (this.dataRecoveredFromMediaLibrary && !options.allowRecoveredData) {
       return throwError(() => new Error(
@@ -799,20 +872,32 @@ export class NewspaperDataService {
 
     // Update the local data
     this.dataSubject.next(data);
-    
+
     // Persist settings to localStorage for cross-window availability
     if (data.settings) {
       this.cacheSettings(data.settings);
     }
-    
-    // Save to backend API
+
+    // Save to backend API.
+    // Include the current dataVersion so the server can detect concurrent edits.
+    // ?force=1 bypasses both the empty-overwrite guard and the version check.
     const headers = this.auth.getAuthHeaders();
-    const saveUrl = options.forceEmptyOverwrite ? `${this.apiUrl}?force=1` : this.apiUrl;
+    const forceParam = (options.forceEmptyOverwrite || options.forceVersionOverwrite)
+      ? '?force=1'
+      : '';
+    const saveUrl = `${this.apiUrl}${forceParam}`;
+
     return this.http.post<unknown>(saveUrl, data, { headers }).pipe(
       map((response) => this.assertSaveAccepted(response)),
-      tap(() => {
+      tap((response: any) => {
         if (options.allowRecoveredData) {
           this.dataRecoveredFromMediaLibrary = false;
+        }
+        // Update local dataVersion to what the server stamped, so the NEXT save
+        // carries the correct version and won't trip the conflict guard.
+        if (response?.newDataVersion) {
+          const current = this.dataSubject.value;
+          this.dataSubject.next({ ...current, dataVersion: response.newDataVersion });
         }
       })
     );
@@ -1077,6 +1162,51 @@ export class NewspaperDataService {
     });
     // Persist to localStorage so new windows pick it up immediately
     this.cacheSettings(settings);
+  }
+
+  /**
+   * Replace the editions array in the in-memory store without a server round-trip.
+   * Use this for admin-side operations (edition label edits, edition deletion)
+   * that modify editions directly and rely on a subsequent saveAllData() or
+   * autoSaveForVintage() to persist the change.
+   *
+   * Prefer specific service methods (addPage, updateSection, …) for targeted edits.
+   */
+  updateEditions(editions: NewspaperEdition[]): void {
+    this.dataSubject.next({ ...this.dataSubject.value, editions });
+  }
+
+  // ─── Remote-change detection (version polling) ────────────────────────────
+
+  /**
+   * Start polling the lightweight /data/version endpoint every `intervalMs`
+   * milliseconds (default 30 s).
+   *
+   * When the server's dataVersion is newer than the locally cached one,
+   * `remoteDataChanged$` emits the new version. The caller decides whether to
+   * auto-reload silently or warn the user first (e.g., if they are mid-edit).
+   *
+   * Calling this a second time stops any existing poll before starting a new one.
+   */
+  startVersionPoll(intervalMs = 30_000): void {
+    this.stopVersionPoll();
+    // Emit immediately once, then every interval
+    this.versionPollSub = interval(intervalMs).subscribe(() => {
+      this.http.get<{ dataVersion: number }>(this.versionUrl).pipe(
+        catchError(() => of(null)) // network error → skip silently
+      ).subscribe(res => {
+        if (!res) return;
+        const local = this.dataSubject.value.dataVersion ?? 0;
+        if (res.dataVersion > local) {
+          this.remoteDataChanged$.next(res.dataVersion);
+        }
+      });
+    });
+  }
+
+  stopVersionPoll(): void {
+    this.versionPollSub?.unsubscribe();
+    this.versionPollSub = undefined;
   }
 
   getDefaultDate(): string {

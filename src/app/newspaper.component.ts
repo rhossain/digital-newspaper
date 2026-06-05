@@ -155,6 +155,21 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     
     this.loadNewspaperData();
 
+    // ── Remote-change detection ──────────────────────────────────────────────
+    // Poll the server's lightweight /data/version endpoint every 60 s.
+    // When a new version is detected (another user added/edited content), reload
+    // the data transparently so readers always see the latest edition without
+    // having to refresh the browser tab.
+    this.dataService.startVersionPoll(60_000);
+    const versionSub = this.dataService.remoteDataChanged$.subscribe(() => {
+      // Only reload if the user is not viewing a modal (section detail / image)
+      if (!this.showContentModal && !this.showImageModal) {
+        this.dataService.loadData().subscribe();
+        // dataService.data$ subscriber above handles UI refresh automatically
+      }
+    });
+    this.subscriptions.push(versionSub);
+
     // Detect mobile/tablet view and keep it updated on resize
     this.updateIsMobileView();
     this.resizeListener = () => {
@@ -166,6 +181,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
 
   ngOnDestroy() {
     this.subscriptions.forEach(sub => sub.unsubscribe());
+    this.dataService.stopVersionPoll();
     clearTimeout(this.resizeDebounceTimer);
     if (this.resizeListener) {
       window.removeEventListener('resize', this.resizeListener);

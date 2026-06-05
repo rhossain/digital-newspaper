@@ -4,6 +4,7 @@ import { provideRouter, Routes, UrlSerializer, DefaultUrlSerializer, UrlTree } f
 import { AppComponent } from './app/app.component';
 import { NewspaperComponent } from './app/newspaper.component';
 import { wpApiInterceptor } from './app/interceptors/wp-api.interceptor';
+import { loaderInterceptor } from './app/interceptors/loader.interceptor';
 
 const routes: Routes = [
   { path: '', component: NewspaperComponent },
@@ -26,7 +27,7 @@ class TrailingSlashUrlSerializer extends DefaultUrlSerializer {
 
 bootstrapApplication(AppComponent, {
   providers: [
-    provideHttpClient(withInterceptors([wpApiInterceptor])),
+    provideHttpClient(withInterceptors([wpApiInterceptor, loaderInterceptor])),
     provideRouter(routes),
     { provide: UrlSerializer, useClass: TrailingSlashUrlSerializer },
   ]
