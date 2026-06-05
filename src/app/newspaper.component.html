@@ -498,19 +498,22 @@
 
           <!-- Clickable sections overlay -->
           <div class="sections-overlay" *ngIf="imageLoaded">
-            <div
-              *ngFor="let section of currentPage.sections; trackBy: trackBySectionId"
-              class="clickable-section"
-              [style.left.%]="section.x"
-              [style.top.%]="section.y"
-              [style.width.%]="section.width"
-              [style.height.%]="section.height"
-              [class.selected]="selectedSection?.id === section.id"
-              (click)="selectSection(section)"
-              [title]="section.title"
-            >
-              <div class="section-label">{{ section.title }}</div>
-            </div>
+            <ng-container *ngFor="let section of currentPage.sections; trackBy: trackBySectionId">
+              <!-- Hide sections with zero crop coords (XML-imported but not yet cropped) -->
+              <div
+                *ngIf="section.width > 0 && section.height > 0"
+                class="clickable-section"
+                [style.left.%]="section.x"
+                [style.top.%]="section.y"
+                [style.width.%]="section.width"
+                [style.height.%]="section.height"
+                [class.selected]="selectedSection?.id === section.id"
+                (click)="selectSection(section)"
+                [title]="section.title"
+              >
+                <div class="section-label">{{ section.title }}</div>
+              </div>
+            </ng-container>
           </div>
         </div>
       </div>

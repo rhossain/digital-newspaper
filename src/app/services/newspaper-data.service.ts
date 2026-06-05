@@ -17,6 +17,10 @@ export interface NewsSection {
   pageId?: number;
   linkedSectionIds?: string[];
   showCaption?: boolean;
+  /** WordPress post ID returned by the PHP plugin after sync. Read-only from Angular. */
+  wpPostId?: number;
+  /** Origin of this section — 'xml' for bulk-imported, 'manual' for admin-created. */
+  importSource?: 'xml' | 'manual';
 }
 
 export interface NewspaperPage {
@@ -28,6 +32,8 @@ export interface NewspaperPage {
   sections: NewsSection[];
   /** Multilingual page name keyed by language code, e.g. { en: 'Sports', bn: 'খেলাধুলা' } */
   pageLabels?: { [lang: string]: string };
+  /** 'pending' = skeleton page created by XML import, no image yet. Absent or 'ready' = has image. */
+  imageStatus?: 'pending' | 'ready';
 }
 
 export interface NewspaperEdition {
@@ -186,6 +192,46 @@ export interface ImportOptions {
   rewriteUrls: boolean;
   oldBaseUrl?: string;
   newBaseUrl?: string;
+}
+
+// ─── XML Import types ─────────────────────────────────────────────────────────
+
+export interface XmlImportRow {
+  title: string;
+  content: string;
+  date: string;           // YYYY-MM-DD
+  edition: number;        // default 1
+  page: number;
+  derivedId: string;      // deterministic ID
+  duplicateStatus: 'new' | 'duplicate-exact' | 'duplicate-key';
+  importAction: 'skip' | 'overwrite' | 'import-as-new';
+  assignedPageId: number; // may differ from XML page after manual reassignment
+  rowIndex: number;
+  rawTitle: string;       // pre-sanitization, for display
+}
+
+export interface XmlParseError {
+  rowIndex: number;
+  field: string;
+  message: string;
+  severity: 'error' | 'warning';
+}
+
+export interface XmlImportResult {
+  rows: XmlImportRow[];
+  errors: XmlParseError[];
+  totalRows: number;
+  newCount: number;
+  duplicateCount: number;
+  errorCount: number;
+  dateRange: { min: string; max: string };
+}
+
+export interface XmlImportSummary {
+  created: number;
+  updated: number;
+  skipped: number;
+  skeletonPagesCreated: number;
 }
 
 @Injectable({
@@ -772,8 +818,39 @@ export class NewspaperDataService {
     );
   }
 
+  /**
+   * Applies the sectionPostIds map returned by the PHP plugin after a save,
+   * patching wpPostId onto every matching NewsSection in the in-memory data.
+   * The map key format is "{date}:{editionNumber}:{pageId}:{sectionId}".
+   */
+  private patchWpPostIds(sectionPostIds: Record<string, number>): void {
+    if (!sectionPostIds || typeof sectionPostIds !== 'object') return;
+    const currentData = this.getData();
+    const newEditions = currentData.editions.map(edition => {
+      const date = edition.date;
+      const edNum = edition.edition ?? 1;
+      return {
+        ...edition,
+        pages: edition.pages.map(page => ({
+          ...page,
+          sections: page.sections.map(section => {
+            const key = `${date}:${edNum}:${page.id}:${section.id}`;
+            const wpPostId = sectionPostIds[key];
+            return wpPostId ? { ...section, wpPostId } : section;
+          }),
+        })),
+      };
+    });
+    this.dataSubject.next({ ...currentData, editions: newEditions });
+  }
+
   private assertSaveAccepted(response: unknown): unknown {
     if (response && typeof response === 'object' && (response as { success?: unknown }).success === true) {
+      // Patch wpPostIds if the PHP plugin returned them
+      const payload = response as { sectionPostIds?: Record<string, number> };
+      if (payload.sectionPostIds) {
+        this.patchWpPostIds(payload.sectionPostIds);
+      }
       return response;
     }
 

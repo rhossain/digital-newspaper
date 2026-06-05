@@ -4,5 +4,5 @@
 // because Angular's HttpClient resolves the URL against the page's base URI.
 export const environment = {
   production: true,
-  wpBaseUrl: 'https://epaper.dailysangram.com/wp',
+  wpBaseUrl: 'https://nepaper.dailysangram.com/wp',
 };

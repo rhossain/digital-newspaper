@@ -9,11 +9,12 @@ import { ToasterService } from '../services/toaster.service';
 import { LoaderService } from '../services/loader.service';
 import { TranslationService } from '../i18n/translation.service';
 import { ADMIN_THEME } from './themes.config';
+import { BulkXmlImportComponent } from './bulk-xml-import/bulk-xml-import.component';
 
 @Component({
   selector: 'app-admin',
   standalone: true,
-  imports: [CommonModule, FormsModule, QuillModule],
+  imports: [CommonModule, FormsModule, QuillModule, BulkXmlImportComponent],
   templateUrl: './admin.component.html',
   styleUrls: ['./admin.component.css']
 })
@@ -168,6 +169,28 @@ export class AdminComponent implements OnInit {
     ]
   };
   
+  // ─── Bulk XML Import modal state
+  showBulkXmlImport = false;
+
+  openBulkXmlImport(): void {
+    this.closeMenu();
+    this.showBulkXmlImport = true;
+  }
+
+  onBulkXmlImportCompleted(event: { firstDate: string }): void {
+    this.showBulkXmlImport = false;
+    this.toaster.success('Bulk import complete!');
+    // Reload data and navigate to the first imported date
+    this.dataService.loadData().subscribe({
+      next: () => {
+        if (event.firstDate) {
+          this.selectedDate = event.firstDate;
+          this.onDateChange();
+        }
+      },
+    });
+  }
+
   // ─── Export modal state
   showExportModal = false;
   exportOptions: ExportOptions = {
@@ -502,6 +525,11 @@ export class AdminComponent implements OnInit {
     const name = this.translationService.getEditionName(num);
     this.translationService.setLanguage(prevLang);
     return name;
+  }
+
+  /** Number of pages in the current edition that have imageStatus === 'pending'. */
+  get pendingImagePagesCount(): number {
+    return this.pages.filter(p => p.imageStatus === 'pending').length;
   }
 
   /** Display label for a page in the admin UI (EN / BN side-by-side). */

@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- happy-path.xml — 10 posts across 2 dates, 2 editions, 3 pages -->
+<newspaper>
+  <!-- Date 1, Edition 1, Page 1 -->
+  <post>
+    <title>Front Page Lead Story</title>
+    <content><![CDATA[<p>This is the lead story for today's front page. It covers breaking news from the capital.</p>]]></content>
+    <date>2026-06-01</date>
+    <edition>1</edition>
+    <page>1</page>
+  </post>
+  <post>
+    <title>Second Front Page Story</title>
+    <content><![CDATA[<p>A secondary story on the front page with <strong>bold text</strong> and <em>emphasis</em>.</p>]]></content>
+    <date>2026-06-01</date>
+    <edition>1</edition>
+    <page>1</page>
+  </post>
+  <post>
+    <title>Third Front Page Story</title>
+    <content><![CDATA[<p>Third story on the front page covering local government news.</p>]]></content>
+    <date>2026-06-01</date>
+    <edition>1</edition>
+    <page>1</page>
+  </post>
+
+  <!-- Date 1, Edition 1, Page 2 -->
+  <post>
+    <title>Sports Headlines</title>
+    <content><![CDATA[<p>Local football team wins national championship after a dramatic penalty shootout.</p>]]></content>
+    <date>2026-06-01</date>
+    <edition>1</edition>
+    <page>2</page>
+  </post>
+  <post>
+    <title>Cricket Match Report</title>
+    <content><![CDATA[<p>National cricket team secures a convincing victory in the second test match.</p>]]></content>
+    <date>2026-06-01</date>
+    <edition>1</edition>
+    <page>2</page>
+  </post>
+
+  <!-- Date 1, Edition 2, Page 1 -->
+  <post>
+    <title>Evening Edition: Market Update</title>
+    <content><![CDATA[<p>Stock markets closed higher today following positive economic data releases.</p>]]></content>
+    <date>2026-06-01</date>
+    <edition>2</edition>
+    <page>1</page>
+  </post>
+  <post>
+    <title>Evening Edition: Weather Forecast</title>
+    <content><![CDATA[<p>Heavy rainfall expected across the northern regions over the next 48 hours.</p>]]></content>
+    <date>2026-06-01</date>
+    <edition>2</edition>
+    <page>1</page>
+  </post>
+
+  <!-- Date 2, Edition 1, Pages 1–3 -->
+  <post>
+    <title>Yesterday's Top Story</title>
+    <content><![CDATA[<p>A retrospective on yesterday's most-read article, with updated commentary.</p>]]></content>
+    <date>2026-06-02</date>
+    <edition>1</edition>
+    <page>1</page>
+  </post>
+  <post>
+    <title>International Affairs</title>
+    <content><![CDATA[<p>Diplomatic talks resume between neighboring countries after a two-month pause.</p>]]></content>
+    <date>2026-06-02</date>
+    <edition>1</edition>
+    <page>2</page>
+  </post>
+  <post>
+    <title>Culture and Arts Roundup</title>
+    <content><![CDATA[<p>This week's cultural highlights include a major art exhibition opening and a theatre premiere.</p>]]></content>
+    <date>2026-06-02</date>
+    <edition>1</edition>
+    <page>3</page>
+  </post>
+</newspaper>

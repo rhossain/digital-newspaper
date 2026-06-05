@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- empty-content.xml — All content fields empty or missing.
+     Expected results:
+       - Row 1: title present, content empty → valid row (content is optional), content stored as ""
+       - Row 2: title present, content element absent → valid row, content stored as ""
+       - Row 3: title missing → error (title is required)
+       - Row 4: title empty string → error (title is required) -->
+<newspaper>
+  <!-- Valid: content is optional, empty string is acceptable -->
+  <post>
+    <title>Post With Empty Content Tag</title>
+    <content></content>
+    <date>2026-06-04</date>
+    <edition>1</edition>
+    <page>1</page>
+  </post>
+
+  <!-- Valid: content element is absent entirely -->
+  <post>
+    <title>Post Without Content Element</title>
+    <date>2026-06-04</date>
+    <edition>1</edition>
+    <page>1</page>
+  </post>
+
+  <!-- Error: title element is missing -->
+  <post>
+    <content><![CDATA[<p>No title on this post — should produce an error.</p>]]></content>
+    <date>2026-06-04</date>
+    <edition>1</edition>
+    <page>1</page>
+  </post>
+
+  <!-- Error: title is present but empty -->
+  <post>
+    <title></title>
+    <content><![CDATA[<p>Title is present but empty string — should produce an error.</p>]]></content>
+    <date>2026-06-04</date>
+    <edition>1</edition>
+    <page>1</page>
+  </post>
+</newspaper>

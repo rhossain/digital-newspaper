@@ -257,10 +257,15 @@ class Digital_Newspaper_API {
     return $data;
   }
 
-  public function save_data(array $data): void {
+  /**
+   * Persists $data and syncs dn_section posts.
+   *
+   * @return array<string, int>  section-key → WP post ID map (may be empty)
+   */
+  public function save_data(array $data): array {
     $this->snapshot_current_data_before_save();
     update_option(self::OPTION_KEY, $data, false);
-    $this->sync_section_posts_from_data($data);
+    return $this->sync_section_posts_from_data($data);
   }
 
   private function snapshot_current_data_before_save(): void {
@@ -361,9 +366,16 @@ class Digital_Newspaper_API {
     return array_map('intval', $posts ?: []);
   }
 
-  private function sync_section_posts_from_data(array $data): void {
+  /**
+   * Syncs every section in $data to a dn_section custom post and returns a
+   * map of section key → WP post ID so the REST response can round-trip the
+   * post IDs back to Angular.
+   *
+   * @return array<string, int>  e.g. [ '2026-06-04:1:2:xml-2026-06-04-e1-p2-hello' => 42 ]
+   */
+  private function sync_section_posts_from_data(array $data): array {
     if (empty($data['editions']) || !is_array($data['editions']) || $this->count_sections($data) === 0) {
-      return;
+      return [];
     }
 
     $seenKeys = [];
@@ -412,6 +424,8 @@ class Digital_Newspaper_API {
 
     $this->sync_linked_section_post_ids($data, $keyToPostId);
     $this->trash_stale_section_posts(array_keys($seenKeys));
+
+    return $keyToPostId;
   }
 
   private function upsert_section_post(
@@ -464,6 +478,13 @@ class Digital_Newspaper_API {
       'dn_page_id'            => $pageId,
       'dn_page_order'         => $pageIndex,
       'dn_page_labels'        => wp_json_encode($pageLabels),
+      'dn_page_name'          => sanitize_text_field((function () use ($pageLabels): string {
+        if (!empty($pageLabels) && is_array($pageLabels)) {
+          $first = reset($pageLabels);
+          if (is_string($first) && $first !== '') return $first;
+        }
+        return '';
+      })()),
       'dn_page_thumbnail'     => esc_url_raw((string) ($page['thumbnail'] ?? '')),
       'dn_page_full_image'    => esc_url_raw((string) ($page['fullImage'] ?? '')),
       'dn_page_full_hires'    => esc_url_raw((string) ($page['fullImageHiRes'] ?? '')),
@@ -1601,11 +1622,12 @@ HTML;
     // object; removing it here keeps the stored structure clean.
     unset($payload['meta']);
 
-    $this->save_data($payload);
+    $sectionPostIds = $this->save_data($payload);
 
     return rest_ensure_response([
-      'success' => true,
-      'message' => 'Data saved successfully'
+      'success'        => true,
+      'message'        => 'Data saved successfully',
+      'sectionPostIds' => $sectionPostIds,
     ]);
   }
 

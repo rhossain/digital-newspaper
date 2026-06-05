@@ -112,12 +112,12 @@
             <button class="vhdr-menu-item" (click)="menuAddNewDate()" role="menuitem">Add New Date</button>
           </div>
 
-          <!-- E-post (scope TBD — items functional shell only) -->
+          <!-- E-post -->
           <div class="vhdr-menu-group">
             <span class="vhdr-group-label">E-post</span>
             <button class="vhdr-menu-item vhdr-menu-item--soon" (click)="closeMenu()" role="menuitem">All E-posts</button>
             <button class="vhdr-menu-item vhdr-menu-item--soon" (click)="closeMenu()" role="menuitem">Add New E-post</button>
-            <button class="vhdr-menu-item vhdr-menu-item--soon" (click)="closeMenu()" role="menuitem">Add Bulk E-post</button>
+            <button class="vhdr-menu-item" (click)="openBulkXmlImport()" role="menuitem">Add Bulk E-post</button>
           </div>
 
           <!-- Admin-only section -->
@@ -365,7 +365,10 @@
             <img [src]="page.thumbnail || page.fullImage" [alt]="'Page ' + page.id" loading="lazy" decoding="async" />
           </div>
           <div class="page-info">
-            <h3>{{ getPageLabel(page) }}</h3>
+            <h3>
+              {{ getPageLabel(page) }}
+              <span class="badge-needs-image" *ngIf="page.imageStatus === 'pending'" title="Uploaded via XML import — page image not yet set">Needs image</span>
+            </h3>
             <p>{{ page.sections.length }} sections</p>
           </div>
           <div class="page-actions">
@@ -440,6 +443,14 @@
 
     <!-- Main Content -->
     <main class="main-content">
+
+      <!-- Pending image warning banner (shown when any page in current edition has imageStatus: 'pending') -->
+      <div class="pending-images-banner" *ngIf="pendingImagePagesCount > 0">
+        ⚠ <strong>{{ pendingImagePagesCount }} page(s) are missing images.</strong>
+        These pages' sections are saved but won't display in the viewer until you upload a page image and set crop coordinates.
+        <button class="pending-images-banner-link" (click)="activeTab = 'pages'">Set now →</button>
+      </div>
+
       <!-- Page Editor Modal -->
       <div class="modal-overlay" *ngIf="isEditingPage">
         <div class="modal">
@@ -657,6 +668,12 @@
               <label>Title *</label>
               <input type="text" [(ngModel)]="sectionForm.title" class="form-control" placeholder="Section headline" />
             </div>
+          </div>
+
+          <!-- WordPress Post ID (read-only, populated after save) -->
+          <div class="wp-post-id-badge" *ngIf="sectionForm.wpPostId">
+            WP Post ID: <strong>{{ sectionForm.wpPostId }}</strong>
+            <span class="wp-post-id-source" *ngIf="sectionForm.importSource === 'xml'">· XML import</span>
           </div>
 
           <div class="form-group">
@@ -894,6 +911,7 @@
               <div class="vpc-body">
                 <div class="vpc-meta-row vpc-meta-row--primary">
                   <span class="vpc-page-name">{{ getPageLabel(page) }}</span>
+                  <span class="badge-needs-image" *ngIf="page.imageStatus === 'pending'" title="Needs image upload">Needs image</span>
                 </div>
                 <div class="vpc-meta-row vpc-meta-row--secondary">
                   <span class="vpc-date">{{ formatDisplayDate(selectedDate) }}</span>
@@ -1501,6 +1519,13 @@
     </div>
   </div>
 </div>
+
+<!-- Bulk XML Import Modal -->
+<app-bulk-xml-import
+  *ngIf="showBulkXmlImport"
+  (closed)="showBulkXmlImport = false"
+  (importCompleted)="onBulkXmlImportCompleted($event)"
+></app-bulk-xml-import>
 
 <!-- Export Backup Modal -->
 <div class="modal-overlay" *ngIf="showExportModal">
