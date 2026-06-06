@@ -915,6 +915,76 @@ small {
   cursor: pointer;
 }
 
+/* Primary designation badge inside a linked-section row */
+.primary-tag {
+  margin-left: auto;
+  padding: 0.2rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.8rem;       /* slightly larger so the star glyph renders crisply */
+  font-weight: 600;
+  cursor: pointer;
+  border: 1.5px solid transparent;  /* transparent when inactive — no border clutter */
+  color: var(--color-text-muted);
+  opacity: 0.45;            /* dimmed when inactive — clearly not a status label */
+  transition: all 0.2s;
+  white-space: nowrap;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.primary-tag:hover {
+  opacity: 1;
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.primary-tag.active {
+  opacity: 1;
+  padding: 0.2rem 0.5rem; /* slightly wider to fit "★ Primary" text */
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: #fff;
+  font-size: 0.72rem;
+}
+
+/* "★ This section is the primary" notice above the linked-sections list */
+.current-primary-notice {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.6rem;
+  margin-bottom: 0.5rem;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--color-primary) 12%, transparent);
+  color: var(--color-primary);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+/* Row with the "Set this section as primary" button */
+.set-self-primary-row {
+  margin-bottom: 0.5rem;
+}
+
+.btn-set-self-primary {
+  background: none;
+  border: 1.5px dashed var(--color-border);
+  border-radius: 4px;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.78rem;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: all 0.2s;
+  width: 100%;
+  text-align: left;
+}
+
+.btn-set-self-primary:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  background: color-mix(in srgb, var(--color-primary) 6%, transparent);
+}
+
 .checkbox-label {
   display: flex;
   align-items: center;

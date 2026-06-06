@@ -14,7 +14,7 @@ import { TranslationService } from '../i18n/translation.service';
 import { ADMIN_THEME } from './themes.config';
 import { BulkXmlImportComponent } from './bulk-xml-import/bulk-xml-import.component';
 import { Observable, Subscription, Subject, of } from 'rxjs';
-import { map, takeUntil } from 'rxjs/operators';
+import { map, switchMap, takeUntil } from 'rxjs/operators';
 import { resizeImageToWidth } from '../shared/utils/image-resize.util';
 
 @Component({
@@ -1213,6 +1213,7 @@ export class AdminComponent implements OnInit, OnDestroy {
       imageUrl: '',
       pageId: this.selectedPage.id,
       linkedSectionIds: [],
+      linkedSectionPrimary: undefined,
       showCaption: true
     };
   }
@@ -1253,6 +1254,24 @@ export class AdminComponent implements OnInit, OnDestroy {
       // Clear imageUrl if auto-crop is selected
       const imageUrl = this.imageSourceOption === 'auto-crop' ? '' : (this.sectionForm.imageUrl || '');
       
+      // Prefer the admin's explicit primary choice; validate it is still in the linked list.
+      // Fall back to earliest-timestamp detection for old data or if the form primary is stale.
+      const linkedIds = this.sectionForm.linkedSectionIds || [];
+      const linkedSectionPrimary: string | undefined = (() => {
+        if (linkedIds.length === 0) return undefined;
+        const explicit = this.sectionForm.linkedSectionPrimary;
+        // Accept an explicit choice that refers to ANY section in this group —
+        // including the current section itself (self-reference = "I am the primary").
+        if (explicit && (explicit === normalizedSectionId || linkedIds.includes(explicit))) return explicit;
+        // Auto-fallback: pick the section with the earliest creation timestamp,
+        // including the CURRENT section being saved so it can win the race too.
+        const getTs = (id: string): number => {
+          const m = /^post-(\d+)$/.exec(id);
+          return m ? parseInt(m[1], 10) : Number.MAX_SAFE_INTEGER;
+        };
+        return [normalizedSectionId, ...linkedIds].reduce((best, id) => (getTs(id) < getTs(best) ? id : best));
+      })();
+
       // Create a clean copy of the section
       const section: NewsSection = {
         id: normalizedSectionId,
@@ -1264,11 +1283,28 @@ export class AdminComponent implements OnInit, OnDestroy {
         content: this.sectionForm.content || '',
         imageUrl: imageUrl,
         pageId: this.selectedPage.id,
-        linkedSectionIds: this.sectionForm.linkedSectionIds || [],
+        linkedSectionIds: linkedIds,
+        linkedSectionPrimary,
         showCaption: this.sectionForm.showCaption !== undefined ? this.sectionForm.showCaption : true
       };
-      
-      
+
+      // Content propagation (Case 1): if this section has no meaningful content and a primary
+      // section is designated, auto-copy the primary's HTML before any data-service write,
+      // so both the in-memory state and the server payload receive the correct content.
+      // Strips HTML tags to determine whether the content is truly empty (handles Quill's
+      // <p><br></p> placeholder as well as plain empty strings).
+      const hasRealContent = (html: string | undefined): boolean =>
+        html ? html.replace(/<[^>]*>/g, '').trim().length > 0 : false;
+
+      if (!hasRealContent(section.content) && section.linkedSectionPrimary) {
+        const primarySection = this.pages
+          .flatMap(p => p.sections)
+          .find(s => s.id === section.linkedSectionPrimary);
+        if (primarySection && hasRealContent(primarySection.content)) {
+          section.content = primarySection.content!;
+        }
+      }
+
       // Check if section exists by looking in the service data (not the stale selectedPage)
       const currentEdition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);
       const currentPage = currentEdition?.pages.find(p => p.id === this.selectedPage?.id);
@@ -1288,8 +1324,38 @@ export class AdminComponent implements OnInit, OnDestroy {
 
       this.sectionForm.id = normalizedSectionId;
 
-      // Sync bidirectional links (in-memory only; server gets full section via atomic save)
-      this.syncBidirectionalLinks(normalizedSectionId, section.linkedSectionIds || []);
+      // Sync bidirectional links in-memory AND collect changed sections for server persistence.
+      // syncBidirectionalLinks() reads pre-mutation state, so sectionsToSave is accurate.
+      const sectionsToSave = this.syncBidirectionalLinks(normalizedSectionId, section.linkedSectionIds || [], linkedSectionPrimary);
+
+      // Content propagation (Case 2): if THIS section has content and other sections in the
+      // group are empty AND designate this section as their primary, push the content to them.
+      // Covers: (a) back-linked sections now in the save queue, (b) forward-linked sections
+      // that were saved previously with linkedSectionPrimary pointing here.
+      if (hasRealContent(section.content)) {
+        // Build candidate list: sections already in the queue + forward-linked sections on disk
+        const candidates: Array<{ section: NewsSection; pageId: number }> = [...sectionsToSave];
+        for (const linkedId of (section.linkedSectionIds || [])) {
+          if (!candidates.some(c => c.section.id === linkedId)) {
+            for (const page of this.pages) {
+              const found = page.sections.find(s => s.id === linkedId);
+              if (found) { candidates.push({ section: found, pageId: page.id }); break; }
+            }
+          }
+        }
+        for (const candidate of candidates) {
+          if (candidate.section.linkedSectionPrimary !== normalizedSectionId) continue;
+          if (hasRealContent(candidate.section.content)) continue;
+          const updated: NewsSection = { ...candidate.section, content: section.content };
+          this.dataService.updateSection(candidate.pageId, candidate.section.id, updated, saveDate, saveEdition);
+          const inQueue = sectionsToSave.find(ls => ls.section.id === candidate.section.id);
+          if (inQueue) {
+            inQueue.section = updated;
+          } else {
+            sectionsToSave.push({ pageId: candidate.pageId, section: updated });
+          }
+        }
+      }
 
       // Update local pages immediately (in-memory, no network)
       const edition = this.dataService.getEditionByDateAndNumber(saveDate, saveEdition);
@@ -1302,11 +1368,25 @@ export class AdminComponent implements OnInit, OnDestroy {
         this.activityLog.track('section_save', { sectionId: normalizedSectionId, title: section.title, pageId: String(savePageId) });
       }
 
-      // Atomic server save — fire-and-forget; only updates THIS section.
-      this.dataService.saveSectionAtomically(savePageId, section, originalSectionId, saveDate, saveEdition).subscribe({
+      // Save primary section first, then each back-link SEQUENTIALLY to avoid server race conditions.
+      // Parallel saves to the same JSON file can cause the second write to overwrite the first.
+      this.dataService.saveSectionAtomically(savePageId, section, originalSectionId, saveDate, saveEdition).pipe(
+        switchMap(() => {
+          if (sectionsToSave.length === 0) return of(null as any);
+          // Chain each back-link save one after the other
+          return sectionsToSave.reduce(
+            (chain$: Observable<any>, ls) => chain$.pipe(
+              switchMap(() => this.dataService.saveSectionAtomically(
+                ls.pageId, ls.section, ls.section.id, saveDate, saveEdition
+              ))
+            ),
+            of(null as any)
+          );
+        })
+      ).subscribe({
         error: () => {
+          this.toaster.warning('Failed to save section to server.');
           this.markUnsavedChanges();
-          if (closeForm) this.toaster.warning('Section could not sync to server — click Save All to retry.');
         }
       });
     } else {
@@ -1343,7 +1423,7 @@ export class AdminComponent implements OnInit, OnDestroy {
       this.dataService.deleteSectionAtomically(delPageId, section.id, delDate, delEdition).subscribe({
         error: () => {
           this.markUnsavedChanges();
-          this.toaster.warning('Section deletion could not sync to server — click Save All to retry.');
+          this.toaster.warning('Section deletion could not sync to server. Please try again.');
         }
       });
     }
@@ -1361,7 +1441,8 @@ export class AdminComponent implements OnInit, OnDestroy {
       height: 0,
       content: '',
       imageUrl: '',
-      linkedSectionIds: []
+      linkedSectionIds: [],
+      linkedSectionPrimary: undefined
     };
   }
 
@@ -2893,40 +2974,68 @@ export class AdminComponent implements OnInit, OnDestroy {
 
   // Linked Sections Helper
 
-  /** Keeps linked sections in sync bidirectionally.
-   *  When section A links to B, B is automatically updated to link back to A.
-   *  When section A removes a link to B, B's back-link to A is also removed.
+  /**
+   * Keeps linked sections in sync bidirectionally AND returns the sections
+   * that were changed so they can be atomically persisted to the server.
+   *
+   * Reads the pre-mutation state before calling updateSection(), ensuring
+   * the returned list correctly reflects only the sections that actually changed.
+   *
+   * When section A links to B: B is automatically updated to link back to A.
+   * When section A removes a link to B: B's back-link to A is also removed.
    */
-  private syncBidirectionalLinks(currentSectionId: string, currentLinkedIds: string[]): void {
+  private syncBidirectionalLinks(
+    currentSectionId: string,
+    currentLinkedIds: string[],
+    linkedSectionPrimary: string | undefined
+  ): Array<{ pageId: number; section: NewsSection }> {
     const edition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);
-    if (!edition) return;
+    if (!edition) return [];
+
+    const sectionsToSave: Array<{ pageId: number; section: NewsSection }> = [];
 
     edition.pages.forEach(page => {
       page.sections.forEach(otherSection => {
         if (otherSection.id === currentSectionId) return;
 
-        const shouldBeLinked = currentLinkedIds.includes(otherSection.id);
+        // Read pre-mutation state BEFORE calling updateSection()
+        const shouldBeLinked  = currentLinkedIds.includes(otherSection.id);
         const isAlreadyLinked = otherSection.linkedSectionIds?.includes(currentSectionId) ?? false;
 
         if (shouldBeLinked && !isAlreadyLinked) {
-          // Add back-link
+          // Add back-link AND propagate the agreed primary for the whole group.
           const updated: NewsSection = {
             ...otherSection,
-            linkedSectionIds: [...(otherSection.linkedSectionIds || []), currentSectionId]
+            linkedSectionIds: [...(otherSection.linkedSectionIds || []), currentSectionId],
+            linkedSectionPrimary,
           };
           this.dataService.updateSection(page.id, otherSection.id, updated, this.selectedDate, this.selectedEditionNumber);
+          sectionsToSave.push({ pageId: page.id, section: updated });
         } else if (!shouldBeLinked && isAlreadyLinked) {
-          // Remove back-link
+          // Remove back-link. If the section's primary pointer referred to the section
+          // now being unlinked, clear it so there is no dangling reference.
+          const updatedPrimary =
+            otherSection.linkedSectionPrimary === currentSectionId
+              ? undefined
+              : otherSection.linkedSectionPrimary;
           const updated: NewsSection = {
             ...otherSection,
-            linkedSectionIds: (otherSection.linkedSectionIds || []).filter(id => id !== currentSectionId)
+            linkedSectionIds: (otherSection.linkedSectionIds || []).filter(id => id !== currentSectionId),
+            linkedSectionPrimary: updatedPrimary,
           };
           this.dataService.updateSection(page.id, otherSection.id, updated, this.selectedDate, this.selectedEditionNumber);
+          sectionsToSave.push({ pageId: page.id, section: updated });
+        } else if (shouldBeLinked && isAlreadyLinked && otherSection.linkedSectionPrimary !== linkedSectionPrimary) {
+          // Already linked but the primary designation has drifted — resync it.
+          const updated: NewsSection = { ...otherSection, linkedSectionPrimary };
+          this.dataService.updateSection(page.id, otherSection.id, updated, this.selectedDate, this.selectedEditionNumber);
+          sectionsToSave.push({ pageId: page.id, section: updated });
         }
       });
     });
-  }
 
+    return sectionsToSave;
+  }
   getAvailableSections(): NewsSection[] {
     const sections: NewsSection[] = [];
     this.pages.forEach(page => {
@@ -2936,6 +3045,12 @@ export class AdminComponent implements OnInit, OnDestroy {
         }
       });
     });
+    // Sort by page index (sequential: 1, 2, 3…) then by section order within page
+    sections.sort((a, b) => {
+      const pageIndexA = this.pages.findIndex(p => p.id === a.pageId);
+      const pageIndexB = this.pages.findIndex(p => p.id === b.pageId);
+      return pageIndexA - pageIndexB;
+    });
     return sections;
   }
 
@@ -2943,13 +3058,56 @@ export class AdminComponent implements OnInit, OnDestroy {
     if (!this.sectionForm.linkedSectionIds) {
       this.sectionForm.linkedSectionIds = [];
     }
-    
     const index = this.sectionForm.linkedSectionIds.indexOf(sectionId);
     if (index === -1) {
       this.sectionForm.linkedSectionIds.push(sectionId);
+      if (!this.sectionForm.linkedSectionPrimary) {
+        // Auto-designate: the section with the earliest creation timestamp wins.
+        // Include the current section being edited so it can be primary too.
+        const getTs = (id: string): number => {
+          const m = /^post-(\d+)$/.exec(id);
+          return m ? parseInt(m[1], 10) : Number.MAX_SAFE_INTEGER;
+        };
+        const currentId = this.normalizeSectionId(this.sectionForm.id);
+        this.sectionForm.linkedSectionPrimary =
+          getTs(currentId) <= getTs(sectionId) ? currentId : sectionId;
+      }
     } else {
       this.sectionForm.linkedSectionIds.splice(index, 1);
+      if (this.sectionForm.linkedSectionPrimary === sectionId) {
+        // Removed section was the primary — promote the next remaining linked section,
+        // or fall back to the current section being edited.
+        const next = this.sectionForm.linkedSectionIds[0];
+        const currentId = this.normalizeSectionId(this.sectionForm.id);
+        this.sectionForm.linkedSectionPrimary = next ?? currentId;
+      }
     }
+  }
+
+  /** Explicitly marks a linked section as the primary for this link group. */
+  setLinkedSectionPrimary(sectionId: string): void {
+    this.sectionForm.linkedSectionPrimary = sectionId;
+  }
+
+  /** Marks the section currently being edited as the primary of its link group. */
+  setCurrentSectionAsPrimary(): void {
+    this.sectionForm.linkedSectionPrimary = this.normalizeSectionId(this.sectionForm.id);
+  }
+
+  /** Returns true when the given section is the designated primary in the link group. */
+  isLinkedSectionPrimary(sectionId: string): boolean {
+    return this.sectionForm.linkedSectionPrimary === sectionId;
+  }
+
+  /**
+   * Returns true when the section currently being EDITED is itself the designated
+   * primary of its link group (linkedSectionPrimary points to its own ID).
+   * Used to show a "this section is primary" notice in the form.
+   */
+  isCurrentSectionThePrimary(): boolean {
+    if (!(this.sectionForm.linkedSectionIds?.length)) return false;
+    const currentId = this.normalizeSectionId(this.sectionForm.id);
+    return this.sectionForm.linkedSectionPrimary === currentId;
   }
 
   isLinked(sectionId: string): boolean {

@@ -16,6 +16,14 @@ export interface NewsSection {
   imageUrl?: string;
   pageId?: number;
   linkedSectionIds?: string[];
+  /**
+   * The ID of the primary (main article) section within this section's link group.
+   * Set automatically when the admin saves explicit linked sections — the earliest-created
+   * linked section becomes the primary. Used by the viewer for deterministic ordering:
+   * the primary always appears first in the right panel and modal, regardless of which
+   * section is currently selected. Absent on old data → viewer falls back to ID-timestamp sort.
+   */
+  linkedSectionPrimary?: string;
   showCaption?: boolean;
   /** WordPress post ID returned by the PHP plugin after sync. Read-only from Angular. */
   wpPostId?: number;
@@ -1079,15 +1087,21 @@ export class NewspaperDataService {
               return { ...updatedSection };
             }
 
-            if (!s.linkedSectionIds || s.linkedSectionIds.length === 0 || sectionId === nextSectionId) {
-              return s;
-            }
+            // When the ID is not changing, no cross-references need updating.
+            if (sectionId === nextSectionId) return s;
 
-            const linkedSectionIds = s.linkedSectionIds.map(linkedId =>
-              linkedId === sectionId ? nextSectionId : linkedId
-            );
+            // Update any references to the renamed section in linkedSectionIds and linkedSectionPrimary.
+            const hasLinkedRef = s.linkedSectionIds?.includes(sectionId) ?? false;
+            const hasPrimaryRef = s.linkedSectionPrimary === sectionId;
+            if (!hasLinkedRef && !hasPrimaryRef) return s;
 
-            return { ...s, linkedSectionIds };
+            return {
+              ...s,
+              ...(hasLinkedRef && {
+                linkedSectionIds: (s.linkedSectionIds ?? []).map(id => id === sectionId ? nextSectionId : id)
+              }),
+              ...(hasPrimaryRef && { linkedSectionPrimary: nextSectionId }),
+            };
           });
 
           return { ...page, sections: newSections };

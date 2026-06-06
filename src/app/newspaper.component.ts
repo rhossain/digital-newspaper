@@ -30,6 +30,8 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   showContentModal = false;
   showImageModal = false;
   linkedSections: NewsSection[] = [];
+  /** Resolved primary section ID for the current section's link group. Set by loadLinkedSections(). */
+  private linkedSectionPrimaryId: string | undefined;
   private imageElement: HTMLImageElement | null = null;
   
   // Modal image state
@@ -689,9 +691,12 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     if (this.pendingMobileModal) {
       this.pendingMobileModal = false;
       if (this.selectedSection && this.currentPage) {
+        const allSections = this.getModalSectionOrder();
+        // The main image failed — keep null for the first slot and show the
+        // selected section's title so the user has context for the error.
         this.modalImage = null;
         this.modalImageTitle = this.selectedSection.title;
-        this.modalLinkedSections = [...this.linkedSections];
+        this.modalLinkedSections = allSections.filter(s => s.id !== this.selectedSection!.id);
         this.showImageModal = true;
       }
     }
@@ -774,19 +779,8 @@ export class NewspaperComponent implements OnInit, OnDestroy {
 
   openImageModal() {
     if (this.croppedSectionImage && this.selectedSection && this.currentPage) {
-      // Collect all sections: main + linked
-      const allSections: NewsSection[] = [
-        { ...this.selectedSection, pageId: this.currentPage.id },
-        ...this.linkedSections
-      ];
-      
-      // Sort by page number
-      allSections.sort((a, b) => {
-        const pageA = a.pageId || 0;
-        const pageB = b.pageId || 0;
-        return pageA - pageB;
-      });
-      
+      const allSections = this.getModalSectionOrder();
+
       // Set first section as main modal image
       const firstSection = allSections[0];
       this.modalImage = firstSection.pageId === this.currentPage.id ? this.croppedSectionImage : this.getCroppedImageForSection(firstSection);
@@ -1006,21 +1000,9 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   }
 
   openLinkedSectionImage(linkedSection: NewsSection) {
-    // Show all sections in page order
     if (this.selectedSection && this.currentPage) {
-      // Collect all sections: main + linked
-      const allSections: NewsSection[] = [
-        { ...this.selectedSection, pageId: this.currentPage.id },
-        ...this.linkedSections
-      ];
-      
-      // Sort by page number
-      allSections.sort((a, b) => {
-        const pageA = a.pageId || 0;
-        const pageB = b.pageId || 0;
-        return pageA - pageB;
-      });
-      
+      const allSections = this.getModalSectionOrder(linkedSection);
+
       // Set first section as main modal image
       const firstSection = allSections[0];
       this.modalImage = firstSection.pageId === this.currentPage.id ? this.croppedSectionImage : this.getCroppedImageForSection(firstSection);
@@ -1034,37 +1016,115 @@ export class NewspaperComponent implements OnInit, OnDestroy {
 
   private loadLinkedSections(section: NewsSection) {
     this.linkedSections = [];
-    
-    if (!section.linkedSectionIds || section.linkedSectionIds.length === 0) {
-      return;
-    }
-    
-    // Find all linked sections across all pages
+
+    // Build a full lookup of every section across all pages.
+    const sectionById = new Map<string, NewsSection>();
     for (const page of this.pages) {
       for (const pageSection of page.sections) {
-        if (section.linkedSectionIds.includes(pageSection.id)) {
-          // Add pageId to the section for reference
-          this.linkedSections.push({
-            ...pageSection,
-            pageId: page.id
-          });
-        }
+        sectionById.set(pageSection.id, { ...pageSection, pageId: page.id });
       }
     }
-    
-    // Sort linked sections by pageId to maintain consistent order
-    this.linkedSections.sort((a, b) => {
-      const pageA = a.pageId || 0;
-      const pageB = b.pageId || 0;
-      return pageA - pageB;
-    });
 
-    // Trigger canvas cropping for linked sections that don't have their own imageUrl
-    for (const linked of this.linkedSections) {
-      if (!linked.imageUrl) {
-        this.cropLinkedSectionImage(linked);
+    // 1) Forward-linked sections: those this section explicitly names in linkedSectionIds.
+    const forwardIds = new Set<string>(section.linkedSectionIds ?? []);
+    const forwardLinked: NewsSection[] = (section.linkedSectionIds ?? [])
+      .map(id => sectionById.get(id))
+      .filter((s): s is NewsSection => !!s);
+
+    // 2) Reverse-reference sections: other sections that explicitly link TO this section.
+    //    This is a safety net — catches cases where the back-link atomic save failed
+    //    (server race condition) or was never stored (legacy data).
+    const reverseLinked: NewsSection[] = [];
+    for (const [id, other] of sectionById) {
+      if (id === section.id) continue;
+      if (!forwardIds.has(id) && other.linkedSectionIds?.includes(section.id)) {
+        reverseLinked.push(other);
       }
     }
+
+    // 3) Merge and deduplicate by ID.
+    const seen = new Set<string>();
+    const combined: NewsSection[] = [];
+    for (const s of [...forwardLinked, ...reverseLinked]) {
+      if (!seen.has(s.id)) {
+        seen.add(s.id);
+        combined.push(s);
+      }
+    }
+
+    // 4) Resolve the group primary: the section that was explicitly designated as primary
+    //    by another section's linkedSectionPrimary field takes precedence over timestamp order.
+    //    Include the current section in the group scan so its own linkedSectionPrimary is read too.
+    const fullGroup: NewsSection[] = [section, ...combined];
+    this.linkedSectionPrimaryId = this.resolveGroupPrimary(fullGroup);
+
+    // 5) Sort — explicit primary gets key 0 (always first); others sort by creation timestamp.
+    combined.sort((a, b) => this.getSectionSortKey(a, this.linkedSectionPrimaryId) - this.getSectionSortKey(b, this.linkedSectionPrimaryId));
+    this.linkedSections = combined;
+
+    // 6) Trigger canvas cropping for linked sections that don't have their own imageUrl.
+    for (const linked of this.linkedSections) {
+      if (!linked.imageUrl) this.cropLinkedSectionImage(linked);
+    }
+  }
+
+  /**
+   * Scans a group of sections to find an explicitly designated primary.
+   * A section designates a primary by setting linkedSectionPrimary to the ID of the
+   * main article in its group. The first designation found that points to a section
+   * actually present in the group wins. Returns undefined → fall back to timestamp sort.
+   */
+  private resolveGroupPrimary(group: NewsSection[]): string | undefined {
+    const groupIds = new Set(group.map(s => s.id));
+    for (const s of group) {
+      if (s.linkedSectionPrimary && groupIds.has(s.linkedSectionPrimary)) {
+        return s.linkedSectionPrimary;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Returns a numeric sort key for ordering sections within a group.
+   * - The explicitly-designated primary (primaryId) always gets key 0 → sorts first.
+   * - Other sections: sort by creation timestamp extracted from 'post-{Date.now()}' IDs.
+   * - Non-timestamp IDs (e.g. XML-imported) sort last (MAX_SAFE_INTEGER).
+   */
+  private getSectionSortKey(section: NewsSection, primaryId?: string): number {
+    if (primaryId !== undefined && section.id === primaryId) return 0;
+    const match = /^post-(\d+)$/.exec(section.id ?? '');
+    return match ? parseInt(match[1], 10) : Number.MAX_SAFE_INTEGER;
+  }
+
+  /**
+   * Returns all sections in the modal group (selected + linked) sorted by creation
+   * timestamp so the primary/earlier article always appears first — regardless of
+   * which section is currently selected or was clicked.
+   *
+   * Section IDs follow 'post-{Date.now()}' format; lower timestamp = created first
+   * = main/primary article. This produces a consistent, symmetric order:
+   * [Section-1 (older), Section-2 (newer), ...] from any viewing direction.
+   */
+  private getModalSectionOrder(_clickedLinkedSection?: NewsSection): NewsSection[] {
+    if (!this.selectedSection || !this.currentPage) return [];
+
+    const selectedWithPage: NewsSection = {
+      ...this.selectedSection,
+      pageId: this.currentPage.id
+    };
+
+    // Combine selected + linked, dedup by ID (guards against old mutual-link data),
+    // then sort by creation timestamp ascending.
+    const seen = new Set<string>();
+    const all: NewsSection[] = [];
+    for (const s of [selectedWithPage, ...this.linkedSections]) {
+      if (!seen.has(s.id)) {
+        seen.add(s.id);
+        all.push(s);
+      }
+    }
+    all.sort((a, b) => this.getSectionSortKey(a, this.linkedSectionPrimaryId) - this.getSectionSortKey(b, this.linkedSectionPrimaryId));
+    return all;
   }
 
   selectLinkedSection(linkedSection: NewsSection) {

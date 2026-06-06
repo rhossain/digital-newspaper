@@ -528,8 +528,9 @@ class Digital_Newspaper_API {
       'dn_crop_w'             => (string) (float) ($section['width'] ?? 0),
       'dn_crop_h'             => (string) (float) ($section['height'] ?? 0),
       'dn_cropped_image_url'  => esc_url_raw((string) ($section['imageUrl'] ?? '')),
-      'dn_linked_section_ids' => wp_json_encode($linkedSectionIds),
-      'dn_section_payload'    => wp_json_encode($section),
+      'dn_linked_section_ids'     => wp_json_encode($linkedSectionIds),
+      'dn_linked_section_primary' => sanitize_text_field((string) ($section['linkedSectionPrimary'] ?? '')),
+      'dn_section_payload'        => wp_json_encode($section),
     ];
 
     foreach ($meta as $metaKey => $metaValue) {
@@ -1713,6 +1714,8 @@ HTML;
           'linkedSectionIds' => is_array($linkedSectionIds) ? $linkedSectionIds : [],
           'showCaption' => true,
         ];
+        $lsp = (string) get_post_meta($post->ID, 'dn_linked_section_primary', true);
+        if ($lsp !== '') $payload['linkedSectionPrimary'] = $lsp;
       }
       $payload['_order'] = (int) get_post_meta($post->ID, 'dn_section_order', true);
       $editionMap[$editionKey]['_pages'][$pageKey]['sections'][] = $payload;

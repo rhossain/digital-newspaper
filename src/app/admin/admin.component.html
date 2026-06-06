@@ -436,7 +436,7 @@
               >
                 <span class="preview-sec-label">{{ sec.title }}</span>
                 <div class="preview-sec-actions">
-                  <button class="sec-btn sec-edit-btn" (click)="previewEditSection(sec)" title="Edit section">
+                  <button class="sec-btn sec-edit-btn" (click)="previewEditSection(sec)" title="Edit post">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5l3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                     Edit
                   </button>
@@ -672,14 +672,14 @@
       <!-- Section Form -->
       <div class="content-panel" *ngIf="isEditingSection">
         <div class="panel-header">
-          <h2>{{ selectedSection ? 'Edit' : 'New' }} Section</h2>
+          <h2>{{ selectedSection ? 'Edit' : 'New' }} Post</h2>
           <button class="btn btn-secondary" (click)="cancelSectionEdit()" dnTrack="section_cancel" [disabled]="isSavingCrop" [title]="isSavingCrop ? 'Please wait — cropped image is being saved…' : ''">Cancel</button>
         </div>
 
         <div class="section-form">
           <div class="form-row" style="margin-bottom: 0;">
             <div class="form-group">
-              <label>Section ID</label>
+              <label>Post ID</label>
               <input type="text" [(ngModel)]="sectionForm.id" readonly class="form-control" />
             </div>
             <div class="form-group">
@@ -706,7 +706,7 @@
             </quill-editor>
           </div>
 
-          <div class="form-group">            <label>Crop the news section Image</label>
+          <div class="form-group">            <label>Crop the news post Image</label>
             <div class="crop-controls">
               <!-- <div class="form-row">
                 <div class="form-group-sm">
@@ -755,7 +755,7 @@
           </div>
 
           <div class="form-group">
-            <label>Section Image Source</label>
+            <label>Post Image Source</label>
             <div style="margin-bottom: 12px;">
               <label style="display: block; margin-bottom: 8px; cursor: pointer;">
                 <input type="radio" [(ngModel)]="imageSourceOption" value="auto-crop" name="imageSource" style="margin-right: 8px;" />
@@ -796,7 +796,18 @@
           </div>
 
           <div class="form-group">
-            <label>Linked Sections</label>
+            <label>Linked Posts</label>
+            <div *ngIf="isCurrentSectionThePrimary()" class="current-primary-notice">
+              ★ This section is the primary — it appears first in the viewer
+            </div>
+            <div *ngIf="sectionForm.linkedSectionIds?.length && !isCurrentSectionThePrimary()" class="set-self-primary-row">
+              <button
+                type="button"
+                class="btn-set-self-primary"
+                (click)="setCurrentSectionAsPrimary()"
+                title="Make this section the primary — it will appear first in the viewer"
+              >☆ Set this section as primary</button>
+            </div>
             <div class="linked-sections-selector">
               <div 
                 *ngFor="let section of getAvailableSections()"
@@ -805,7 +816,14 @@
                 (click)="toggleLinkedSection(section.id)"
               >
                 <input type="checkbox" [checked]="isLinked(section.id)" />
-                <span>{{ section.title }} (Page {{ section.pageId }})</span>
+                <span>Page {{ section.pageId }} - {{ section.title }}</span>
+                <span
+                  *ngIf="isLinked(section.id)"
+                  class="primary-tag"
+                  [class.active]="isLinkedSectionPrimary(section.id)"
+                  (click)="$event.stopPropagation(); setLinkedSectionPrimary(section.id)"
+                  [title]="isLinkedSectionPrimary(section.id) ? 'Primary section — shown first in viewer' : 'Click to set as primary section'"
+                >{{ isLinkedSectionPrimary(section.id) ? '★ Primary' : '☆' }}</span>
               </div>
               <div *ngIf="getAvailableSections().length === 0" class="empty-message">
                 No other sections available
