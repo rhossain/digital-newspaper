@@ -57,6 +57,14 @@ export class LoaderService {
     return this.count.value > 0;
   }
 
+  /**
+   * Update the displayed message without changing the active-operation counter.
+   * Use this to reflect progress within a single show/hide pair.
+   */
+  setMessage(message: string): void {
+    this.message.next(message);
+  }
+
   /** Force-reset: use when an unhandled error leaves the counter stuck. */
   reset(): void {
     this.count.next(0);

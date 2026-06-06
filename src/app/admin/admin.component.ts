@@ -15,6 +15,7 @@ import { ADMIN_THEME } from './themes.config';
 import { BulkXmlImportComponent } from './bulk-xml-import/bulk-xml-import.component';
 import { Observable, Subscription, Subject, of } from 'rxjs';
 import { map, takeUntil } from 'rxjs/operators';
+import { resizeImageToWidth } from '../shared/utils/image-resize.util';
 
 @Component({
   selector: 'app-admin',
@@ -109,9 +110,9 @@ export class AdminComponent implements OnInit, OnDestroy {
   };
   
   // Image input modes
-  fullImageInputMode: 'url' | 'file' = 'url';
+  fullImageInputMode: 'url' | 'file' = 'file';
   fullImageHiResInputMode: 'url' | 'file' = 'url';
-  thumbnailInputMode: 'url' | 'file' = 'url';
+  thumbnailInputMode: 'url' | 'file' = 'file';
   fullImageFile: File | null = null;
   fullImageHiResFile: File | null = null;
   thumbnailFile: File | null = null;
@@ -1061,9 +1062,9 @@ export class AdminComponent implements OnInit, OnDestroy {
       pageLabels: { en: '', bn: '' }
     };
     this.pageNameSelect = '';
-    this.fullImageInputMode = 'url';
+    this.fullImageInputMode = 'file';
     this.fullImageHiResInputMode = 'url';
-    this.thumbnailInputMode = 'url';
+    this.thumbnailInputMode = 'file';
     this.fullImageFile = null;
     this.fullImageHiResFile = null;
     this.thumbnailFile = null;
@@ -1080,9 +1081,9 @@ export class AdminComponent implements OnInit, OnDestroy {
       this.isEditingPage = true;
       this.pageForm = { ...page, pageLabels: { en: page.pageLabels?.['en'] ?? '', bn: page.pageLabels?.['bn'] ?? '' } };
       this.initPageNameSelects();
-      this.fullImageInputMode = 'url';
+      this.fullImageInputMode = 'file';
       this.fullImageHiResInputMode = 'url';
-      this.thumbnailInputMode = 'url';
+      this.thumbnailInputMode = 'file';
       this.fullImageFile = null;
       this.fullImageHiResFile = null;
       this.thumbnailFile = null;
@@ -2331,8 +2332,9 @@ export class AdminComponent implements OnInit, OnDestroy {
       this.calculateCropCoordinates();
 
       if (this.shouldGenerateCroppedPostImage()) {
-        // Use percentage coordinates to crop from full-size image
-        const fullImageUrl = this.selectedPage.fullImage;
+        // Prefer the original hi-res image as the crop source so section crops
+        // retain full quality even though fullImage is now served at 700px.
+        const fullImageUrl = this.selectedPage.fullImageHiRes || this.selectedPage.fullImage;
         this.generateAndUploadCroppedImageFromFullSize(fullImageUrl);
       } else {
         this.toaster.success('Crop coordinates set!');
@@ -2962,26 +2964,61 @@ export class AdminComponent implements OnInit, OnDestroy {
     return !!this.pages.find(p => p.id === this.pageForm.id);
   }
 
-  onFullImageFileSelected(event: Event): void {
+  async onFullImageFileSelected(event: Event): Promise<void> {
     const input = event.target as HTMLInputElement;
-    if (input.files && input.files[0]) {
-      this.fullImageFile = input.files[0];
-      const ext = this.fullImageFile.name.split('.').pop()?.toLowerCase() || 'jpg';
-      const fileName = this.buildPageImageFilename(ext, 'full');
-      this.loader.show('Uploading page image…');
-      this.activityLog.track('image_upload_page', { fileName, pageId: String(this.pageForm.id ?? '') });
-      this.uploadMediaFile(this.fullImageFile, fileName)
-        .then((url) => {
-          this.pageForm.fullImage = url;
-          this.previewLoading = true;
-          this.cdr.detectChanges();
-          this.toaster.success('Full image uploaded');
-        })
-        .catch((error) => {
-          console.error('Error uploading full image:', error);
-          this.toaster.error('Failed to upload full image');
-        })
-        .finally(() => this.loader.hide());
+    if (!input.files || !input.files[0]) return;
+
+    const originalFile = input.files[0];
+
+    if (!originalFile.type.startsWith('image/')) {
+      this.toaster.error('Please select an image file');
+      return;
+    }
+    if (originalFile.size > 20 * 1024 * 1024) {
+      this.toaster.error('Image size must be less than 20MB');
+      return;
+    }
+
+    this.fullImageFile = originalFile;
+    this.loader.show('Resizing and uploading page image…');
+
+    try {
+      // Resize to 700px for the frontend center-panel display image.
+      const displayFile = await resizeImageToWidth(originalFile, 700, 0.92);
+      const displayFileName = this.buildPageImageFilename('jpg', 'full');
+
+      // Keep the original at full resolution for the section crop tool.
+      const hiResExt = originalFile.name.split('.').pop()?.toLowerCase() || 'jpg';
+      const hiResFileName = this.buildPageImageFilename(hiResExt, 'hires');
+
+      this.activityLog.track('image_upload_page', { fileName: displayFileName, pageId: String(this.pageForm.id ?? '') });
+
+      // Upload the 700px display copy and the original hi-res copy in parallel.
+      const [displayUrl, hiResUrl] = await Promise.all([
+        this.uploadMediaFile(displayFile, displayFileName),
+        this.uploadMediaFile(originalFile, hiResFileName)
+      ]);
+
+      this.pageForm.fullImage = displayUrl;
+      this.pageForm.fullImageHiRes = hiResUrl;
+      this.previewLoading = true;
+
+      // Auto-generate a 200px thumbnail from the original if none is set yet.
+      if (!this.pageForm.thumbnail) {
+        this.loader.setMessage('Generating thumbnail…');
+        const thumbFile = await resizeImageToWidth(originalFile, 300, 0.92);
+        const thumbFileName = this.buildPageImageFilename('jpg', 'thumb');
+        const thumbUrl = await this.uploadMediaFile(thumbFile, thumbFileName);
+        this.pageForm.thumbnail = thumbUrl;
+      }
+
+      this.cdr.detectChanges();
+      this.toaster.success('Full image uploaded');
+    } catch (error) {
+      console.error('Error uploading full image:', error);
+      this.toaster.error('Failed to upload full image: ' + (error instanceof Error ? error.message : 'Unknown error'));
+    } finally {
+      this.loader.hide();
     }
   }
 
@@ -3018,24 +3055,36 @@ export class AdminComponent implements OnInit, OnDestroy {
     this.previewLoading = false;
   }
 
-  onThumbnailFileSelected(event: Event): void {
+  async onThumbnailFileSelected(event: Event): Promise<void> {
     const input = event.target as HTMLInputElement;
-    if (input.files && input.files[0]) {
-      this.thumbnailFile = input.files[0];
-      const ext = this.thumbnailFile.name.split('.').pop()?.toLowerCase() || 'jpg';
-      const fileName = this.buildPageImageFilename(ext, 'thumb');
-      this.loader.show('Uploading thumbnail…');
-      this.uploadMediaFile(this.thumbnailFile, fileName)
-        .then((url) => {
-          this.pageForm.thumbnail = url;
-          this.cdr.detectChanges();
-          this.toaster.success('Thumbnail uploaded');
-        })
-        .catch((error) => {
-          console.error('Error uploading thumbnail:', error);
-          this.toaster.error('Failed to upload thumbnail');
-        })
-        .finally(() => this.loader.hide());
+    if (!input.files || !input.files[0]) return;
+
+    const originalFile = input.files[0];
+
+    if (!originalFile.type.startsWith('image/')) {
+      this.toaster.error('Please select an image file');
+      return;
+    }
+    if (originalFile.size > 10 * 1024 * 1024) {
+      this.toaster.error('Image size must be less than 10MB');
+      return;
+    }
+
+    this.thumbnailFile = originalFile;
+    this.loader.show('Resizing and uploading thumbnail…');
+
+    try {
+      const thumbFile = await resizeImageToWidth(originalFile, 300, 0.92);
+      const fileName = this.buildPageImageFilename('jpg', 'thumb');
+      const url = await this.uploadMediaFile(thumbFile, fileName);
+      this.pageForm.thumbnail = url;
+      this.cdr.detectChanges();
+      this.toaster.success('Thumbnail uploaded');
+    } catch (error) {
+      console.error('Error uploading thumbnail:', error);
+      this.toaster.error('Failed to upload thumbnail: ' + (error instanceof Error ? error.message : 'Unknown error'));
+    } finally {
+      this.loader.hide();
     }
   }
 
