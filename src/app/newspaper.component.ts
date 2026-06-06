@@ -1282,11 +1282,12 @@ export class NewspaperComponent implements OnInit, OnDestroy {
    *  Pass null to reset to site-level defaults. */
   private updateMetaTags(section: NewsSection | null): void {
     const siteName = this.settings?.logo?.alt || 'ইপেপার - দৈনিক সংগ্রাম';
+    const othersTitle = this.settings?.othersPageTitle?.trim() || siteName;
     const pageUrl = window.location.href;
 
     if (section) {
       // Title
-      const title = `${section.title} | ${siteName}`;
+      const title = `${section.title} - ${othersTitle}`;
       this.titleService.setTitle(title);
 
       // Description: strip HTML tags, collapse whitespace, truncate to 155 chars
@@ -1318,6 +1319,30 @@ export class NewspaperComponent implements OnInit, OnDestroy {
       this.meta.updateTag({ name: 'twitter:description', content: description });
       this.meta.updateTag({ name: 'twitter:creator',     content: siteName });
       this.meta.updateTag({ name: 'twitter:image',       content: imageUrl });
+    } else if (this.currentPage) {
+      const pageLabel = this.getPageLabel(this.currentPage);
+      const displayDate = this.translationService.formatDate(this.selectedDate, 'long');
+      const pageTitle = `${pageLabel} ${displayDate} - ${othersTitle}`;
+      const pageImageUrl = this.resolveImageUrl(this.currentPage.fullImage?.trim() ?? '');
+
+      this.titleService.setTitle(pageTitle);
+
+      this.meta.updateTag({ property: 'og:site_name', content: siteName });
+      this.meta.updateTag({ property: 'og:type',      content: 'article' });
+      this.meta.updateTag({ property: 'og:title',     content: pageTitle });
+      this.meta.updateTag({ property: 'og:description', content: pageTitle });
+      this.meta.updateTag({ property: 'og:url',       content: pageUrl });
+      this.meta.updateTag({ property: 'og:image',        content: pageImageUrl });
+      this.meta.updateTag({ property: 'og:image:secure_url', content: pageImageUrl });
+      this.meta.updateTag({ property: 'og:image:width',  content: '' });
+      this.meta.updateTag({ property: 'og:image:height', content: '' });
+
+      this.meta.updateTag({ name: 'twitter:card',        content: 'summary_large_image' });
+      this.meta.updateTag({ name: 'twitter:site',        content: siteName });
+      this.meta.updateTag({ name: 'twitter:title',       content: pageTitle });
+      this.meta.updateTag({ name: 'twitter:description', content: pageTitle });
+      this.meta.updateTag({ name: 'twitter:creator',     content: siteName });
+      this.meta.updateTag({ name: 'twitter:image',       content: pageImageUrl });
     } else {
       // Reset to site-level defaults
       this.titleService.setTitle(siteName);

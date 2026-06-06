@@ -146,7 +146,8 @@ export class AdminComponent implements OnInit, OnDestroy {
     language: 'en',
     headScripts: '',
     underMaintenance: false,
-    maintenanceMessage: ''
+    maintenanceMessage: '',
+    othersPageTitle: ''
   };
   logoInputMode: 'url' | 'file' = 'url';
   logoFile: File | null = null;
@@ -3122,7 +3123,8 @@ export class AdminComponent implements OnInit, OnDestroy {
       showBetaBadge: settings.showBetaBadge === true,
       headScripts: settings.headScripts ?? '',
       underMaintenance: settings.underMaintenance === true,
-      maintenanceMessage: settings.maintenanceMessage ?? ''
+      maintenanceMessage: settings.maintenanceMessage ?? '',
+      othersPageTitle: settings.othersPageTitle ?? ''
     };
     this.hasUnsavedSettingsChanges = false;
   }
@@ -3164,7 +3166,8 @@ export class AdminComponent implements OnInit, OnDestroy {
       showBetaBadge: this.settingsForm.showBetaBadge === true,
       headScripts: this.settingsForm.headScripts || '',
       underMaintenance: this.settingsForm.underMaintenance === true,
-      maintenanceMessage: this.settingsForm.maintenanceMessage || ''
+      maintenanceMessage: this.settingsForm.maintenanceMessage || '',
+      othersPageTitle: this.settingsForm.othersPageTitle || ''
     };
   }
 

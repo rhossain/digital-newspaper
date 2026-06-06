@@ -1333,8 +1333,13 @@
             />
           </div>
           <div class="form-group">
-            <label>Logo Alt Text</label>
+            <label>Home Page Title</label>
             <input type="text" [(ngModel)]="settingsForm.logo!.alt" class="form-control" placeholder="Digital Newspaper" />
+          </div>
+          <div class="form-group">
+            <label>Others Page Title</label>
+            <input type="text" [(ngModel)]="settingsForm.othersPageTitle" class="form-control" placeholder="দৈনিক সংগ্রাম ই-পেপার" />
+            <small class="hint-text">Appended to individual post titles — e.g. "Post Title - দৈনিক সংগ্রাম ই-পেপার"</small>
           </div>
           <div class="form-group">
             <label>Logo Link URL</label>

@@ -87,6 +87,8 @@ export interface GlobalSettings {
   maintenanceMessage?: string;
   /** Raw HTML string of <script> / <noscript> tags to inject into <head> (e.g. Google Analytics). */
   headScripts?: string;
+  /** Site name appended to individual post/section page titles, e.g. "দৈনিক সংগ্রাম ই-পেপার". */
+  othersPageTitle?: string;
 }
 
 export interface NewspaperData {
