@@ -403,6 +403,7 @@
               (keydown.enter)="pages.length > 1 && (pageDropdownOpen = !pageDropdownOpen)"
               [attr.tabindex]="pages.length > 1 ? 0 : -1"
             >
+              <span class="page-num-badge">{{ ts.toLocaleDigits(currentPage.id) }}</span>
               <span class="edition-label">{{ currentPage ? getPageLabel(currentPage) : '' }}</span>
               <svg *ngIf="pages.length > 1" class="edition-arrow" [class.open]="pageDropdownOpen"
                 width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
@@ -416,7 +417,8 @@
                 [class.active]="currentPage.id === page.id"
                 (click)="onPageClick(page); pageDropdownOpen = false"
               >
-                {{ getPageLabel(page) }}
+                <span class="option-num">{{ ts.toLocaleDigits(page.id) }}</span>
+                <span class="option-label">{{ getPageLabel(page) }}</span>
               </button>
             </div>
             <div class="edition-backdrop" *ngIf="pageDropdownOpen" (click)="pageDropdownOpen = false"></div>

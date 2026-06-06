@@ -466,6 +466,23 @@
   white-space: nowrap;
 }
 
+.page-num-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  padding: 0 5px;
+  height: 18px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.22);
+  border: 1px solid rgba(255, 255, 255, 0.32);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
 .edition-arrow {
   flex-shrink: 0;
   transition: transform 0.2s ease;
@@ -489,19 +506,51 @@
 }
 
 .edition-option {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   width: 100%;
   padding: 8px;
   font-size: 13px;
   font-weight: 600;
   font-family: inherit;
   line-height: 100%;
-  text-align: left;
   background: transparent;
   border: none;
   color: var(--color-primary);
   cursor: pointer;
   transition: background 0.15s;
+}
+
+.option-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  padding: 0 5px;
+  height: 18px;
+  border-radius: 4px;
+  background: var(--color-primary);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
+}
+
+.edition-option.active .option-num {
+  background: rgba(255, 255, 255, 0.28);
+  color: #fff;
+}
+
+.option-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
 }
 
 .edition-option:not(:last-child) {
