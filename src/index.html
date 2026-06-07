@@ -5,8 +5,10 @@
   <title>Daily Sangram Epaper | দৈনিক সংগ্রাম ই-পেপার - আজকের অনলাইন সংস্করণ</title>
   <base href="/">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#1976d2">
   <link rel="icon" type="image/png" href="https://static.dailysangram.com/images/DailySangram-favicon-round_mFEbx6b.original.png">
   <link rel="apple-touch-icon" href="https://static.dailysangram.com/images/DailySangram-favicon-round_mFEbx6b.original.png">
+  <link rel="manifest" href="manifest.webmanifest">
 
   <!-- Default Open Graph meta tags (overridden dynamically by Angular) -->
   <meta property="og:site_name" content="Daily Sangram Epaper | দৈনিক সংগ্রাম ই-পেপার - আজকের অনলাইন সংস্করণ">
@@ -28,9 +30,11 @@
   <meta name="twitter:creator" content="দৈনিক সংগ্রাম ই-পেপার">
   <meta name="twitter:image" content="https://epaper.dailysangram.com/assets/logo.png">
 
-  <link rel="preconnect" href="https://epaper.dailysangram.com" crossorigin>
+  <!-- Warm up cross-origin connections used during initial load -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <!-- CDN that serves logo/favicon assets -->
+  <link rel="dns-prefetch" href="https://static.dailysangram.com">
   <link href="https://fonts.googleapis.com/css2?family=Google+Sans:ital,opsz,wght@0,17..18,400..700;1,17..18,400..700&display=swap" rel="stylesheet">
   <style>
     body {

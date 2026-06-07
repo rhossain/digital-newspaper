@@ -1,0 +1,85 @@
+{
+  "$schema": "./node_modules/@angular/service-worker/config/schema.json",
+  "index": "/index.html",
+  "assetGroups": [
+    {
+      "name": "app-shell",
+      "installMode": "prefetch",
+      "updateMode": "prefetch",
+      "resources": {
+        "files": [
+          "/favicon.ico",
+          "/index.html",
+          "/manifest.webmanifest",
+          "/*.css",
+          "/*.js"
+        ]
+      }
+    },
+    {
+      "name": "assets",
+      "installMode": "lazy",
+      "updateMode": "prefetch",
+      "resources": {
+        "files": [
+          "/assets/**",
+          "/*.(eot|svg|cur|jpg|png|webp|gif|otf|ttf|woff|woff2|ani|avif)"
+        ]
+      }
+    }
+  ],
+  "dataGroups": [
+    {
+      "name": "api-settings",
+      "urls": [
+        "/**/digital-newspaper/v1/data/settings",
+        "/?rest_route=/digital-newspaper/v1/data/settings"
+      ],
+      "cacheConfig": {
+        "strategy": "freshness",
+        "maxSize": 10,
+        "maxAge": "1h",
+        "timeout": "5s"
+      }
+    },
+    {
+      "name": "api-dates",
+      "urls": [
+        "/**/digital-newspaper/v1/data/dates",
+        "/?rest_route=/digital-newspaper/v1/data/dates"
+      ],
+      "cacheConfig": {
+        "strategy": "freshness",
+        "maxSize": 10,
+        "maxAge": "5m",
+        "timeout": "5s"
+      }
+    },
+    {
+      "name": "api-editions",
+      "urls": [
+        "/**/digital-newspaper/v1/data/editions/**",
+        "/?rest_route=/digital-newspaper/v1/data/editions/**"
+      ],
+      "cacheConfig": {
+        "strategy": "freshness",
+        "maxSize": 60,
+        "maxAge": "24h",
+        "timeout": "5s"
+      }
+    },
+    {
+      "name": "api-version",
+      "urls": [
+        "/**/digital-newspaper/v1/data/version",
+        "/?rest_route=/digital-newspaper/v1/data/version"
+      ],
+      "cacheConfig": {
+        "strategy": "freshness",
+        "maxSize": 5,
+        "maxAge": "30s",
+        "timeout": "3s"
+      }
+    }
+  ]
+}

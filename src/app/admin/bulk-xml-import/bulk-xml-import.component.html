@@ -34,9 +34,8 @@
     <div class="bxi-body">
 
       <!-- ═══════════════════════ STEP 1: Upload & Parse ═══════════════════════ -->
-      <ng-container *ngIf="currentStep === 1">
+      @if (currentStep === 1) {
         <div class="bxi-step-content">
-
           <!-- Drop zone -->
           <div
             class="bxi-dropzone"
@@ -46,16 +45,15 @@
             (dragleave)="onDragLeave()"
             (drop)="onDrop($event)"
             (click)="triggerFileInput()"
-          >
+            >
             <input
               id="bxi-file-input"
               type="file"
               [accept]="acceptedExtensions"
               class="bxi-file-input"
               (change)="onFileSelected($event)"
-            />
-
-            <ng-container *ngIf="!xmlFile && !isParsingFile">
+              />
+            @if (!xmlFile && !isParsingFile) {
               <svg class="bxi-dropzone-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                 <path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>
                 <polyline points="16 12 12 8 8 12"/>
@@ -63,81 +61,91 @@
               </svg>
               <p class="bxi-dropzone-text">Drag &amp; drop your file here, or <strong>click to browse</strong></p>
               <p class="bxi-dropzone-hint">Accepts Excel (.xlsx, .xls, .csv) or XML (.xml)</p>
-            </ng-container>
-
-            <ng-container *ngIf="isParsingFile">
+            }
+            @if (isParsingFile) {
               <div class="bxi-spinner"></div>
               <p class="bxi-dropzone-text">Parsing file…</p>
-            </ng-container>
-
-            <ng-container *ngIf="xmlFile && !isParsingFile">
+            }
+            @if (xmlFile && !isParsingFile) {
               <svg class="bxi-dropzone-icon bxi-dropzone-icon--file" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                 <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
                 <polyline points="14 2 14 8 20 8"/>
               </svg>
               <p class="bxi-dropzone-text"><strong>{{ xmlFile.name }}</strong></p>
-            </ng-container>
+            }
           </div>
-
           <!-- Template download -->
-          <div class="bxi-template-row" *ngIf="!xmlFile">
-            <span class="bxi-template-hint">Not sure of the format?</span>
-            <button class="bxi-link-btn" (click)="downloadTemplate(); $event.stopPropagation()">
-              ⬇ Download Excel template
-            </button>
-          </div>
-
+          @if (!xmlFile) {
+            <div class="bxi-template-row">
+              <span class="bxi-template-hint">Not sure of the format?</span>
+              <button class="bxi-link-btn" (click)="downloadTemplate(); $event.stopPropagation()">
+                ⬇ Download Excel template
+              </button>
+            </div>
+          }
           <!-- Clear button -->
-          <div class="bxi-file-actions" *ngIf="xmlFile">
-            <button class="bxi-link-btn" (click)="clearFile(); $event.stopPropagation()">Clear file</button>
-          </div>
-
+          @if (xmlFile) {
+            <div class="bxi-file-actions">
+              <button class="bxi-link-btn" (click)="clearFile(); $event.stopPropagation()">Clear file</button>
+            </div>
+          }
           <!-- Parse result summary -->
-          <div class="bxi-parse-summary" *ngIf="parseResult">
-            <div class="bxi-parse-banner" [class.bxi-parse-banner--error]="hasFatalErrors">
-              <ng-container *ngIf="!hasFatalErrors">
-                <strong>{{ parseResult.totalRows }} posts found</strong>
-                across {{ impactEditionsCount }} edition(s) and {{ impactEditionsCount }} date(s)
-              </ng-container>
-              <ng-container *ngIf="hasFatalErrors">
-                <strong>Parse errors detected</strong> — fix the file before continuing.
-              </ng-container>
+          @if (parseResult) {
+            <div class="bxi-parse-summary">
+              <div class="bxi-parse-banner" [class.bxi-parse-banner--error]="hasFatalErrors">
+                @if (!hasFatalErrors) {
+                  <strong>{{ parseResult.totalRows }} posts found</strong>
+                  across {{ impactEditionsCount }} edition(s) and {{ impactEditionsCount }} date(s)
+                }
+                @if (hasFatalErrors) {
+                  <strong>Parse errors detected</strong> — fix the file before continuing.
+                }
+              </div>
+              <div class="bxi-badge-row">
+                <span class="bxi-badge bxi-badge--green">New: {{ parseResult.newCount }}</span>
+                @if (parseResult.duplicateCount > 0) {
+                  <span class="bxi-badge bxi-badge--amber">Duplicate: {{ parseResult.duplicateCount }}</span>
+                }
+                @if (parseResult.errorCount > 0) {
+                  <span class="bxi-badge bxi-badge--red">Errors: {{ parseResult.errorCount }}</span>
+                }
+              </div>
+              <!-- Errors list -->
+              @if (fatalErrors.length > 0) {
+                <div class="bxi-errors">
+                  <p class="bxi-errors-heading">Errors (must fix):</p>
+                  <ul>
+                    @for (err of fatalErrors; track err) {
+                      <li>
+                        <span class="bxi-err-loc">Row {{ err.rowIndex >= 0 ? err.rowIndex + 1 : 'N/A' }} / {{ err.field }}</span>
+                        {{ err.message }}
+                      </li>
+                    }
+                  </ul>
+                </div>
+              }
+              <!-- Warnings list -->
+              @if (warnings.length > 0) {
+                <div class="bxi-warnings">
+                  <p class="bxi-errors-heading">Warnings:</p>
+                  <ul>
+                    @for (w of warnings; track w) {
+                      <li>
+                        <span class="bxi-err-loc">Row {{ w.rowIndex >= 0 ? w.rowIndex + 1 : 'N/A' }} / {{ w.field }}</span>
+                        {{ w.message }}
+                      </li>
+                    }
+                  </ul>
+                </div>
+              }
             </div>
-            <div class="bxi-badge-row">
-              <span class="bxi-badge bxi-badge--green">New: {{ parseResult.newCount }}</span>
-              <span class="bxi-badge bxi-badge--amber" *ngIf="parseResult.duplicateCount > 0">Duplicate: {{ parseResult.duplicateCount }}</span>
-              <span class="bxi-badge bxi-badge--red" *ngIf="parseResult.errorCount > 0">Errors: {{ parseResult.errorCount }}</span>
-            </div>
-
-            <!-- Errors list -->
-            <div class="bxi-errors" *ngIf="fatalErrors.length > 0">
-              <p class="bxi-errors-heading">Errors (must fix):</p>
-              <ul>
-                <li *ngFor="let err of fatalErrors">
-                  <span class="bxi-err-loc">Row {{ err.rowIndex >= 0 ? err.rowIndex + 1 : 'N/A' }} / {{ err.field }}</span>
-                  {{ err.message }}
-                </li>
-              </ul>
-            </div>
-
-            <!-- Warnings list -->
-            <div class="bxi-warnings" *ngIf="warnings.length > 0">
-              <p class="bxi-errors-heading">Warnings:</p>
-              <ul>
-                <li *ngFor="let w of warnings">
-                  <span class="bxi-err-loc">Row {{ w.rowIndex >= 0 ? w.rowIndex + 1 : 'N/A' }} / {{ w.field }}</span>
-                  {{ w.message }}
-                </li>
-              </ul>
-            </div>
-          </div>
+          }
         </div>
-      </ng-container>
+      }
 
       <!-- ═══════════════════════ STEP 2: Review Posts ════════════════════════ -->
-      <ng-container *ngIf="currentStep === 2">
+      @if (currentStep === 2) {
         <div class="bxi-review-wrap">
-
           <div class="bxi-review-toolbar">
             <label class="bxi-select-all-label">
               <input type="checkbox" [checked]="allSelected" (change)="toggleSelectAll($event)" />
@@ -147,7 +155,6 @@
               Check/uncheck to include or skip a post. Edit the Page number if needed.
             </span>
           </div>
-
           <div class="bxi-review-table-wrap">
             <table class="bxi-review-table">
               <thead>
@@ -161,53 +168,54 @@
                 </tr>
               </thead>
               <tbody>
-                <tr
-                  *ngFor="let row of importRows; trackBy: trackByDerivedId"
-                  [class.bxi-tr--selected]="isSelected(row.derivedId)"
-                  [class.bxi-tr--skipped]="!isSelected(row.derivedId)"
-                >
-                  <td class="bxi-col-check">
-                    <input
-                      type="checkbox"
-                      [checked]="isSelected(row.derivedId)"
-                      (change)="toggleRowSelection(row.derivedId)"
-                      class="bxi-checkbox"
-                    />
-                  </td>
-                  <td class="bxi-col-title">
-                    <div class="bxi-rt-title">{{ row.rawTitle || row.title }}</div>
-                    <div class="bxi-rt-preview" *ngIf="contentPreview(row)">{{ contentPreview(row) }}</div>
-                  </td>
-                  <td class="bxi-col-date">{{ row.date }}</td>
-                  <td class="bxi-col-ed">{{ row.edition }}</td>
-                  <td class="bxi-col-page">
-                    <input
-                      type="number"
-                      [(ngModel)]="row.assignedPageId"
-                      min="1"
-                      class="bxi-page-input"
-                      title="Page number this post will appear on"
-                    />
-                  </td>
-                  <td class="bxi-col-status">
-                    <span class="bxi-badge" [ngClass]="statusBadgeClass(row)">{{ statusBadgeLabel(row) }}</span>
-                  </td>
-                </tr>
+                @for (row of importRows; track trackByDerivedId($index, row)) {
+                  <tr
+                    [class.bxi-tr--selected]="isSelected(row.derivedId)"
+                    [class.bxi-tr--skipped]="!isSelected(row.derivedId)"
+                    >
+                    <td class="bxi-col-check">
+                      <input
+                        type="checkbox"
+                        [checked]="isSelected(row.derivedId)"
+                        (change)="toggleRowSelection(row.derivedId)"
+                        class="bxi-checkbox"
+                        />
+                    </td>
+                    <td class="bxi-col-title">
+                      <div class="bxi-rt-title">{{ row.rawTitle || row.title }}</div>
+                      @if (contentPreview(row)) {
+                        <div class="bxi-rt-preview">{{ contentPreview(row) }}</div>
+                      }
+                    </td>
+                    <td class="bxi-col-date">{{ row.date }}</td>
+                    <td class="bxi-col-ed">{{ row.edition }}</td>
+                    <td class="bxi-col-page">
+                      <input
+                        type="number"
+                        [(ngModel)]="row.assignedPageId"
+                        min="1"
+                        class="bxi-page-input"
+                        title="Page number this post will appear on"
+                        />
+                    </td>
+                    <td class="bxi-col-status">
+                      <span class="bxi-badge" [ngClass]="statusBadgeClass(row)">{{ statusBadgeLabel(row) }}</span>
+                    </td>
+                  </tr>
+                }
               </tbody>
             </table>
           </div>
-
         </div>
-      </ng-container>
+      }
 
       <!-- ═══════════════════════ STEP 3: Duplicate Resolution ═══════════════ -->
-      <ng-container *ngIf="currentStep === 3">
+      @if (currentStep === 3) {
         <div class="bxi-step-content">
           <div class="bxi-dup-banner">
             <strong>{{ parseResult?.duplicateCount }} duplicate(s)</strong> detected —
             {{ step3SkipCount }} will be skipped, {{ step3OverwriteCount }} will overwrite, {{ step3ImportAsNewCount }} will import as new.
           </div>
-
           <div class="bxi-apply-all-row">
             <label>Apply to all:</label>
             <select [(ngModel)]="applyActionToAll" (ngModelChange)="applyActionToAllDuplicates()" class="bxi-action-select">
@@ -217,7 +225,6 @@
               <option value="import-as-new">Import all as new</option>
             </select>
           </div>
-
           <div class="bxi-dup-table-wrapper">
             <table class="bxi-dup-table">
               <thead>
@@ -229,34 +236,35 @@
                 </tr>
               </thead>
               <tbody>
-                <tr *ngFor="let row of duplicateRows; trackBy: trackByDerivedId">
-                  <td class="bxi-dup-title">{{ row.rawTitle || row.title }}</td>
-                  <td class="bxi-dup-meta">{{ row.date }} / Ed.{{ row.edition }} / Pg.{{ row.page }}</td>
-                  <td>
-                    <span class="bxi-badge" [class.bxi-badge--grey]="row.duplicateStatus === 'duplicate-exact'" [class.bxi-badge--amber]="row.duplicateStatus === 'duplicate-key'">
-                      {{ row.duplicateStatus === 'duplicate-exact' ? 'Exact match' : 'Key match' }}
-                    </span>
-                  </td>
-                  <td>
-                    <select [(ngModel)]="row.importAction" class="bxi-action-select">
-                      <option value="skip">Skip</option>
-                      <option value="overwrite">Overwrite content only</option>
-                      <option value="import-as-new">Import as new entry</option>
-                    </select>
-                  </td>
-                </tr>
+                @for (row of duplicateRows; track trackByDerivedId($index, row)) {
+                  <tr>
+                    <td class="bxi-dup-title">{{ row.rawTitle || row.title }}</td>
+                    <td class="bxi-dup-meta">{{ row.date }} / Ed.{{ row.edition }} / Pg.{{ row.page }}</td>
+                    <td>
+                      <span class="bxi-badge" [class.bxi-badge--grey]="row.duplicateStatus === 'duplicate-exact'" [class.bxi-badge--amber]="row.duplicateStatus === 'duplicate-key'">
+                        {{ row.duplicateStatus === 'duplicate-exact' ? 'Exact match' : 'Key match' }}
+                      </span>
+                    </td>
+                    <td>
+                      <select [(ngModel)]="row.importAction" class="bxi-action-select">
+                        <option value="skip">Skip</option>
+                        <option value="overwrite">Overwrite content only</option>
+                        <option value="import-as-new">Import as new entry</option>
+                      </select>
+                    </td>
+                  </tr>
+                }
               </tbody>
             </table>
           </div>
         </div>
-      </ng-container>
+      }
 
       <!-- ═══════════════════════ STEP 4: Confirm & Import ══════════════════ -->
-      <ng-container *ngIf="currentStep === 4">
+      @if (currentStep === 4) {
         <div class="bxi-step-content">
-
           <!-- Success screen -->
-          <ng-container *ngIf="importProgressStage === 'done'">
+          @if (importProgressStage === 'done') {
             <div class="bxi-success">
               <div class="bxi-success-icon">✔</div>
               <h3>Import complete!</h3>
@@ -267,74 +275,91 @@
               </div>
               <div class="bxi-success-actions">
                 <button class="bxi-btn bxi-btn--primary" (click)="goToContent()">Go to Content</button>
-                <button class="bxi-btn bxi-btn--secondary" *ngIf="skeletonPages.length > 0" (click)="goToSetPageImages()">Set page images now</button>
+                @if (skeletonPages.length > 0) {
+                  <button class="bxi-btn bxi-btn--secondary" (click)="goToSetPageImages()">Set page images now</button>
+                }
                 <button class="bxi-btn bxi-btn--secondary" (click)="resetWizard()">Import another file</button>
               </div>
-              <div *ngIf="skeletonPages.length > 0" class="bxi-skeleton-warning">
-                <p>⚠ <strong>{{ skeletonPages.length }} page(s) need an image</strong> — sections are saved but hidden until you upload a page image.</p>
-                <ul>
-                  <li *ngFor="let sp of skeletonPages">{{ sp.date }} / Ed.{{ sp.edition }} / Page {{ sp.pageId }}</li>
-                </ul>
-              </div>
+              @if (skeletonPages.length > 0) {
+                <div class="bxi-skeleton-warning">
+                  <p>⚠ <strong>{{ skeletonPages.length }} page(s) need an image</strong> — sections are saved but hidden until you upload a page image.</p>
+                  <ul>
+                    @for (sp of skeletonPages; track sp) {
+                      <li>{{ sp.date }} / Ed.{{ sp.edition }} / Page {{ sp.pageId }}</li>
+                    }
+                  </ul>
+                </div>
+              }
             </div>
-          </ng-container>
-
+          }
           <!-- Error screen -->
-          <div class="bxi-import-error" *ngIf="importError">
-            <p class="bxi-err-heading">Import failed</p>
-            <p>{{ importError }}</p>
-            <button class="bxi-btn bxi-btn--secondary" (click)="importError = null; importProgressStage = 'idle'">Try again</button>
-          </div>
-
+          @if (importError) {
+            <div class="bxi-import-error">
+              <p class="bxi-err-heading">Import failed</p>
+              <p>{{ importError }}</p>
+              <button class="bxi-btn bxi-btn--secondary" (click)="importError = null; importProgressStage = 'idle'">Try again</button>
+            </div>
+          }
           <!-- Pre-import summary -->
-          <ng-container *ngIf="importProgressStage === 'idle' && !importError">
+          @if (importProgressStage === 'idle' && !importError) {
             <div class="bxi-impact-card">
               <div class="bxi-impact-row"><span>Posts to create</span><strong>{{ importSummary?.created ?? 0 }}</strong></div>
               <div class="bxi-impact-row"><span>Posts to update</span><strong>{{ importSummary?.updated ?? 0 }}</strong></div>
               <div class="bxi-impact-row"><span>Posts to skip</span><strong>{{ importSummary?.skipped ?? 0 }}</strong></div>
               <div class="bxi-impact-row"><span>Editions affected</span><strong>{{ impactEditionsCount }}</strong></div>
               <div class="bxi-impact-row"><span>Pages affected</span><strong>{{ impactPagesCount }}</strong></div>
-              <div class="bxi-impact-row" *ngIf="(importSummary?.skeletonPagesCreated ?? 0) > 0">
-                <span>Skeleton pages created</span><strong class="bxi-amber">{{ importSummary?.skeletonPagesCreated }} ← needs image upload</strong>
-              </div>
+              @if ((importSummary?.skeletonPagesCreated ?? 0) > 0) {
+                <div class="bxi-impact-row">
+                  <span>Skeleton pages created</span><strong class="bxi-amber">{{ importSummary?.skeletonPagesCreated }} ← needs image upload</strong>
+                </div>
+              }
             </div>
-
             <label class="bxi-checkbox-label">
               <input type="checkbox" [(ngModel)]="autoBackup" disabled checked />
               Auto-backup before import (recommended)
             </label>
-
             <button class="bxi-btn bxi-btn--import" (click)="doImport()" [disabled]="isImporting">
               Import
             </button>
-          </ng-container>
-
+          }
           <!-- Progress -->
-          <ng-container *ngIf="isImporting">
+          @if (isImporting) {
             <div class="bxi-progress-wrap">
               <div class="bxi-spinner"></div>
               <p class="bxi-progress-label">{{ progressLabel() }}</p>
-              <p class="bxi-progress-note" *ngIf="importProgressStage === 'saving'">
-                WordPress is creating one post per article. Please keep this window open.
-              </p>
+              @if (importProgressStage === 'saving') {
+                <p class="bxi-progress-note">
+                  WordPress is creating one post per article. Please keep this window open.
+                </p>
+              }
             </div>
-          </ng-container>
+          }
         </div>
-      </ng-container>
+      }
 
     </div>
     <!-- /bxi-body -->
 
     <!-- Footer navigation -->
-    <div class="bxi-footer" *ngIf="importProgressStage !== 'done'">
-      <button class="bxi-btn bxi-btn--ghost" (click)="close()">Cancel</button>
-      <div class="bxi-footer-right">
-        <button class="bxi-btn bxi-btn--ghost" *ngIf="currentStep > 1 && importProgressStage === 'idle'" (click)="goBack()">← Back</button>
-        <button class="bxi-btn bxi-btn--primary" *ngIf="currentStep === 1" [disabled]="!parseResult || hasFatalErrors" (click)="goToStep2()">Next →</button>
-        <button class="bxi-btn bxi-btn--primary" *ngIf="currentStep === 2" (click)="goToStep3()">Next →</button>
-        <button class="bxi-btn bxi-btn--primary" *ngIf="currentStep === 3" (click)="goToStep4()">Next →</button>
+    @if (importProgressStage !== 'done') {
+      <div class="bxi-footer">
+        <button class="bxi-btn bxi-btn--ghost" (click)="close()">Cancel</button>
+        <div class="bxi-footer-right">
+          @if (currentStep > 1 && importProgressStage === 'idle') {
+            <button class="bxi-btn bxi-btn--ghost" (click)="goBack()">← Back</button>
+          }
+          @if (currentStep === 1) {
+            <button class="bxi-btn bxi-btn--primary" [disabled]="!parseResult || hasFatalErrors" (click)="goToStep2()">Next →</button>
+          }
+          @if (currentStep === 2) {
+            <button class="bxi-btn bxi-btn--primary" (click)="goToStep3()">Next →</button>
+          }
+          @if (currentStep === 3) {
+            <button class="bxi-btn bxi-btn--primary" (click)="goToStep4()">Next →</button>
+          }
+        </div>
       </div>
-    </div>
+    }
 
   </div>
   <!-- /bxi-modal -->

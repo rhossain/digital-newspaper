@@ -1,5 +1,5 @@
 import { Component, OnInit, OnDestroy, AfterViewChecked, ChangeDetectorRef, ElementRef, ViewChild, Inject } from '@angular/core';
-import { CommonModule, Location, DOCUMENT } from '@angular/common';
+import { Location, DOCUMENT } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute } from '@angular/router';
 import { Meta, Title } from '@angular/platform-browser';
@@ -10,12 +10,14 @@ import { TranslationService } from './i18n/translation.service';
 import { TranslatePipe } from './i18n/translate.pipe';
 import { LocaleDatePipe } from './i18n/locale-date.pipe';
 import { DatePickerComponent } from './components/date-picker/date-picker.component';
+import { SectionOverlayComponent } from './components/section-overlay/section-overlay.component';
+import { ArticleModalComponent } from './components/article-modal/article-modal.component';
 import { Subscription } from 'rxjs';
 
 @Component({
   selector: 'app-newspaper',
   standalone: true,
-  imports: [CommonModule, FormsModule, ShareButtonsComponent, TranslatePipe, LocaleDatePipe, DatePickerComponent],
+  imports: [FormsModule, ShareButtonsComponent, TranslatePipe, LocaleDatePipe, DatePickerComponent, SectionOverlayComponent, ArticleModalComponent],
   templateUrl: './newspaper.component.html',
   styleUrls: ['./newspaper.component.css']
 })
@@ -90,6 +92,12 @@ export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
   socialLinks: any = {};
   
   private subscriptions: Subscription[] = [];
+
+  /**
+   * Stable bound reference to getCroppedImageForSection, passed to ArticleModalComponent
+   * as an @Input to avoid creating a new function on every change-detection cycle.
+   */
+  readonly getCroppedImageBound = (s: NewsSection) => this.getCroppedImageForSection(s);
 
   constructor(
     private dataService: NewspaperDataService,
@@ -819,10 +827,6 @@ export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   onLinkedSectionImageError(event: Event): void {
-    (event.target as HTMLImageElement).style.display = 'none';
-  }
-
-  onModalImageError(event: Event): void {
     (event.target as HTMLImageElement).style.display = 'none';
   }
 

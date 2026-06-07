@@ -1,5 +1,5 @@
 import { Component, Input, Output, EventEmitter } from '@angular/core';
-import { CommonModule } from '@angular/common';
+
 import { Meta, Title } from '@angular/platform-browser';
 import { ToasterService } from '../../services/toaster.service';
 import { TranslationService } from '../../i18n/translation.service';
@@ -8,7 +8,7 @@ import { NewsSection } from '../../services/newspaper-data.service';
 @Component({
   selector: 'app-share-buttons',
   standalone: true,
-  imports: [CommonModule],
+  imports: [],
   templateUrl: './share-buttons.component.html',
   styleUrl: './share-buttons.component.css'
 })

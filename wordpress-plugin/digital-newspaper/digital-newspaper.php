@@ -48,6 +48,9 @@ class Digital_Newspaper_API {
     // blocked by host-level WAF (e.g. Imunify360 on Hostinger shared hosting).
     add_action('admin_init', [$this, 'ensure_htaccess_rules']);
     register_activation_hook(__FILE__, [$this, 'ensure_htaccess_rules']);
+    // Emit Content-Security-Policy-Report-Only on front-end page loads only
+    // (not on REST API or wp-admin responses — those have their own headers).
+    add_action('send_headers', [$this, 'add_csp_report_only_header']);
   }
 
   /**
@@ -250,6 +253,63 @@ class Digital_Newspaper_API {
     header('X-Content-Type-Options: nosniff');
     header('X-Frame-Options: SAMEORIGIN');
     header('Referrer-Policy: strict-origin-when-cross-origin');
+  }
+
+  /**
+   * Emit a Content-Security-Policy-Report-Only header on front-end page loads.
+   *
+   * REPORT-ONLY means violations are logged to the browser console (and to
+   * any report-uri endpoint) but NEVER blocked. This is safe to run in
+   * production — it audits what a future enforced CSP would block before you
+   * commit to enforcement.
+   *
+   * To move to enforcement later, change the header name to
+   * Content-Security-Policy and remove directives that still report violations.
+   *
+   * Only fires on front-end (non-admin, non-REST) responses — the `send_headers`
+   * hook runs before WordPress outputs the page, and we guard against admin
+   * and REST contexts explicitly.
+   *
+   * Sources explained:
+   *   script-src  'self'                   — Angular bundle (no inline scripts needed by default)
+   *   style-src   'self' 'unsafe-inline'   — Angular adds inline <style> blocks; Quill also injects styles
+   *               fonts.googleapis.com     — Google Fonts CSS @import
+   *   font-src    'self' fonts.gstatic.com — Google Fonts woff2 files
+   *               data:                    — some icon fonts embed as data URIs
+   *   img-src     'self' data: blob:       — in-app canvas thumbnails use data:/blob: URLs
+   *               static.dailysangram.com  — CDN for newspaper images and logo
+   *               epaper.dailysangram.com  — the app origin itself (absolute img URLs)
+   *               dailysangram.com         — root domain images
+   *   connect-src 'self' {site_url}        — Angular HTTP calls to the WP REST API
+   *   frame-ancestors 'none'               — prevent framing (stronger than X-Frame-Options)
+   *   object-src  'none'                   — no Flash / plugins
+   *   base-uri    'self'                   — prevent base-tag injection
+   */
+  public function add_csp_report_only_header(): void {
+    // Skip REST API requests — they have their own headers.
+    if (defined('REST_REQUEST') && REST_REQUEST) {
+      return;
+    }
+    // Skip wp-admin pages.
+    if (is_admin()) {
+      return;
+    }
+
+    $site = rtrim(site_url(), '/');
+
+    $directives = implode('; ', [
+      "default-src 'self'",
+      "script-src 'self'",
+      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+      "font-src 'self' https://fonts.gstatic.com data:",
+      "img-src 'self' data: blob: https://static.dailysangram.com https://epaper.dailysangram.com https://dailysangram.com",
+      "connect-src 'self' " . esc_url_raw($site),
+      "frame-ancestors 'none'",
+      "object-src 'none'",
+      "base-uri 'self'",
+    ]);
+
+    header('Content-Security-Policy-Report-Only: ' . $directives);
   }
 
   /**
@@ -3227,10 +3287,15 @@ HTML;
         if ($body === false) {
           return new WP_REST_Response(['error' => 'Failed to read image'], 500);
         }
-        return new WP_REST_Response($body, 200, [
+        $local_headers = [
           'Content-Type'  => $content_type,
           'Cache-Control' => 'public, max-age=86400',
-        ]);
+        ];
+        if (stripos($content_type, 'svg') !== false) {
+          $local_headers['Content-Disposition']  = 'attachment; filename="image.svg"';
+          $local_headers['X-Content-Type-Options'] = 'nosniff';
+        }
+        return new WP_REST_Response($body, 200, $local_headers);
       }
     }
 
@@ -3282,10 +3347,19 @@ HTML;
       return new WP_REST_Response(['error' => 'Not an image'], 415);
     }
 
-    return new WP_REST_Response($body, 200, [
-      'Content-Type' => $content_type,
-      'Cache-Control' => 'public, max-age=86400'
-    ]);
+    $headers = [
+      'Content-Type'  => $content_type,
+      'Cache-Control' => 'public, max-age=86400',
+    ];
+
+    // SVG files can contain inline <script> tags. Force them to download rather
+    // than render in the browser to prevent stored-XSS via a crafted SVG.
+    if (stripos($content_type, 'svg') !== false) {
+      $headers['Content-Disposition'] = 'attachment; filename="image.svg"';
+      $headers['X-Content-Type-Options'] = 'nosniff';
+    }
+
+    return new WP_REST_Response($body, 200, $headers);
   }
 
   public function upload_media(WP_REST_Request $request): WP_REST_Response {
@@ -3611,6 +3685,13 @@ HTML;
     }
 
     if (!empty($payload['exp']) && time() > (int) $payload['exp']) {
+      return null;
+    }
+
+    // Validate issuer: the token must have been issued by this site.
+    // Prevents tokens signed with a shared secret on a different site
+    // (e.g. a staging clone) from being accepted on production.
+    if (!empty($payload['iss']) && $payload['iss'] !== get_site_url()) {
       return null;
     }
 

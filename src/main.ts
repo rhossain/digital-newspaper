@@ -1,6 +1,8 @@
 import { bootstrapApplication } from '@angular/platform-browser';
 import { provideHttpClient, withInterceptors } from '@angular/common/http';
 import { provideRouter, Routes, UrlSerializer, DefaultUrlSerializer, UrlTree } from '@angular/router';
+import { provideServiceWorker } from '@angular/service-worker';
+import { isDevMode } from '@angular/core';
 import { AppComponent } from './app/app.component';
 import { NewspaperComponent } from './app/newspaper.component';
 import { wpApiInterceptor } from './app/interceptors/wp-api.interceptor';
@@ -35,6 +37,12 @@ bootstrapApplication(AppComponent, {
     provideHttpClient(withInterceptors([httpCacheInterceptor, wpApiInterceptor, loaderInterceptor])),
     provideRouter(routes),
     { provide: UrlSerializer, useClass: TrailingSlashUrlSerializer },
+    provideServiceWorker('ngsw-worker.js', {
+      // Only register the SW in production — dev mode gets live-reload instead.
+      enabled: !isDevMode(),
+      // Check for SW updates every 6 hours (ngsw polls when the app regains focus).
+      registrationStrategy: 'registerWhenStable:30000',
+    }),
   ]
 })
   .catch((err) => console.error(err));

@@ -1,12 +1,12 @@
 import { Component, OnInit, OnDestroy, ChangeDetectorRef } from '@angular/core';
-import { CommonModule } from '@angular/common';
+
 import { ToasterService, ToastMessage } from '../services/toaster.service';
 import { Subscription } from 'rxjs';
 
 @Component({
   selector: 'app-toaster',
   standalone: true,
-  imports: [CommonModule],
+  imports: [],
   templateUrl: './toaster.component.html',
   styleUrls: ['./toaster.component.css']
 })

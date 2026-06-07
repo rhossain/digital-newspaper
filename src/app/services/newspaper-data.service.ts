@@ -1,4 +1,5 @@
-import { Injectable } from '@angular/core';
+import { Injectable, Signal } from '@angular/core';
+import { toSignal } from '@angular/core/rxjs-interop';
 import { HttpClient, HttpResponse } from '@angular/common/http';
 import { Observable, BehaviorSubject, Subject, Subscription, timer, forkJoin, interval, of, throwError } from 'rxjs';
 import { tap, map, catchError, timeout, retry, switchMap, debounceTime, distinctUntilChanged } from 'rxjs/operators';
@@ -272,6 +273,28 @@ export class NewspaperDataService {
   public data$!: Observable<NewspaperData>;
 
   /**
+   * Signal-based read of `data$`.
+   *
+   * Components that have already migrated to Angular Signals can read
+   * `dataService.data()` directly in templates — no `async` pipe or manual
+   * `.subscribe()` / `.unsubscribe()` required.
+   *
+   * The `!` assertion is sound: both signals are initialised synchronously
+   * inside the constructor (immediately after their source BehaviorSubjects),
+   * before any external code can call into the service.
+   *
+   * Existing `data$.subscribe()` consumers continue to work unchanged —
+   * these signals are purely additive.
+   */
+  data!: Signal<NewspaperData>;
+
+  /**
+   * Signal-based read of `currentDate$`.
+   * @see data for the design rationale.
+   */
+  currentDate!: Signal<string>;
+
+  /**
    * Emits the server's new dataVersion whenever the version poll detects
    * a remote change. Components subscribe to decide whether to silently
    * reload or warn the user before doing so.
@@ -306,6 +329,14 @@ export class NewspaperDataService {
     this.currentDateSubject = new BehaviorSubject<string>(this.getTodayDate());
     this.currentDate$ = this.currentDateSubject.asObservable();
     this.data$ = this.dataSubject.asObservable();
+
+    // ── Signal bridges (toSignal requires an active injection context) ────────
+    // BehaviorSubject always emits synchronously so requireSync is safe here.
+    // `initialValue` is set explicitly to avoid the `undefined` union type that
+    // the overload without requireSync would add.
+    this.data        = toSignal(this.data$,        { initialValue: this.dataSubject.value });
+    this.currentDate = toSignal(this.currentDate$, { initialValue: this.currentDateSubject.value });
+
     // Debounce emergency-draft writes: atomic saves fire rapidly; serialising
     // the full dataset to JSON on every emission is expensive. 2 s is enough
     // to capture any crash that happens during active editing.
@@ -555,9 +586,14 @@ export class NewspaperDataService {
         result.settings.language = 'en';
       }
     }
-    // Cache settings from the API for offline / quick-startup use
+    // Cache settings for offline / quick-startup use AND keep SettingsService in sync.
+    // This is the single place normalizeData writes settings, so every code path that
+    // produces a NewspaperData value (loadData, import, emergency draft) ends up here.
     if (result.settings) {
       this.cacheSettings(result.settings);
+      // `settingsService.apply()` normalises and pushes to the signal — keeps
+      // SettingsService.settings() consistent with dataSubject for all callers.
+      this.settingsService.apply(result.settings);
     }
     // Normalize page fields: PHP serializes empty/unset strings as [] (empty
     // array) which is truthy in JS, causing *ngIf guards to pass while
@@ -1279,30 +1315,22 @@ export class NewspaperDataService {
   }
 
   // Global Settings Management
+
+  /**
+   * Returns the current global settings with all null-safety guards applied.
+   *
+   * Delegates to SettingsService so there is exactly one normalisation path.
+   * SettingsService is kept in sync from:
+   *   • loadData() tap → settingsService.apply()
+   *   • normalizeData() → settingsService.apply()   (covers import + emergency draft)
+   *   • saveData() tap  → settingsService.apply()
+   *   • updateSettings() → settingsService.apply()
+   *
+   * The localStorage key ('dn_global_settings') is intentionally shared by both
+   * services — both can read/write it without conflict.
+   */
   getSettings(): GlobalSettings {
-    const data = this.getData();
-    const raw = data.settings;
-    if (!raw) {
-      return {
-        defaultDateMode: 'current',
-        socialLinks: {},
-        logo: { url: '', alt: 'Digital Newspaper' },
-        editor: '',
-        address: {},
-        language: 'en'
-      };
-    }
-    // Ensure every sub-object exists so callers don't have to null-check
-    return {
-      ...raw,
-      logo: raw.logo || { url: '', alt: 'Digital Newspaper' },
-      socialLinks: (raw.socialLinks && !Array.isArray(raw.socialLinks))
-        ? raw.socialLinks
-        : {},
-      address: raw.address || {},
-      editor: raw.editor ?? '',
-      language: raw.language || 'en'
-    };
+    return this.settingsService.get();
   }
 
   updateSettings(settings: GlobalSettings): void {
