@@ -5,7 +5,6 @@ import { ActivatedRoute } from '@angular/router';
 import { Meta, Title } from '@angular/platform-browser';
 import { NewspaperDataService, NewsSection, NewspaperPage, NewspaperEdition, GlobalSettings } from './services/newspaper-data.service';
 import { ToasterService } from './services/toaster.service';
-import { ShareButtonsComponent } from './shared/share-buttons/share-buttons.component';
 import { TranslationService } from './i18n/translation.service';
 import { TranslatePipe } from './i18n/translate.pipe';
 import { LocaleDatePipe } from './i18n/locale-date.pipe';
@@ -17,7 +16,7 @@ import { Subscription } from 'rxjs';
 @Component({
   selector: 'app-newspaper',
   standalone: true,
-  imports: [FormsModule, ShareButtonsComponent, TranslatePipe, LocaleDatePipe, DatePickerComponent, SectionOverlayComponent, ArticleModalComponent],
+  imports: [FormsModule, TranslatePipe, LocaleDatePipe, DatePickerComponent, SectionOverlayComponent, ArticleModalComponent],
   templateUrl: './newspaper.component.html',
   styleUrls: ['./newspaper.component.css']
 })
@@ -481,7 +480,7 @@ export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
   trackByDate(_: number, date: string): string { return date; }
   trackByEditionKey(_: number, ed: NewspaperEdition): string { return `${ed.date}-${ed.edition ?? 1}`; }
   trackByLinkedSectionId(_: number, section: NewsSection): string { return section.id; }
-  trackByIndex(index: number): number { return index; }
+  trackByIndex(index: number, _?: unknown): number { return index; }
 
   onDateChange() {
     this.selectedEditionNumber = 1;

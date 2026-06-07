@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- intra-file-dupe.xml — Two rows within the same file that would generate the same derived ID.
+     Expected result: the second occurrence is flagged as an intra-file duplicate
+     and assigned importAction: 'skip' with a warning. Only the first occurrence is imported. -->
+<newspaper>
+  <!-- First occurrence — should be imported normally -->
+  <post>
+    <title>Breaking News Story</title>
+    <content><![CDATA[<p>This is the first version of the breaking news story.</p>]]></content>
+    <date>2026-06-04</date>
+    <edition>1</edition>
+    <page>1</page>
+  </post>
+
+  <!-- Second occurrence — identical derived ID, will be flagged as intra-file duplicate -->
+  <post>
+    <title>Breaking News Story</title>
+    <content><![CDATA[<p>This is a second entry with the exact same title, date, edition, and page — it will be skipped.</p>]]></content>
+    <date>2026-06-04</date>
+    <edition>1</edition>
+    <page>1</page>
+  </post>
+
+  <!-- Unrelated post — should be imported normally -->
+  <post>
+    <title>Another Unrelated Post</title>
+    <content><![CDATA[<p>This post has a different title and will not conflict with anything.</p>]]></content>
+    <date>2026-06-04</date>
+    <edition>1</edition>
+    <page>2</page>
+  </post>
+</newspaper>

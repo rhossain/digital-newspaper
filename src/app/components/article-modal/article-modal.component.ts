@@ -6,7 +6,6 @@ import {
   GlobalSettings,
 } from '../../services/newspaper-data.service';
 import { ShareButtonsComponent } from '../../shared/share-buttons/share-buttons.component';
-import { TranslatePipe } from '../../i18n/translate.pipe';
 import { NormalizeContentPipe } from '../../shared/pipes/normalize-content.pipe';
 
 /**
@@ -34,7 +33,7 @@ import { NormalizeContentPipe } from '../../shared/pipes/normalize-content.pipe'
 @Component({
   selector: 'app-article-modal',
   standalone: true,
-  imports: [ShareButtonsComponent, TranslatePipe, NormalizeContentPipe],
+  imports: [ShareButtonsComponent, NormalizeContentPipe],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './article-modal.component.html',
   styleUrls: ['./article-modal.component.css'],

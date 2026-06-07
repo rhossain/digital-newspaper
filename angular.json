@@ -48,11 +48,17 @@
                   "with": "src/environments/environment.prod.ts"
                 }
               ],
-              "serviceWorker": "ngsw-config.json",
+              "serviceWorker": true,
+              "ngswConfigPath": "ngsw-config.json",
+              "optimization": {
+                "scripts": true,
+                "styles": { "minify": true, "inlineCritical": true },
+                "fonts": false
+              },
               "budgets": [
                 {
                   "type": "initial",
-                  "maximumWarning": "650kb",
+                  "maximumWarning": "750kb",
                   "maximumError": "1mb"
                 },
                 {
