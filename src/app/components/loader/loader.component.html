@@ -1,6 +1,17 @@
-@if (isLoading$ | async) {
-  <div class="global-loader" role="status" aria-label="Loading…">
-    <div class="spinner"></div>
-    <span class="loader-label">Loading…</span>
+@if (state.isLoading) {
+  <!-- Full-screen pointer-events blocker (invisible but blocks all clicks) -->
+  <div class="loader-backdrop" aria-hidden="true"></div>
+
+  <!-- Visible pill at the bottom -->
+  <div class="loader-pill" role="status" [attr.aria-label]="state.message || 'Loading…'">
+    <div class="loader-spinner"></div>
+    <div class="loader-text">
+      <span class="loader-message">{{ state.message || 'Please wait…' }}</span>
+      @if (showSlowWarning) {
+        <span class="loader-slow-warn">
+          This is taking longer than expected — please wait or check your connection.
+        </span>
+      }
+    </div>
   </div>
 }

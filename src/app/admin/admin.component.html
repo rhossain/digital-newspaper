@@ -4,13 +4,13 @@
     <div class="header-content">
       <h1>📰 Newspaper Admin Panel</h1>
       <div class="header-actions">
-        <button class="btn btn-secondary" (click)="goToViewer()" [disabled]="isSavingCrop" [title]="isSavingCrop ? 'Please wait — cropped image is being saved…' : ''">
+        <button class="btn btn-secondary" (click)="goToViewer()" dnTrack="view_viewer" [disabled]="isSavingCrop" [title]="isSavingCrop ? 'Please wait — cropped image is being saved…' : ''">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M15 18l-6-6 6-6"/>
           </svg>
           Back to Viewer
         </button>
-        <button class="btn btn-primary" *ngIf="isAdmin" (click)="openExportModal()" title="Export a JSON backup of WordPress data">
+        <button class="btn btn-primary" *ngIf="isAdmin" (click)="openExportModal()" dnTrack="export_download" title="Export a JSON backup of WordPress data">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
             <polyline points="7 10 12 15 17 10"></polyline>
@@ -59,7 +59,7 @@
       <div class="vhdr-actions" #vintageMenuPanel>
 
         <!-- Back to Viewer (opens in new window) -->
-        <button class="vhdr-icon-btn" (click)="goToViewerNewWindow()" title="Open Viewer in new window">
+        <button class="vhdr-icon-btn" (click)="goToViewerNewWindow()" dnTrack="view_viewer" title="Open Viewer in new window">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
             <polyline points="15 3 21 3 21 9"></polyline>
@@ -69,8 +69,16 @@
 
         <span class="vhdr-sep" aria-hidden="true">|</span>
 
-        <!-- Authenticated user name -->
-        <span class="vhdr-user">{{ currentUserName }}</span>
+        <!-- Authenticated user name — visually prominent so any visitor immediately
+             sees whose session is active and can log out if it is not theirs. -->
+        <span class="vhdr-user" [title]="'Logged in as ' + currentUserName">
+          <svg class="vhdr-user-icon" width="13" height="13" viewBox="0 0 24 24"
+               fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+            <circle cx="12" cy="7" r="4"></circle>
+          </svg>
+          <span class="vhdr-user-name">{{ currentUserName }}</span>
+        </span>
 
         <span class="vhdr-sep" aria-hidden="true">|</span>
 
@@ -112,12 +120,12 @@
             <button class="vhdr-menu-item" (click)="menuAddNewDate()" role="menuitem">Add New Date</button>
           </div>
 
-          <!-- E-post (scope TBD — items functional shell only) -->
+          <!-- E-post -->
           <div class="vhdr-menu-group">
             <span class="vhdr-group-label">E-post</span>
             <button class="vhdr-menu-item vhdr-menu-item--soon" (click)="closeMenu()" role="menuitem">All E-posts</button>
             <button class="vhdr-menu-item vhdr-menu-item--soon" (click)="closeMenu()" role="menuitem">Add New E-post</button>
-            <button class="vhdr-menu-item vhdr-menu-item--soon" (click)="closeMenu()" role="menuitem">Add Bulk E-post</button>
+            <button class="vhdr-menu-item" disabled (click)="openBulkXmlImport()" dnTrack="bulk_xml_open" role="menuitem">Add Bulk E-post</button>
           </div>
 
           <!-- Admin-only section -->
@@ -136,13 +144,18 @@
               Global Settings <span class="vhdr-admin-badge">Admin</span>
             </button>
 
+            <!-- Activity Log -->
+            <button class="vhdr-menu-item vhdr-menu-item--toplevel" (click)="menuGoToActivityLog()" role="menuitem">
+              Activity Log <span class="vhdr-admin-badge">Admin</span>
+            </button>
+
             <!-- Export Backup -->
             <button class="vhdr-menu-item vhdr-menu-item--toplevel" (click)="menuExportBackup()" role="menuitem">
               Export Backup <span class="vhdr-admin-badge">Admin</span>
             </button>
 
             <!-- Import Backup -->
-            <button class="vhdr-menu-item vhdr-menu-item--toplevel" (click)="menuImportBackup()" role="menuitem">
+            <button class="vhdr-menu-item vhdr-menu-item--toplevel" (click)="menuImportBackup()" dnTrack="import_open" role="menuitem">
               Import Backup <span class="vhdr-admin-badge">Admin</span>
             </button>
 
@@ -200,10 +213,17 @@
       </button>
       <button 
         *ngIf="isAdmin"
-        class="main-tab" 
+        class="main-tab"
         [class.active]="activeMainTab === 'settings'"
-        (click)="activeMainTab = 'settings'">
+        (click)="activeMainTab = 'settings'" dnTrack="settings_open">
         ⚙️ Global Settings
+      </button>
+      <button
+        *ngIf="isAdmin"
+        class="main-tab"
+        [class.active]="activeMainTab === 'logs'"
+        (click)="activeMainTab = 'logs'; loadActivityLog()">
+        📋 Activity Log
       </button>
     </div>
 
@@ -229,7 +249,7 @@
               [ngModel]="selectedEditionNumber"
               (ngModelChange)="onEditionChange($event)"
               class="date-select edition-select-inline">
-        <option *ngFor="let ed of editionsForDate" [ngValue]="ed.edition || 1">
+        <option *ngFor="let ed of editionsForDate; trackBy: trackByEditionNum" [ngValue]="ed.edition || 1">
           {{ getEditionLabel(ed) }}
         </option>
       </select>
@@ -240,12 +260,12 @@
     <div class="date-controls" *ngIf="activeMainTab === 'content'">
       <label class="date-control-label">Select Date:</label>
       <select [(ngModel)]="selectedDate" (change)="onDateChange()" class="date-select">
-        <option *ngFor="let date of availableDates" [value]="date">
+        <option *ngFor="let date of availableDates; trackBy: trackByDate" [value]="date">
           {{ formatDisplayDate(date) }}
         </option>
       </select>
       
-      <button class="btn btn-sm btn-primary" (click)="createNewDate()" *ngIf="adminTheme !== 'vintage'">
+      <button class="btn btn-sm btn-primary" (click)="createNewDate()" dnTrack="date_add" *ngIf="adminTheme !== 'vintage'">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <line x1="12" y1="5" x2="12" y2="19"></line>
           <line x1="5" y1="12" x2="19" y2="12"></line>
@@ -257,7 +277,7 @@
     <!-- Edition selector (shown when a date has multiple editions; hidden in vintage — managed via All Editions view) -->
     <div class="edition-bar" *ngIf="activeMainTab === 'content' && editionsForDate.length > 0 && adminTheme !== 'vintage'">
       <span class="edition-bar-label">Edition:</span>
-      <ng-container *ngFor="let ed of editionsForDate">
+      <ng-container *ngFor="let ed of editionsForDate; trackBy: trackByEditionNum">
         <button
           class="edition-btn"
           [class.active]="selectedEditionNumber === (ed.edition || 1)"
@@ -308,7 +328,7 @@
           </label>
         </div>
         <div class="edition-label-actions">
-          <button class="btn btn-sm btn-success" (click)="saveEditionLabels()">Save</button>
+          <button class="btn btn-sm btn-success" (click)="saveEditionLabels()" dnTrack="edition_label_save">Save</button>
           <button class="btn btn-sm btn-secondary" (click)="editingEditionLabel = null">Cancel</button>
         </div>
       </div>
@@ -348,7 +368,7 @@
     <aside class="sidebar" *ngIf="adminTheme !== 'vintage'">
       <div class="sidebar-header">
         <h2>Pages</h2>
-        <button class="btn btn-sm btn-primary" (click)="newPage()">+ Add Page</button>
+        <button class="btn btn-sm btn-primary" (click)="newPage()" dnTrack="page_add">+ Add Page</button>
       </div>
       
       <div class="page-list">
@@ -356,8 +376,7 @@
           Loading edition...
         </div>
         <div 
-          *ngFor="let page of pages"
-          class="page-item"
+          *ngFor="let page of pages; trackBy: trackByPageId"
           [class.active]="selectedPage?.id === page.id"
           (click)="selectPage(page)"
         >
@@ -365,7 +384,10 @@
             <img [src]="page.thumbnail || page.fullImage" [alt]="'Page ' + page.id" loading="lazy" decoding="async" />
           </div>
           <div class="page-info">
-            <h3>{{ getPageLabel(page) }}</h3>
+            <h3>
+              {{ getPageLabel(page) }}
+              <span class="badge-needs-image" *ngIf="page.imageStatus === 'pending'" title="Uploaded via XML import — page image not yet set">Needs image</span>
+            </h3>
             <p>{{ page.sections.length }} sections</p>
           </div>
           <div class="page-actions">
@@ -375,13 +397,13 @@
                 <circle cx="12" cy="12" r="3"></circle>
               </svg>
             </button>
-            <button class="btn-icon" (click)="editPage(page); $event.stopPropagation()" title="Edit">
+            <button class="btn-icon" (click)="editPage(page); $event.stopPropagation()" [disabled]="isPageLockedByOther && selectedPage?.id === page.id" title="Edit">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
                 <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
               </svg>
             </button>
-            <button class="btn-icon btn-delete" (click)="deletePage(page); $event.stopPropagation()" title="Delete">
+            <button class="btn-icon btn-delete" (click)="deletePage(page); $event.stopPropagation()" [disabled]="isPageLockedByOther && selectedPage?.id === page.id" title="Delete">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="3 6 5 6 21 6"></polyline>
                 <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
@@ -410,7 +432,7 @@
           <img [src]="previewPageUrl" alt="Full page preview" />
           <!-- Section overlays (only for sections that have been cropped) -->
           <ng-container *ngIf="previewPage?.sections?.length">
-            <ng-container *ngFor="let sec of previewPage.sections">
+            <ng-container *ngFor="let sec of previewPage?.sections; trackBy: trackBySectionId">
               <div
                 *ngIf="sec.width > 0"
                 class="preview-section-box"
@@ -422,7 +444,7 @@
               >
                 <span class="preview-sec-label">{{ sec.title }}</span>
                 <div class="preview-sec-actions">
-                  <button class="sec-btn sec-edit-btn" (click)="previewEditSection(sec)" title="Edit section">
+                  <button class="sec-btn sec-edit-btn" (click)="previewEditSection(sec)" title="Edit post">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5l3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                     Edit
                   </button>
@@ -440,17 +462,83 @@
 
     <!-- Main Content -->
     <main class="main-content">
+
+      <!-- Pending image warning banner (shown when any page in current edition has imageStatus: 'pending') -->
+      <div class="pending-images-banner" *ngIf="pendingImagePagesCount > 0">
+        ⚠ <strong>{{ pendingImagePagesCount }} page(s) are missing images.</strong>
+        These pages' sections are saved but won't display in the viewer until you upload a page image and set crop coordinates.
+        <button class="pending-images-banner-link" (click)="activeTab = 'pages'">Set now →</button>
+      </div>
+
+      <!-- Add New Date Dialog -->
+      <div class="modal-overlay" *ngIf="showNewDateDialog" (click)="cancelNewDateDialog()">
+        <div class="modal modal-sm" (click)="$event.stopPropagation()">
+          <div class="modal-header">
+            <h2>Add New Date</h2>
+            <button class="btn-close" (click)="cancelNewDateDialog()" aria-label="Close">&times;</button>
+          </div>
+          <div class="modal-body">
+            <div class="form-group">
+              <label for="newDateInput">Date <span style="color:#e53935">*</span></label>
+              <input
+                id="newDateInput"
+                type="date"
+                class="form-control"
+                [class.input-error]="!!newDateError"
+                [ngModel]="newDateInput"
+                (ngModelChange)="onNewDateInputChange($event)"
+                min="2000-01-01"
+                max="2099-12-31"
+                autocomplete="off"
+              />
+              <small class="new-date-error" *ngIf="newDateError">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+                {{ newDateError }}
+              </small>
+            </div>
+            <!-- Warning: date already exists / has pages -->
+            <div class="new-date-warning-box" *ngIf="newDateWarning && !newDateError" role="alert">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+              <span>{{ newDateWarning }}</span>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" (click)="cancelNewDateDialog()">Cancel</button>
+            <button
+              class="btn btn-primary"
+              (click)="confirmNewDate()"
+              [disabled]="!!newDateError || !newDateInput"
+            >
+              {{ availableDates.includes(newDateInput) ? 'Open Date' : 'Create Date' }}
+            </button>
+          </div>
+        </div>
+      </div>
+
       <!-- Page Editor Modal -->
       <div class="modal-overlay" *ngIf="isEditingPage">
         <div class="modal">
           <div class="modal-header">
             <h2>{{ isEditingExistingPage() ? 'Edit' : 'New' }} Page</h2>
-            <button class="btn-close" (click)="cancelPageEdit()">&times;</button>
+            <button class="btn-close" (click)="cancelPageEdit()" dnTrack="page_cancel">&times;</button>
           </div>
           <div class="modal-body">
             <div class="form-group">
               <label>Page ID</label>
-              <input type="number" [(ngModel)]="pageForm.id" [disabled]="isEditingDisabled()" class="form-control" />
+              <select
+                class="form-control page-id-select"
+                [(ngModel)]="pageForm.id"
+                [disabled]="isEditingDisabled()"
+              >
+                <option
+                  *ngFor="let opt of pageIdOptions"
+                  [ngValue]="opt.id"
+                  [disabled]="opt.disabled"
+                >{{ opt.id }}{{ opt.disabled ? ' — already used' : '' }}</option>
+              </select>
+              <small *ngIf="!isEditingDisabled()" class="page-id-hint">
+                IDs 1–15 are available. Greyed options are already used for this date &amp; edition.
+              </small>
             </div>
             <div class="form-group">
               <label>Full Image <span style="color:#e53935">*</span></label>
@@ -581,7 +669,7 @@
             </div>
           </div>
           <div class="modal-footer">
-            <button class="btn btn-secondary" (click)="cancelPageEdit()">Cancel</button>
+            <button class="btn btn-secondary" (click)="cancelPageEdit()" dnTrack="page_cancel">Cancel</button>
             <button class="btn btn-primary" (click)="savePage()">Save Page</button>
           </div>
         </div>
@@ -589,14 +677,21 @@
 
       <!-- Section Editor -->
       <div class="content-panel" *ngIf="selectedPage && !isEditingSection && adminTheme !== 'vintage'">
+
+        <!-- Lock banner: shown when another user is editing this page -->
+        <div class="lock-banner" *ngIf="isPageLockedByOther">
+          <span class="lock-banner-icon">🔒</span>
+          <span><strong>{{ lockHeldByName }}</strong> is currently editing this page. You can view sections but editing is disabled until they finish.</span>
+        </div>
+
         <div class="panel-header">
           <h2>Page {{ selectedPage.id }} - News items</h2>
-          <button class="btn btn-primary" (click)="newSection()">+ Add news item</button>
+          <button class="btn btn-primary" (click)="newSection()" [disabled]="isPageLockedByOther" dnTrack="section_add">+ Add news item</button>
         </div>
 
         <div class="sections-grid">
           <div 
-            *ngFor="let section of selectedPage.sections"
+            *ngFor="let section of selectedPage.sections; trackBy: trackBySectionId"
             class="section-card"
           >
             <div class="section-preview" *ngIf="section.imageUrl">
@@ -622,8 +717,8 @@
               </p>
             </div>
             <div class="section-actions">
-              <button class="btn btn-sm btn-secondary" (click)="editSection(section)">Edit</button>
-              <button class="btn btn-sm btn-danger" (click)="deleteSection(section)">Delete</button>
+              <button class="btn btn-sm btn-secondary" (click)="editSection(section)" [disabled]="isPageLockedByOther" dnTrack="section_edit">Edit</button>
+              <button class="btn btn-sm btn-danger" (click)="deleteSection(section)" [disabled]="isPageLockedByOther">Delete</button>
             </div>
           </div>
         </div>
@@ -636,27 +731,33 @@
           </svg>
           <h3>No sections yet</h3>
           <p>Add your first section to get started</p>
-          <button class="btn btn-primary" (click)="newSection()">+ Add Section</button>
+          <button class="btn btn-primary" (click)="newSection()" [disabled]="isPageLockedByOther" dnTrack="section_add">+ Add Section</button>
         </div>
       </div>
 
       <!-- Section Form -->
       <div class="content-panel" *ngIf="isEditingSection">
         <div class="panel-header">
-          <h2>{{ selectedSection ? 'Edit' : 'New' }} Section</h2>
-          <button class="btn btn-secondary" (click)="cancelSectionEdit()" [disabled]="isSavingCrop" [title]="isSavingCrop ? 'Please wait — cropped image is being saved…' : ''">Cancel</button>
+          <h2>{{ selectedSection ? 'Edit' : 'New' }} Post</h2>
+          <button class="btn btn-secondary" (click)="cancelSectionEdit()" dnTrack="section_cancel" [disabled]="isSavingCrop" [title]="isSavingCrop ? 'Please wait — cropped image is being saved…' : ''">Cancel</button>
         </div>
 
         <div class="section-form">
           <div class="form-row" style="margin-bottom: 0;">
             <div class="form-group">
-              <label>Section ID</label>
+              <label>Post ID</label>
               <input type="text" [(ngModel)]="sectionForm.id" readonly class="form-control" />
             </div>
             <div class="form-group">
               <label>Title *</label>
               <input type="text" [(ngModel)]="sectionForm.title" class="form-control" placeholder="Section headline" />
             </div>
+          </div>
+
+          <!-- WordPress Post ID (read-only, populated after save) -->
+          <div class="wp-post-id-badge" *ngIf="sectionForm.wpPostId">
+            WP Post ID: <strong>{{ sectionForm.wpPostId }}</strong>
+            <span class="wp-post-id-source" *ngIf="sectionForm.importSource === 'xml'">· XML import</span>
           </div>
 
           <div class="form-group">
@@ -671,7 +772,7 @@
             </quill-editor>
           </div>
 
-          <div class="form-group">            <label>Crop the news section Image</label>
+          <div class="form-group">            <label>Crop the news post Image</label>
             <div class="crop-controls">
               <!-- <div class="form-row">
                 <div class="form-group-sm">
@@ -720,7 +821,7 @@
           </div>
 
           <div class="form-group">
-            <label>Section Image Source</label>
+            <label>Post Image Source</label>
             <div style="margin-bottom: 12px;">
               <label style="display: block; margin-bottom: 8px; cursor: pointer;">
                 <input type="radio" [(ngModel)]="imageSourceOption" value="auto-crop" name="imageSource" style="margin-right: 8px;" />
@@ -761,7 +862,18 @@
           </div>
 
           <div class="form-group">
-            <label>Linked Sections</label>
+            <label>Linked Posts</label>
+            <div *ngIf="isCurrentSectionThePrimary()" class="current-primary-notice">
+              ★ This section is the primary — it appears first in the viewer
+            </div>
+            <div *ngIf="sectionForm.linkedSectionIds?.length && !isCurrentSectionThePrimary()" class="set-self-primary-row">
+              <button
+                type="button"
+                class="btn-set-self-primary"
+                (click)="setCurrentSectionAsPrimary()"
+                title="Make this section the primary — it will appear first in the viewer"
+              >☆ Set this section as primary</button>
+            </div>
             <div class="linked-sections-selector">
               <div 
                 *ngFor="let section of getAvailableSections()"
@@ -770,7 +882,14 @@
                 (click)="toggleLinkedSection(section.id)"
               >
                 <input type="checkbox" [checked]="isLinked(section.id)" />
-                <span>{{ section.title }} (Page {{ section.pageId }})</span>
+                <span>Page {{ section.pageId }} - {{ section.title }}</span>
+                <span
+                  *ngIf="isLinked(section.id)"
+                  class="primary-tag"
+                  [class.active]="isLinkedSectionPrimary(section.id)"
+                  (click)="$event.stopPropagation(); setLinkedSectionPrimary(section.id)"
+                  [title]="isLinkedSectionPrimary(section.id) ? 'Primary section — shown first in viewer' : 'Click to set as primary section'"
+                >{{ isLinkedSectionPrimary(section.id) ? '★ Primary' : '☆' }}</span>
               </div>
               <div *ngIf="getAvailableSections().length === 0" class="empty-message">
                 No other sections available
@@ -779,7 +898,7 @@
           </div>
 
           <div class="form-actions">
-            <button class="btn btn-secondary" (click)="cancelSectionEdit()" [disabled]="isSavingCrop" [title]="isSavingCrop ? 'Please wait — cropped image is being saved…' : ''">Cancel</button>
+            <button class="btn btn-secondary" (click)="cancelSectionEdit()" dnTrack="section_cancel" [disabled]="isSavingCrop" [title]="isSavingCrop ? 'Please wait — cropped image is being saved…' : ''">Cancel</button>
             <button class="btn btn-primary" (click)="saveSection()" [disabled]="isSavingCrop" [title]="isSavingCrop ? 'Please wait — cropped image is being saved…' : ''">Save Section</button>
           </div>
           <div class="crop-saving-notice" *ngIf="isSavingCrop">
@@ -818,7 +937,7 @@
               <span class="vtb-dot" aria-hidden="true"></span>
               <span class="vtb-meta">{{ pages.length }} page{{ pages.length !== 1 ? 's' : '' }} · {{ getCurrentEditionLabel() }} · {{ formatDisplayDate(selectedDate) }}</span>
             </div>
-            <button class="btn btn-primary btn-sm" (click)="newPage()">
+            <button class="btn btn-primary btn-sm" (click)="newPage()" dnTrack="page_add">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                 <line x1="12" y1="5" x2="12" y2="19"></line>
                 <line x1="5" y1="12" x2="19" y2="12"></line>
@@ -836,7 +955,7 @@
               <span class="vtb-dot" aria-hidden="true"></span>
               <span class="vtb-meta">{{ selectedPage.sections.length }} post{{ selectedPage.sections.length !== 1 ? 's' : '' }}</span>
             </div>
-            <button class="btn btn-primary btn-sm" (click)="newSection()">
+            <button class="btn btn-primary btn-sm" (click)="newSection()" [disabled]="isPageLockedByOther" dnTrack="section_add">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                 <line x1="12" y1="5" x2="12" y2="19"></line>
                 <line x1="5" y1="12" x2="19" y2="12"></line>
@@ -878,13 +997,13 @@
         <ng-container *ngIf="vintageView === 'pages'">
 
           <div class="vintage-page-grid">
-            <article class="vpc-card" *ngFor="let page of pages" (click)="vintageSelectPage(page)" role="button" tabindex="0" (keydown.enter)="vintageSelectPage(page)">
+            <article class="vpc-card" *ngFor="let page of pages; trackBy: trackByPageId" (click)="vintageSelectPage(page)" role="button" tabindex="0" (keydown.enter)="vintageSelectPage(page)">
               <div class="vpc-thumb">
-                <img *ngIf="page.thumbnail || page.fullImage"
-                     [src]="page.thumbnail || page.fullImage"
+                <img *ngIf="page.fullImage || page.thumbnail"
+                     [src]="page.fullImage || page.thumbnail"
                      [alt]="getPageLabel(page)"
                      loading="lazy" decoding="async" />
-                <div class="vpc-thumb-fallback" *ngIf="!page.thumbnail && !page.fullImage">
+                <div class="vpc-thumb-fallback" *ngIf="!page.fullImage && !page.thumbnail">
                   <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                     <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
                     <polyline points="14 2 14 8 20 8"></polyline>
@@ -894,6 +1013,7 @@
               <div class="vpc-body">
                 <div class="vpc-meta-row vpc-meta-row--primary">
                   <span class="vpc-page-name">{{ getPageLabel(page) }}</span>
+                  <span class="badge-needs-image" *ngIf="page.imageStatus === 'pending'" title="Needs image upload">Needs image</span>
                 </div>
                 <div class="vpc-meta-row vpc-meta-row--secondary">
                   <span class="vpc-date">{{ formatDisplayDate(selectedDate) }}</span>
@@ -907,7 +1027,7 @@
                     </svg>
                     Preview
                   </button>
-                  <button class="vpc-btn vpc-btn--edit" (click)="editPage(page)" title="Edit page">
+                  <button class="vpc-btn vpc-btn--edit" (click)="editPage(page)" [disabled]="isPageLockedByOther && selectedPage?.id === page.id" title="Edit page">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                       <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
                       <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
@@ -936,15 +1056,21 @@
               <polyline points="14 2 14 8 20 8"></polyline>
             </svg>
             <p>No pages yet for this edition</p>
-            <button class="btn btn-primary" (click)="newPage()">Add First Page</button>
+            <button class="btn btn-primary" (click)="newPage()" dnTrack="page_add">Add First Page</button>
           </div>
         </ng-container>
 
         <!-- ── POSTS GRID ────────────────────────────────────────── -->
         <ng-container *ngIf="vintageView === 'sections' && selectedPage">
 
+          <!-- Lock banner: shown when another user is editing this page -->
+          <div class="lock-banner" *ngIf="isPageLockedByOther" style="margin: 0 0 12px;">
+            <span class="lock-banner-icon">🔒</span>
+            <span><strong>{{ lockHeldByName }}</strong> is currently editing this page. Editing is disabled.</span>
+          </div>
+
           <div class="vintage-post-grid">
-            <article class="vpost-card" *ngFor="let section of selectedPage.sections" (click)="vintageSelectSection(section)" role="button" tabindex="0" (keydown.enter)="vintageSelectSection(section)">
+            <article class="vpost-card" *ngFor="let section of selectedPage.sections; trackBy: trackBySectionId" (click)="vintageSelectSection(section)" role="button" tabindex="0" (keydown.enter)="vintageSelectSection(section)">
               <!-- Thumbnail: explicit imageUrl > crop from page > fallback icon -->
               <div class="vpost-thumb">
                 <img *ngIf="section.imageUrl"
@@ -991,7 +1117,7 @@
                     </svg>
                     Preview
                   </button>
-                  <button class="vpc-btn vpc-btn--delete" (click)="deleteSection(section)" title="Delete post">
+                  <button class="vpc-btn vpc-btn--delete" (click)="deleteSection(section)" [disabled]="isPageLockedByOther" title="Delete post">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                       <polyline points="3 6 5 6 21 6"></polyline>
                       <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
@@ -1013,7 +1139,7 @@
               <line x1="15" y1="9" x2="9" y2="15"></line>
             </svg>
             <p>No posts yet for this page</p>
-            <button class="btn btn-primary" (click)="newSection()">Add First Post</button>
+            <button class="btn btn-primary" (click)="newSection()" [disabled]="isPageLockedByOther" dnTrack="section_add">Add First Post</button>
           </div>
         </ng-container>
 
@@ -1053,7 +1179,15 @@
                 </div>
               </dl>
               <p class="vpd-coming-soon">Full post details coming soon.</p>
-              <div class="vpd-actions">
+
+              <!-- Lock banner: read-only view when another user holds this page -->
+              <div class="lock-banner" *ngIf="isPageLockedByOther" style="margin: 0 0 12px;">
+                <span class="lock-banner-icon">🔒</span>
+                <span><strong>{{ lockHeldByName }}</strong> is currently editing this page. You can view posts but not edit them.</span>
+              </div>
+
+              <!-- Edit/Delete actions — hidden when locked (not just disabled, to avoid confusion) -->
+              <div class="vpd-actions" *ngIf="!isPageLockedByOther">
                 <button class="btn btn-primary" (click)="editSection(vintageSelectedSection)">Edit Post</button>
                 <button class="btn btn-danger" (click)="deleteSection(vintageSelectedSection); vintageBackToSections()">Delete Post</button>
               </div>
@@ -1065,7 +1199,7 @@
         <ng-container *ngIf="vintageView === 'editions'">
           <div class="veditions-list">
 
-            <div class="vedition-row" *ngFor="let ed of editionsForDate">
+            <div class="vedition-row" *ngFor="let ed of editionsForDate; trackBy: trackByEditionNum">
 
               <!-- Top: icon + info -->
               <div class="vedition-card-top">
@@ -1100,7 +1234,7 @@
                   </label>
                 </div>
                 <div class="vedition-label-actions">
-                  <button class="btn btn-sm btn-success" (click)="saveEditionLabels()">Save Labels</button>
+                  <button class="btn btn-sm btn-success" (click)="saveEditionLabels()" dnTrack="edition_label_save">Save Labels</button>
                   <button class="btn btn-sm btn-secondary" (click)="editingEditionLabel = null">Cancel</button>
                 </div>
               </div>
@@ -1283,8 +1417,13 @@
             />
           </div>
           <div class="form-group">
-            <label>Logo Alt Text</label>
+            <label>Home Page Title</label>
             <input type="text" [(ngModel)]="settingsForm.logo!.alt" class="form-control" placeholder="Digital Newspaper" />
+          </div>
+          <div class="form-group">
+            <label>Others Page Title</label>
+            <input type="text" [(ngModel)]="settingsForm.othersPageTitle" class="form-control" placeholder="দৈনিক সংগ্রাম ই-পেপার" />
+            <small class="hint-text">Appended to individual post titles — e.g. "Post Title - দৈনিক সংগ্রাম ই-পেপার"</small>
           </div>
           <div class="form-group">
             <label>Logo Link URL</label>
@@ -1497,10 +1636,193 @@
           <p class="hint-text" *ngIf="backupHistory.length > 0" style="margin-top:8px;">Last {{ backupHistory.length }} export(s) recorded locally in this browser.</p>
         </div>
 
+        <!-- Active Locks Management (admin only) -->
+        <div class="settings-section" *ngIf="isAdmin">
+          <h3>Active Edit Locks</h3>
+          <p class="hint-text" style="margin-bottom:12px;">
+            When a user is editing a page, a lock prevents others from making changes at the same time.
+            You can force-release a stuck lock here if needed.
+          </p>
+          <div *ngIf="activeLocks.length === 0" class="backup-history-empty">
+            No pages are currently being edited.
+          </div>
+          <div *ngIf="activeLocks.length > 0" class="backup-history-list">
+            <div *ngFor="let lock of activeLocks" class="backup-history-item" style="align-items:center;">
+              <div class="backup-history-meta" style="flex:1;">
+                <div class="backup-history-filename">🔒 {{ lock.resource }}</div>
+                <div class="backup-history-details">
+                  Held by <strong>{{ lock.displayName }}</strong>
+                  &bull; Expires in {{ ((lock.expiresAt * 1000) - (nowMs())) / 1000 | number:'1.0-0' }}s
+                </div>
+              </div>
+              <button class="btn btn-sm btn-danger" (click)="adminForceReleaseLock(lock.resource)" dnTrack="lock_force_release">
+                Force Release
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════════════════
+             ACTIVITY LOG — moved to its own tab (📋 Activity Log)
+             ═══════════════════════════════════════════════════════════ -->
+        <div class="settings-section" *ngIf="isAdmin" style="text-align:center; padding: 20px;">
+          <p style="margin:0 0 12px; color: var(--text-secondary, #666);">
+            The Activity Log has been moved to its own dedicated tab.
+          </p>
+          <button class="btn btn-secondary" (click)="activeMainTab = 'logs'; loadActivityLog()">
+            📋 Go to Activity Log
+          </button>
+        </div><!-- /activity-log-section redirect -->
+
       </div>
     </div>
   </div>
+  <!-- /Global Settings Panel -->
+
+  <!-- ════════════════════════════════════════════════════════════════════════
+       ACTIVITY LOG PANEL  (admin only, dedicated full-page tab)
+       ════════════════════════════════════════════════════════════════════════ -->
+  <div class="admin-body logs-panel" *ngIf="isAuthenticated && isAdmin && activeMainTab === 'logs'" (scroll)="onLogsScroll($event)">
+    <div class="logs-panel-inner">
+
+      <!-- Page header -->
+      <div class="logs-page-header">
+        <div class="logs-title-row">
+          <h2 class="logs-title">📋 User Activity Log</h2>
+          <span class="logs-title-hint">Every action recorded with date, time and user. Click any row for details.</span>
+        </div>
+        <div class="activity-log-actions">
+          <button class="btn btn-sm btn-secondary" (click)="loadActivityLog()" title="Refresh">↻ Refresh</button>
+          <button class="btn btn-sm btn-secondary" (click)="exportLogCsv()" [disabled]="logTotal === 0" title="Export current filter as CSV">⬇ CSV</button>
+          <button class="btn btn-sm btn-danger" (click)="confirmClearLog()" [disabled]="logTotal === 0" dnTrack="clear_activity_log">🗑 Clear Log</button>
+        </div>
+      </div>
+
+      <!-- Filters -->
+      <div class="log-filters">
+        <select class="form-control log-filter-select" [(ngModel)]="logActionFilter" (change)="applyLogFilters()">
+          <option value="">All Actions</option>
+          <option *ngFor="let key of logActionKeys" [value]="key">{{ logActionLabels[key] }}</option>
+        </select>
+        <select class="form-control log-filter-select" [(ngModel)]="logUserFilter" (change)="applyLogFilters()">
+          <option [ngValue]="0">All Users</option>
+          <option *ngFor="let u of logKnownUsers" [ngValue]="u.userId">{{ u.displayName }}</option>
+        </select>
+        <input class="form-control log-filter-search" [(ngModel)]="logSearchFilter"
+               (keyup.enter)="applyLogFilters()" placeholder="Search user name…" type="text" />
+        <input type="date" class="form-control log-filter-date" [(ngModel)]="logDateFrom"
+               (change)="applyLogFilters()" title="From date" />
+        <input type="date" class="form-control log-filter-date" [(ngModel)]="logDateTo"
+               (change)="applyLogFilters()" title="To date" />
+        <button class="btn btn-secondary" (click)="clearLogFilters()">Reset</button>
+      </div>
+
+      <!-- Loading -->
+      <div *ngIf="logLoading" class="log-loading">
+        <div class="log-loading-spinner"></div>
+        Loading activity…
+      </div>
+
+      <!-- Empty state -->
+      <div *ngIf="!logLoading && logTotal === 0" class="backup-history-empty" style="margin-top:24px;">
+        No activity recorded yet. Every user action (saves, edits, logins) will appear here automatically.
+      </div>
+
+      <!-- Table -->
+      <div *ngIf="!logLoading && logEntries.length > 0" class="log-table-wrap">
+        <div class="log-stats-bar">
+          <span class="log-stats-total">{{ logTotal }} total entries</span>
+          <span class="log-stats-hint">Click any row to see full details</span>
+        </div>
+        <table class="log-table">
+          <thead>
+            <tr>
+              <th class="log-th-sortable" (click)="setLogSort('created_at')">
+                Date &amp; Time <span class="log-sort-icon">{{ logSortIcon("created_at") }}</span>
+              </th>
+              <th class="log-th-sortable" (click)="setLogSort('display_name')">
+                User <span class="log-sort-icon">{{ logSortIcon("display_name") }}</span>
+              </th>
+              <th class="log-th-sortable" (click)="setLogSort('action')">
+                Action <span class="log-sort-icon">{{ logSortIcon("action") }}</span>
+              </th>
+              <th>Summary</th>
+              <th>IP</th>
+            </tr>
+          </thead>
+          <tbody>
+            <ng-container *ngFor="let entry of logEntries; trackBy: trackByLogId">
+              <tr [ngClass]="['log-row', getLogActionColor(entry.action), expandedLogId === entry.id ? 'log-row--expanded' : '']"
+                  (click)="toggleLogRow(entry.id)"
+                  style="cursor:pointer;">
+                <td class="log-ts">{{ formatLogTimestamp(entry.createdAt) }}</td>
+                <td class="log-user">
+                  <span class="log-name">{{ entry.displayName || "—" }}</span>
+                  <span class="log-role" *ngIf="entry.role">{{ entry.role }}</span>
+                </td>
+                <td class="log-action">
+                  <span [ngClass]="['log-action-badge', getLogActionColor(entry.action)]">
+                    {{ entry.label || getLogActionLabel(entry.action) }}
+                  </span>
+                </td>
+                <td class="log-summary">
+                  <span *ngIf="hasLogDetails(entry.details)" class="log-summary-text">
+                    {{ logDetailEntries(entry.details)[0]?.value }}
+                    <span *ngIf="logDetailEntries(entry.details).length > 1" class="log-more-badge">
+                      +{{ logDetailEntries(entry.details).length - 1 }}
+                    </span>
+                  </span>
+                  <span *ngIf="!hasLogDetails(entry.details)">—</span>
+                </td>
+                <td class="log-ip">{{ entry.ip || "—" }}</td>
+              </tr>
+              <tr *ngIf="expandedLogId === entry.id" class="log-detail-row">
+                <td colspan="5">
+                  <div class="log-detail-grid">
+                    <div *ngFor="let kv of logDetailEntries(entry.details)" class="log-detail-item">
+                      <span class="log-detail-key">{{ kv.key }}</span>
+                      <span class="log-detail-val">{{ kv.value }}</span>
+                    </div>
+                    <div class="log-detail-item">
+                      <span class="log-detail-key">Action key</span>
+                      <span class="log-detail-val log-detail-mono">{{ entry.action }}</span>
+                    </div>
+                    <div class="log-detail-item">
+                      <span class="log-detail-key">Role</span>
+                      <span class="log-detail-val">{{ entry.role }}</span>
+                    </div>
+                  </div>
+                </td>
+              </tr>
+            </ng-container>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Load-more / infinite scroll footer -->
+      <div class="log-shown-count" *ngIf="!logLoading && logEntries.length > 0">
+        Showing {{ logEntries.length }} of {{ logTotal }} entries
+      </div>
+      <div class="log-load-more" *ngIf="logHasMore && !logIsLoadingMore && !logLoading"
+           (click)="loadMoreLog()">
+        ↓ Load more entries
+      </div>
+      <div class="log-load-more-spinner" *ngIf="logIsLoadingMore">
+        Loading more entries…
+      </div>
+
+    </div>
+  </div>
+  <!-- /Activity Log Panel -->
+
 </div>
+
+<!-- Bulk XML Import Modal -->
+<app-bulk-xml-import
+  *ngIf="showBulkXmlImport"
+  (closed)="showBulkXmlImport = false"
+  (importCompleted)="onBulkXmlImportCompleted($event)"
+></app-bulk-xml-import>
 
 <!-- Export Backup Modal -->
 <div class="modal-overlay" *ngIf="showExportModal">
@@ -1763,7 +2085,7 @@
         <button class="zoom-step-btn" (click)="zoomIn()" title="Zoom in">+</button>
       </div>
 
-      <button class="btn-close" (click)="closeCropper()" title="Close (Esc)">&times;</button>
+      <button class="btn-close" (click)="closeCropper()" dnTrack="cropper_close" title="Close (Esc)">&times;</button>
     </div>
 
     <!-- ── Hint bar ─────────────────────────────────────────────────── -->
@@ -1904,7 +2226,7 @@
         <div class="crop-no-sel">Draw a selection on the image above</div>
       </ng-template>
       <div class="cropper-footer-actions">
-        <button class="btn btn-secondary" (click)="closeCropper()">Cancel</button>
+        <button class="btn btn-secondary" (click)="closeCropper()" dnTrack="cropper_close">Cancel</button>
         <button class="btn btn-primary" (click)="applyCrop()" [disabled]="!hasCropBox()">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="20 6 9 17 4 12"/></svg>
           Apply Crop
@@ -1913,6 +2235,75 @@
     </div>
 
   </div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     CONFLICT MODAL — shown when another user saved while this user was editing
+     ═══════════════════════════════════════════════════════════════════════ -->
+@if (showConflictModal) {
+  <div class="dn-modal-backdrop conflict-backdrop" (click)="dismissConflictModal()">
+    <div class="dn-modal conflict-modal" role="alertdialog" aria-modal="true"
+         aria-labelledby="conflict-title" (click)="$event.stopPropagation()">
+
+      <div class="conflict-icon">⚠️</div>
+
+      @if (conflictIsSelf) {
+        <h2 id="conflict-title" class="conflict-title">Save interrupted — version out of sync</h2>
+        <p class="conflict-body">
+          A previous save attempt was <strong>interrupted</strong> before its response reached your
+          browser (e.g. by a security module or network hiccup). The server saved that data, so its
+          version is now newer than what your browser expects.
+        </p>
+        <p class="conflict-body">Your current changes have <strong>not</strong> been lost.</p>
+      } @else {
+        <h2 id="conflict-title" class="conflict-title">Another user saved changes</h2>
+        <p class="conflict-body">
+          <strong>{{ conflictLastSavedBy }}</strong> saved new content while you were editing.
+          Your changes have <strong>not</strong> been lost — they are still visible on your screen.
+        </p>
+      }
+      <p class="conflict-body">Please choose how to continue:</p>
+
+      <div class="conflict-options">
+        <div class="conflict-option">
+          <button class="btn btn-primary conflict-btn-reload" (click)="resolveConflictByReloading()">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.36"/>
+            </svg>
+            Reload latest version
+          </button>
+          <p class="conflict-option-desc">
+            @if (conflictIsSelf) {
+              Discard your unsaved edits and reload the server's current data.
+            } @else {
+              Discard your unsaved edits and load what the other user saved.
+              <strong>Recommended</strong> — you can re-enter your changes afterwards.
+            }
+          </p>
+        </div>
+
+        <div class="conflict-option" *ngIf="isAdmin">
+          <button class="btn btn-danger conflict-btn-force" (click)="resolveConflictByForcing()">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+            </svg>
+            @if (conflictIsSelf) { Save my version (recommended) } @else { Force-save my version }
+          </button>
+          <p class="conflict-option-desc">
+            @if (conflictIsSelf) {
+              <strong>Recommended.</strong> Saves your current changes over the interrupted version.
+              Safe to use when you are the only editor.
+            } @else {
+              Overwrite the server with your current screen. Use only if you are sure
+              the other user's changes should be discarded.
+            }
+          </p>
+        </div>
+      </div>
+
+      <button class="conflict-dismiss" (click)="dismissConflictModal()" aria-label="Close">✕</button>
+    </div>
+  </div>
+}
 
 
 </div>

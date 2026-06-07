@@ -125,7 +125,7 @@
           <span class="logo-beta-badge" *ngIf="settings?.showBetaBadge">beta</span>
         </div>
         <div class="header-text" *ngIf="settings && !settings.logo?.url && assetLogoError">
-          <h1 class="newspaper-title">{{ settings.logo?.alt || 'Dainik Sangram' }}</h1>
+          <h1 class="newspaper-title">{{ settings.logo?.alt || 'দৈনিক সংগ্রাম' }}</h1>
           <p class="newspaper-date">{{ todayDisplayDate }}</p>
         </div>
         </a>
@@ -403,6 +403,7 @@
               (keydown.enter)="pages.length > 1 && (pageDropdownOpen = !pageDropdownOpen)"
               [attr.tabindex]="pages.length > 1 ? 0 : -1"
             >
+              <span class="page-num-badge">{{ ts.toLocaleDigits(currentPage.id) }}</span>
               <span class="edition-label">{{ currentPage ? getPageLabel(currentPage) : '' }}</span>
               <svg *ngIf="pages.length > 1" class="edition-arrow" [class.open]="pageDropdownOpen"
                 width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
@@ -416,7 +417,8 @@
                 [class.active]="currentPage.id === page.id"
                 (click)="onPageClick(page); pageDropdownOpen = false"
               >
-                {{ getPageLabel(page) }}
+                <span class="option-num">{{ ts.toLocaleDigits(page.id) }}</span>
+                <span class="option-label">{{ getPageLabel(page) }}</span>
               </button>
             </div>
             <div class="edition-backdrop" *ngIf="pageDropdownOpen" (click)="pageDropdownOpen = false"></div>
@@ -425,7 +427,7 @@
 
         <!-- Right: Print & Download the full page image -->
         <div class="toolbar-right">
-          <button class="toolbar-btn" (click)="printImage(resolveImageUrl(currentPage.fullImage), (ts.t('viewer.page') + ' ' + ts.toLocaleDigits(currentPage.id)))" [title]="ts.t('viewer.print')">
+          <button class="toolbar-btn toolbar-btn-print" (click)="printImage(resolveImageUrl(currentPage.fullImage), (ts.t('viewer.page') + ' ' + ts.toLocaleDigits(currentPage.id)))" [title]="ts.t('viewer.print')">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polyline points="6 9 6 2 18 2 18 9"></polyline>
               <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
@@ -433,13 +435,13 @@
             </svg>
             <span>{{ 'viewer.print' | translate }}</span>
           </button>
-          <button class="toolbar-btn" (click)="downloadImage(resolveImageUrl(currentPage.fullImage), (ts.t('viewer.page') + ' ' + ts.toLocaleDigits(currentPage.id)))" [title]="ts.t('viewer.download')">
+          <button class="toolbar-btn toolbar-btn-download" (click)="downloadImage(resolveImageUrl(currentPage.fullImage), (ts.t('viewer.page') + ' ' + ts.toLocaleDigits(currentPage.id)))" [title]="ts.t('viewer.download')">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
               <polyline points="7 10 12 15 17 10"></polyline>
               <line x1="12" y1="15" x2="12" y2="3"></line>
             </svg>
-            <span>{{ 'viewer.download' | translate }}</span>
+            <span class="toolbar-btn-text">{{ 'viewer.download' | translate }}</span>
           </button>
           <button class="toolbar-btn panel-toggle-btn" (click)="leftPanelVisible = !leftPanelVisible"
             [title]="leftPanelVisible ? 'Hide pages panel' : 'Show pages panel'"
@@ -453,7 +455,7 @@
       </div>
 
       <!-- Page Pagination Bar -->
-      <div class="page-pagination" *ngIf="pages.length > 1 && settings?.showPagePagination !== false">
+      <div class="page-pagination" #paginationBar *ngIf="pages.length > 1 && settings?.showPagePagination !== false">
         <button
           class="pagination-btn"
           (click)="onPageClick(pages[pages.indexOf(currentPage) - 1])"
@@ -463,15 +465,18 @@
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"></polyline></svg>
         </button>
 
-        <button
-          *ngFor="let page of pages; trackBy: trackByPageId"
-          class="pagination-page-btn"
-          [class.active]="currentPage.id === page.id"
-          (click)="onPageClick(page)"
-          [title]="ts.t('viewer.page') + ' ' + ts.toLocaleDigits(page.id)"
-        >
-          {{ ts.toLocaleDigits(page.id) }}
-        </button>
+        <ng-container *ngFor="let item of getPaginationPages(); trackBy: trackByIndex">
+          <span *ngIf="item === null" class="pagination-ellipsis" aria-hidden="true">&#8230;</span>
+          <button
+            *ngIf="item !== null"
+            class="pagination-page-btn"
+            [class.active]="currentPage.id === pages[item - 1].id"
+            (click)="onPageClick(pages[item - 1])"
+            [title]="ts.t('viewer.page') + ' ' + ts.toLocaleDigits(pages[item - 1].id)"
+          >
+            {{ ts.toLocaleDigits(pages[item - 1].id) }}
+          </button>
+        </ng-container>
 
         <button
           class="pagination-btn"
@@ -486,6 +491,22 @@
       <div class="image-wrapper">
         <div class="image-inner">
           <div class="skeleton-loader main-image-skeleton" *ngIf="!imageLoaded"></div>
+          <div class="slow-connection-notice" *ngIf="showSlowConnectionWarning && !imageLoaded" role="alert">
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M1.42 1.42C3.15 2.95 5.36 3.96 7.77 4.27M2.51 8.61C4.65 10.1 7.22 11 10 11a9.8 9.8 0 0 0 3.91-.8"></path>
+              <path d="M8.53 16.11a6 6 0 0 1 6.95 0M12 20h.01"></path>
+              <line x1="2" y1="2" x2="22" y2="22"></line>
+            </svg>
+            <p class="slow-connection-title">Taking longer than usual&hellip;</p>
+            <p class="slow-connection-msg">Your internet connection appears to be slow. Please check your connection or try refreshing the page.</p>
+            <button class="slow-connection-refresh" (click)="refreshPage()">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <polyline points="23 4 23 10 17 10"></polyline>
+                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+              </svg>
+              Refresh page
+            </button>
+          </div>
           <img
             #mainImage
             [src]="resolveImageUrl(currentPage.fullImage)"
@@ -498,19 +519,22 @@
 
           <!-- Clickable sections overlay -->
           <div class="sections-overlay" *ngIf="imageLoaded">
-            <div
-              *ngFor="let section of currentPage.sections; trackBy: trackBySectionId"
-              class="clickable-section"
-              [style.left.%]="section.x"
-              [style.top.%]="section.y"
-              [style.width.%]="section.width"
-              [style.height.%]="section.height"
-              [class.selected]="selectedSection?.id === section.id"
-              (click)="selectSection(section)"
-              [title]="section.title"
-            >
-              <div class="section-label">{{ section.title }}</div>
-            </div>
+            <ng-container *ngFor="let section of currentPage.sections; trackBy: trackBySectionId">
+              <!-- Hide sections with zero crop coords (XML-imported but not yet cropped) -->
+              <div
+                *ngIf="section.width > 0 && section.height > 0"
+                class="clickable-section"
+                [style.left.%]="section.x"
+                [style.top.%]="section.y"
+                [style.width.%]="section.width"
+                [style.height.%]="section.height"
+                [class.selected]="selectedSection?.id === section.id"
+                (click)="selectSection(section)"
+                [title]="section.title"
+              >
+                <div class="section-label">{{ section.title }}</div>
+              </div>
+            </ng-container>
           </div>
         </div>
       </div>
@@ -718,8 +742,38 @@
         (printClicked)="printAllModalImages()"
         (downloadClicked)="downloadAllModalImages()">
       </app-share-buttons>
+
+      <!-- Image / Text toggle — mobile only -->
+      <div class="mobile-modal-toggle" *ngIf="isMobileView && selectedSection?.content">
+        <button
+          class="mobile-modal-tab"
+          [class.active]="mobileModalView === 'image'"
+          (click)="mobileModalView = 'image'"
+          aria-label="Image view">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+            <circle cx="8.5" cy="8.5" r="1.5"></circle>
+            <polyline points="21 15 16 10 5 21"></polyline>
+          </svg>
+          Image
+        </button>
+        <button
+          class="mobile-modal-tab"
+          [class.active]="mobileModalView === 'text'"
+          (click)="mobileModalView = 'text'"
+          aria-label="Text view">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="3" y1="6" x2="21" y2="6"></line>
+            <line x1="3" y1="12" x2="21" y2="12"></line>
+            <line x1="3" y1="18" x2="15" y2="18"></line>
+          </svg>
+          Text
+        </button>
+      </div>
       
-      <div class="modal-images-container">
+      <!-- Image panel: always present in DOM; hidden on mobile when text view is active -->
+      <div class="modal-images-container"
+           [class.modal-images-hidden]="isMobileView && mobileModalView === 'text'">
         <!-- Main/Selected Image -->
         <div class="modal-image-item" *ngIf="modalImage">
           <img 
@@ -741,6 +795,13 @@
           />
           <!-- <div class="modal-image-label">{{ linkedSection.title }}</div> -->
         </div>
+      </div>
+
+      <!-- Text panel: mobile-only, created/destroyed via *ngIf to avoid height conflicts -->
+      <div class="modal-text-body"
+           *ngIf="isMobileView && mobileModalView === 'text' && selectedSection">
+        <h2 class="article-modal-title" *ngIf="selectedSection.title">{{ selectedSection.title }}</h2>
+        <div class="article-body" [innerHTML]="normalizeContent(selectedSection.content)"></div>
       </div>
     </div>
   </div>
@@ -767,6 +828,7 @@
       </app-share-buttons>
       
       <div class="modal-body" *ngIf="selectedSection">
+        <h2 class="article-modal-title" *ngIf="selectedSection.title">{{ selectedSection.title }}</h2>
         <div class="article-body" [innerHTML]="normalizeContent(selectedSection.content)"></div>
       </div>
     </div>

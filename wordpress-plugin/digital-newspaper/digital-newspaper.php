@@ -25,6 +25,9 @@ class Digital_Newspaper_API {
     add_filter('rest_authentication_errors', [$this, 'authenticate_rest_request']);
     add_action('admin_menu', [$this, 'register_settings_page']);
     add_action('admin_init', [$this, 'register_settings']);
+    // Ensure the activity-log DB table exists on every admin load (handles the
+    // case where the plugin file was updated via FTP without re-activating it).
+    add_action('admin_init', [$this, 'maybe_create_activity_table']);
     add_filter('rest_pre_serve_request', [$this, 'add_cors_headers'], 10, 4);
     // Ensure ModSecurity bypass rules are in .htaccess so the REST API is not
     // blocked by host-level WAF (e.g. Imunify360 on Hostinger shared hosting).
@@ -59,9 +62,13 @@ class Digital_Newspaper_API {
     }
 
     $rules = [
-      '# Disable ModSecurity rule engine for Digital Newspaper REST API requests.',
-      '# These paths handle login and data save for authenticated admin users;',
-      '# WAF bot-protection must not block them.',
+      '# ── Digital Newspaper REST API — WAF bypass rules ────────────────────────',
+      '# These paths handle admin login and newspaper data saves.  The rules below',
+      '# are needed on shared hosting (Hostinger, cPanel) where Imunify360 and',
+      '# ModSecurity can block legitimate authenticated POST requests.',
+      '',
+      '# 1. Disable ModSecurity for this directory.',
+      '#    mod_security2 (OWASP CRS v3) and legacy mod_security are both covered.',
       '<IfModule mod_security2.c>',
       '  SecRuleEngine Off',
       '</IfModule>',
@@ -69,7 +76,18 @@ class Digital_Newspaper_API {
       '  SecFilterEngine Off',
       '  SecFilterScanPOST Off',
       '</IfModule>',
+      '',
+      '# 2. Mark REST API requests with an environment variable so Apache',
+      '#    access-control rules can explicitly allow them.',
+      '#    Covers both the pretty (/wp-json/) and index (?rest_route=) URL forms.',
+      'SetEnvIf Request_URI "wp-json" dn_api_request=1',
+      'SetEnvIf Query_String "rest_route" dn_api_request=1',
     ];
+    // NOTE: <IfModule mod_rewrite.c> / RewriteRule blocks are intentionally
+    // omitted here. A RewriteRule with [L] inside the Digital Newspaper marker
+    // block would stop WordPress's own rewrite rules from running (the markers
+    // appear before the # BEGIN WordPress block). SetEnvIf above is sufficient
+    // for environment-variable marking without touching the rewrite chain.
 
     insert_with_markers($htaccess, 'Digital Newspaper API', $rules);
   }
@@ -214,6 +232,16 @@ class Digital_Newspaper_API {
     }
     // Normalize all stored domain aliases to the current WordPress origin
     $data = $this->normalize_domain_urls($data);
+
+    // Ensure every response includes a dataVersion so Angular can detect
+    // concurrent-edit conflicts. Generate one inline for the response if the
+    // stored blob pre-dates this feature — but do NOT write back here.
+    // Calling update_option() inside a GET request causes an unnecessary write
+    // on every page load. The version will be persisted on the next save.
+    if (empty($data['dataVersion'])) {
+      $data['dataVersion'] = microtime(true);
+    }
+
     return $data;
   }
 
@@ -257,13 +285,37 @@ class Digital_Newspaper_API {
     return $data;
   }
 
-  public function save_data(array $data): void {
-    $this->snapshot_current_data_before_save();
+  /**
+   * Persists $data (stamping a fresh dataVersion) and syncs dn_section posts.
+   *
+   * @param  array  $data            The full NewspaperData payload to store.
+   * @param  string $saved_by        Display name of the saving user (for audit).
+   * @param  float  $version         Pre-computed version stamp (optional; generated here if 0).
+   * @param  bool   $throttle_snapshot  When true, snapshot is skipped if one was created
+   *                                    within the last 5 minutes (for high-frequency atomic saves).
+   * @return array{postIds: array<string,int>, newDataVersion: float}
+   */
+  public function save_data(array $data, string $saved_by = '', float $version = 0.0, bool $throttle_snapshot = false): array {
+    $this->snapshot_current_data_before_save($saved_by, $throttle_snapshot);
+    // Stamp a fresh version so the next client load gets the new version token.
+    $data['dataVersion'] = $version > 0.0 ? $version : (float) microtime(true);
     update_option(self::OPTION_KEY, $data, false);
-    $this->sync_section_posts_from_data($data);
+    $postIds = $this->sync_section_posts_from_data($data);
+    return ['postIds' => $postIds, 'newDataVersion' => $data['dataVersion']];
   }
 
-  private function snapshot_current_data_before_save(): void {
+  private function snapshot_current_data_before_save(string $saved_by = '', bool $throttle = false): void {
+    // For high-frequency atomic saves (e.g. every section edit), only take a
+    // snapshot at most once every 5 minutes to avoid burning through the
+    // 20-slot backup rotation in seconds.
+    if ($throttle) {
+      $last = (int) get_transient('dn_last_auto_snapshot');
+      if ($last > 0 && (time() - $last) < 300) {
+        return; // Skip — a snapshot was taken recently
+      }
+      set_transient('dn_last_auto_snapshot', time(), 3600);
+    }
+
     $current = get_option(self::OPTION_KEY);
     if (!is_array($current)) {
       return;
@@ -276,6 +328,7 @@ class Digital_Newspaper_API {
 
     array_unshift($backups, [
       'createdAt' => gmdate('c'),
+      'savedBy'   => $saved_by ?: 'system',
       'data'      => $current,
     ]);
 
@@ -361,9 +414,16 @@ class Digital_Newspaper_API {
     return array_map('intval', $posts ?: []);
   }
 
-  private function sync_section_posts_from_data(array $data): void {
+  /**
+   * Syncs every section in $data to a dn_section custom post and returns a
+   * map of section key → WP post ID so the REST response can round-trip the
+   * post IDs back to Angular.
+   *
+   * @return array<string, int>  e.g. [ '2026-06-04:1:2:xml-2026-06-04-e1-p2-hello' => 42 ]
+   */
+  private function sync_section_posts_from_data(array $data): array {
     if (empty($data['editions']) || !is_array($data['editions']) || $this->count_sections($data) === 0) {
-      return;
+      return [];
     }
 
     $seenKeys = [];
@@ -412,6 +472,8 @@ class Digital_Newspaper_API {
 
     $this->sync_linked_section_post_ids($data, $keyToPostId);
     $this->trash_stale_section_posts(array_keys($seenKeys));
+
+    return $keyToPostId;
   }
 
   private function upsert_section_post(
@@ -464,6 +526,13 @@ class Digital_Newspaper_API {
       'dn_page_id'            => $pageId,
       'dn_page_order'         => $pageIndex,
       'dn_page_labels'        => wp_json_encode($pageLabels),
+      'dn_page_name'          => sanitize_text_field((function () use ($pageLabels): string {
+        if (!empty($pageLabels) && is_array($pageLabels)) {
+          $first = reset($pageLabels);
+          if (is_string($first) && $first !== '') return $first;
+        }
+        return '';
+      })()),
       'dn_page_thumbnail'     => esc_url_raw((string) ($page['thumbnail'] ?? '')),
       'dn_page_full_image'    => esc_url_raw((string) ($page['fullImage'] ?? '')),
       'dn_page_full_hires'    => esc_url_raw((string) ($page['fullImageHiRes'] ?? '')),
@@ -474,8 +543,9 @@ class Digital_Newspaper_API {
       'dn_crop_w'             => (string) (float) ($section['width'] ?? 0),
       'dn_crop_h'             => (string) (float) ($section['height'] ?? 0),
       'dn_cropped_image_url'  => esc_url_raw((string) ($section['imageUrl'] ?? '')),
-      'dn_linked_section_ids' => wp_json_encode($linkedSectionIds),
-      'dn_section_payload'    => wp_json_encode($section),
+      'dn_linked_section_ids'     => wp_json_encode($linkedSectionIds),
+      'dn_linked_section_primary' => sanitize_text_field((string) ($section['linkedSectionPrimary'] ?? '')),
+      'dn_section_payload'        => wp_json_encode($section),
     ];
 
     foreach ($meta as $metaKey => $metaValue) {
@@ -537,6 +607,45 @@ class Digital_Newspaper_API {
         'callback' => [$this, 'post_data_endpoint'],
         'permission_callback' => [$this, 'auth_required']
       ]
+    ]);
+
+    // ── Lightweight version probe ─────────────────────────────────────────────
+    // Returns only the current dataVersion float. Clients poll this every 30 s
+    // to detect remote changes without downloading the full dataset each time.
+    register_rest_route('digital-newspaper/v1', '/data/version', [
+      'methods'             => 'GET',
+      'callback'            => [$this, 'get_data_version_endpoint'],
+      'permission_callback' => '__return_true',
+    ]);
+
+    // ── Atomic page endpoints (server-side read-modify-write; no version conflict) ──
+    // Each endpoint reads the current stored data, updates only the target page,
+    // and writes back — safe because PHP handles one request at a time.
+    register_rest_route('digital-newspaper/v1', '/data/page', [
+      [
+        'methods'             => 'PUT',
+        'callback'            => [$this, 'put_page_endpoint'],
+        'permission_callback' => [$this, 'auth_required'],
+      ],
+      [
+        'methods'             => 'DELETE',
+        'callback'            => [$this, 'delete_page_endpoint'],
+        'permission_callback' => [$this, 'auth_required'],
+      ],
+    ]);
+
+    // ── Atomic section endpoints ───────────────────────────────────────────────
+    register_rest_route('digital-newspaper/v1', '/data/section', [
+      [
+        'methods'             => 'PUT',
+        'callback'            => [$this, 'put_section_endpoint'],
+        'permission_callback' => [$this, 'auth_required'],
+      ],
+      [
+        'methods'             => 'DELETE',
+        'callback'            => [$this, 'delete_section_endpoint'],
+        'permission_callback' => [$this, 'auth_required'],
+      ],
     ]);
 
     register_rest_route('digital-newspaper/v1', '/data/backups', [
@@ -607,6 +716,67 @@ class Digital_Newspaper_API {
         'callback'            => [$this, 'delete_media_item'],
         'permission_callback' => [$this, 'auth_required']
       ]
+    ]);
+
+    // ── Activity log endpoints ─────────────────────────────────────────────
+    register_rest_route('digital-newspaper/v1', '/activity-log', [
+      [
+        'methods'             => 'GET',
+        'callback'            => [$this, 'list_activity_log'],
+        'permission_callback' => [$this, 'admin_required'],
+      ],
+      [
+        'methods'             => 'DELETE',
+        'callback'            => [$this, 'clear_activity_log'],
+        'permission_callback' => [$this, 'admin_required'],
+      ],
+    ]);
+
+    // Client-side batch event endpoint — accepts up to 50 events per call.
+    register_rest_route('digital-newspaper/v1', '/activity-log/batch', [
+      [
+        'methods'             => 'POST',
+        'callback'            => [$this, 'log_client_batch'],
+        'permission_callback' => [$this, 'auth_required'],
+      ],
+    ]);
+
+    // ── Page/section locking endpoints ────────────────────────────────────
+    // Acquire a lock on a resource (page or edition) while editing.
+    register_rest_route('digital-newspaper/v1', '/locks/(?P<resource>[a-zA-Z0-9_:.-]+)', [
+      [
+        'methods'             => 'GET',
+        'callback'            => [$this, 'get_lock'],
+        'permission_callback' => [$this, 'auth_required'],
+      ],
+      [
+        'methods'             => 'POST',
+        'callback'            => [$this, 'acquire_lock'],
+        'permission_callback' => [$this, 'auth_required'],
+      ],
+      [
+        'methods'             => 'DELETE',
+        'callback'            => [$this, 'release_lock'],
+        'permission_callback' => [$this, 'auth_required'],
+      ],
+    ]);
+
+    // Heartbeat: refresh a held lock's TTL.
+    register_rest_route('digital-newspaper/v1', '/locks/(?P<resource>[a-zA-Z0-9_:.-]+)/heartbeat', [
+      [
+        'methods'             => 'POST',
+        'callback'            => [$this, 'heartbeat_lock'],
+        'permission_callback' => [$this, 'auth_required'],
+      ],
+    ]);
+
+    // List all active locks (admin only).
+    register_rest_route('digital-newspaper/v1', '/locks', [
+      [
+        'methods'             => 'GET',
+        'callback'            => [$this, 'list_locks'],
+        'permission_callback' => [$this, 'admin_required'],
+      ],
     ]);
 
     // Social-sharing OG/Twitter Card endpoint — called by .htaccess for
@@ -1420,6 +1590,23 @@ HTML;
     return rest_ensure_response($this->get_data());
   }
 
+  /**
+   * GET /digital-newspaper/v1/data/version
+   *
+   * Returns only the current dataVersion float and nothing else.
+   * Clients poll this every 30 s to detect remote changes without
+   * transferring the full dataset on every poll tick.
+   *
+   * Response: { "dataVersion": 1717600012.345678 }
+   */
+  public function get_data_version_endpoint(WP_REST_Request $request): WP_REST_Response {
+    header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+    $data = get_option(self::OPTION_KEY, []);
+    return rest_ensure_response([
+      'dataVersion' => isset($data['dataVersion']) ? (float) $data['dataVersion'] : 0.0,
+    ]);
+  }
+
   public function list_data_backups_endpoint(WP_REST_Request $request): WP_REST_Response {
     $backups = $this->get_data_backups();
     $items = [];
@@ -1440,13 +1627,17 @@ HTML;
       return new WP_REST_Response(['error' => 'Backup not found'], 404);
     }
 
-    $this->snapshot_current_data_before_save();
-    update_option(self::OPTION_KEY, $backups[$index]['data'], false);
-    $this->sync_section_posts_from_data($backups[$index]['data']);
+    $restore_user = wp_get_current_user();
+    $restore_by   = ($restore_user && $restore_user->ID)
+      ? ($restore_user->display_name ?: $restore_user->user_login)
+      : 'unknown';
+    $summary = $this->backup_summary($backups[$index], $index);
+    $this->save_data($backups[$index]['data'], 'restore:' . $restore_by);  // version auto-stamped
+    $this->log_auth_user_action('restore_backup', 'Restored backup #' . $index, ['backupIndex' => (string) $index, 'backupCreatedAt' => $summary['createdAt'] ?? '']);
 
     return rest_ensure_response([
       'success'  => true,
-      'restored' => $this->backup_summary($backups[$index], $index),
+      'restored' => $summary,
     ]);
   }
 
@@ -1458,7 +1649,12 @@ HTML;
       return new WP_REST_Response(['error' => 'No mirrored section posts were found to rebuild from.'], 404);
     }
 
-    $this->save_data($rebuilt);
+    $this->save_data($rebuilt);  // version auto-stamped; return value not used here
+    $this->log_auth_user_action('rebuild_from_sections', 'Rebuilt data from section posts', [
+      'editionCount' => (string) (is_array($rebuilt['editions'] ?? null) ? count($rebuilt['editions']) : 0),
+      'pageCount'    => (string) $this->count_pages($rebuilt),
+      'sectionCount' => (string) $this->count_sections($rebuilt),
+    ]);
 
     return rest_ensure_response([
       'success'      => true,
@@ -1533,6 +1729,8 @@ HTML;
           'linkedSectionIds' => is_array($linkedSectionIds) ? $linkedSectionIds : [],
           'showCaption' => true,
         ];
+        $lsp = (string) get_post_meta($post->ID, 'dn_linked_section_primary', true);
+        if ($lsp !== '') $payload['linkedSectionPrimary'] = $lsp;
       }
       $payload['_order'] = (int) get_post_meta($post->ID, 'dn_section_order', true);
       $editionMap[$editionKey]['_pages'][$pageKey]['sections'][] = $payload;
@@ -1585,15 +1783,60 @@ HTML;
 
     $force = $request->get_param('force') === '1' || $request->get_param('force') === 'true';
     $current = $this->get_data();
-    $currentPageCount = $this->count_pages($current);
+
+    // ── Guard 1: refuse to overwrite pages with an empty dataset ────────────
+    $currentPageCount  = $this->count_pages($current);
     $incomingPageCount = $this->count_pages($payload);
     if (!$force && $currentPageCount > 0 && $incomingPageCount === 0) {
       return new WP_REST_Response([
-        'error' => 'Refusing to overwrite existing newspaper pages with an empty page dataset. Restore from backup or retry with force=1 if this is intentional.',
-        'currentPageCount' => $currentPageCount,
-        'incomingPageCount' => $incomingPageCount,
+        'error'              => 'Refusing to overwrite existing newspaper pages with an empty page dataset. Restore from backup or retry with force=1 if this is intentional.',
+        'conflictType'       => 'empty-overwrite',
+        'currentPageCount'   => $currentPageCount,
+        'incomingPageCount'  => $incomingPageCount,
       ], 409);
     }
+
+    // ── Guard 2: optimistic-concurrency version check ────────────────────────
+    // The client must supply the dataVersion it last received. If the stored
+    // version has moved on (another user saved in the meantime), reject with
+    // 409 Conflict so Angular can surface a meaningful error to the user
+    // instead of silently dropping the other user's changes.
+    //
+    // Skip when:
+    //   - ?force=1 is explicitly set (admin restore / force-save intent)
+    //   - The stored blob has no dataVersion (legacy data before this feature)
+    //   - The incoming payload has no dataVersion (old client build)
+    if (!$force
+      && !empty($current['dataVersion'])
+      && isset($payload['dataVersion'])
+    ) {
+      $storedVersion   = (float) $current['dataVersion'];
+      $incomingVersion = (float) $payload['dataVersion'];
+
+      if ($incomingVersion < $storedVersion - 0.001) {
+        // Identify who last saved for the error message.
+        $lastBackup  = get_option(self::OPTION_BACKUPS, []);
+        $lastSavedBy = '';
+        if (is_array($lastBackup) && !empty($lastBackup[0]['savedBy'])) {
+          $lastSavedBy = (string) $lastBackup[0]['savedBy'];
+        }
+
+        return new WP_REST_Response([
+          'error'           => 'conflict',
+          'conflictType'    => 'version-mismatch',
+          'message'         => 'The newspaper data was saved by another user while you were editing. Your changes have not been lost — please reload to see the latest version, then re-apply your edits.',
+          'lastSavedBy'     => $lastSavedBy,
+          'storedVersion'   => $storedVersion,
+          'incomingVersion' => $incomingVersion,
+        ], 409);
+      }
+    }
+
+    // Identify the saving user for audit / snapshot
+    $current_user = wp_get_current_user();
+    $saved_by     = ($current_user && $current_user->ID)
+      ? ($current_user->display_name ?: $current_user->user_login)
+      : 'unknown';
 
     // Strip the export metadata envelope so it is never persisted in the
     // WordPress option.  The Angular app may accidentally send the full
@@ -1601,15 +1844,325 @@ HTML;
     // object; removing it here keeps the stored structure clean.
     unset($payload['meta']);
 
-    $this->save_data($payload);
+    $save_result    = $this->save_data($payload, $saved_by);
+    $sectionPostIds = $save_result['postIds'];
+    $newVersion     = $save_result['newDataVersion'];
+
+    // Activity log
+    $this->log_auth_user_action('save_data', 'Saved newspaper data', [
+      'editionCount'   => (string) (is_array($payload['editions'] ?? null) ? count($payload['editions']) : 0),
+      'pageCount'      => (string) $this->count_pages($payload),
+      'sectionCount'   => (string) $this->count_sections($payload),
+      'newDataVersion' => (string) $newVersion,
+    ]);
 
     return rest_ensure_response([
-      'success' => true,
-      'message' => 'Data saved successfully'
+      'success'          => true,
+      'message'          => 'Data saved successfully',
+      'sectionPostIds'   => $sectionPostIds,
+      'newDataVersion'   => $newVersion,
     ]);
   }
 
+  // ── Atomic endpoint helpers ──────────────────────────────────────────────
+
+  /**
+   * Get the current user's display name for audit purposes.
+   */
+  private function current_user_display(): string {
+    $u = wp_get_current_user();
+    return ($u && $u->ID) ? ($u->display_name ?: $u->user_login) : 'unknown';
+  }
+
+  /**
+   * Returns true if no lock exists for this resource, OR if the lock is held
+   * by the currently authenticated user.  Returns false when another user
+   * holds the lock — the caller should respond 423 Locked.
+   *
+   * Resource format: "{date}:{edition}:{pageId}"
+   */
+  private function lock_belongs_to_current_user(string $resource): bool {
+    $lock = get_transient($this->lock_transient_key($resource));
+    if (!$lock || !is_array($lock)) {
+      return true; // No active lock — allow write
+    }
+    $current = wp_get_current_user();
+    return (int)($lock['userId'] ?? 0) === (int)($current->ID ?? 0);
+  }
+
+  /**
+   * Build a standard 423 Locked response including the lock holder's name.
+   */
+  private function locked_response(string $resource): WP_REST_Response {
+    $lock = get_transient($this->lock_transient_key($resource));
+    return new WP_REST_Response([
+      'error'    => 'This page is currently locked by ' . (is_array($lock) ? ($lock['displayName'] ?? 'another user') : 'another user') . '.',
+      'lockedBy' => is_array($lock) ? ($lock['displayName'] ?? '') : '',
+    ], 423);
+  }
+
+  /**
+   * Find and return a reference to the edition array element matching $date + $edition_number.
+   * Returns null when not found. Caller passes $data['editions'] by reference.
+   */
+  private function find_edition_ref(array &$editions, string $date, int $edition_number): ?array {
+    foreach ($editions as &$ed) {
+      if ((string)($ed['date'] ?? '') === $date && (int)($ed['edition'] ?? 1) === $edition_number) {
+        return [&$ed];  // wrap in array so caller can modify via reference
+      }
+    }
+    return null;
+  }
+
+  /**
+   * PUT /data/page
+   *
+   * Atomically upsert a single page within an edition.
+   * Body: { date: string, edition: int, page: NewspaperPage }
+   */
+  public function put_page_endpoint(WP_REST_Request $request): WP_REST_Response {
+    $body    = $request->get_json_params();
+    $date    = sanitize_text_field((string)($body['date']    ?? ''));
+    $edition = max(1, (int)($body['edition'] ?? 1));
+    $page    = isset($body['page']) && is_array($body['page']) ? $body['page'] : null;
+
+    if (!$date || !$page) {
+      return new WP_REST_Response(['error' => 'date and page are required'], 400);
+    }
+
+    // Enforce server-side lock: only the lock holder may update this page.
+    $resource = $date . ':' . $edition . ':' . (int)($page['id'] ?? 0);
+    if ((int)($page['id'] ?? 0) > 0 && !$this->lock_belongs_to_current_user($resource)) {
+      return $this->locked_response($resource);
+    }
+
+    $data          = $this->get_data();
+    $found_edition = false;
+
+    foreach ($data['editions'] as &$ed) {
+      if ((string)($ed['date'] ?? '') === $date && (int)($ed['edition'] ?? 1) === $edition) {
+        $found_edition = true;
+        $page_id       = (int)($page['id'] ?? 0);
+        $found_page    = false;
+
+        foreach ($ed['pages'] as &$p) {
+          if ((int)$p['id'] === $page_id) {
+            $p           = $page;
+            $found_page  = true;
+            break;
+          }
+        }
+        unset($p);
+
+        if (!$found_page) {
+          $ed['pages'][] = $page;
+        }
+        break;
+      }
+    }
+    unset($ed);
+
+    if (!$found_edition) {
+      $data['editions'][] = ['date' => $date, 'edition' => $edition, 'pages' => [$page]];
+      usort($data['editions'], static function ($a, $b) {
+        $d = strcmp((string)($b['date'] ?? ''), (string)($a['date'] ?? ''));
+        return $d !== 0 ? $d : ((int)($a['edition'] ?? 1) - (int)($b['edition'] ?? 1));
+      });
+    }
+
+    $result = $this->save_data($data, $this->current_user_display());
+
+    $this->log_auth_user_action('page_save', 'Saved page (atomic)', [
+      'date'    => $date,
+      'edition' => (string)$edition,
+      'pageId'  => (string)($page['id'] ?? ''),
+    ]);
+
+    return rest_ensure_response(['success' => true, 'newDataVersion' => $result['newDataVersion']]);
+  }
+
+  /**
+   * DELETE /data/page
+   *
+   * Atomically remove a single page from an edition.
+   * Body: { date: string, edition: int, pageId: int }
+   */
+  public function delete_page_endpoint(WP_REST_Request $request): WP_REST_Response {
+    $body    = $request->get_json_params();
+    $date    = sanitize_text_field((string)($body['date']   ?? ''));
+    $edition = max(1, (int)($body['edition'] ?? 1));
+    $page_id = (int)($body['pageId'] ?? 0);
+
+    if (!$date || !$page_id) {
+      return new WP_REST_Response(['error' => 'date and pageId are required'], 400);
+    }
+
+    // Enforce server-side lock: only the lock holder may delete this page.
+    $resource = $date . ':' . $edition . ':' . $page_id;
+    if (!$this->lock_belongs_to_current_user($resource)) {
+      return $this->locked_response($resource);
+    }
+
+    $data = $this->get_data();
+
+    foreach ($data['editions'] as &$ed) {
+      if ((string)($ed['date'] ?? '') === $date && (int)($ed['edition'] ?? 1) === $edition) {
+        $ed['pages'] = array_values(
+          array_filter($ed['pages'], static fn($p) => (int)($p['id'] ?? 0) !== $page_id)
+        );
+        break;
+      }
+    }
+    unset($ed);
+
+    $result = $this->save_data($data, $this->current_user_display());
+
+    $this->log_auth_user_action('page_delete', 'Deleted page (atomic)', [
+      'date'    => $date,
+      'edition' => (string)$edition,
+      'pageId'  => (string)$page_id,
+    ]);
+
+    return rest_ensure_response(['success' => true, 'newDataVersion' => $result['newDataVersion']]);
+  }
+
+  /**
+   * PUT /data/section
+   *
+   * Atomically upsert a single section within a page.
+   * Body: { date, edition, pageId, section: NewsSection, originalSectionId?: string }
+   * originalSectionId lets the server find the section even when the ID was normalized/renamed.
+   */
+  public function put_section_endpoint(WP_REST_Request $request): WP_REST_Response {
+    $body            = $request->get_json_params();
+    $date            = sanitize_text_field((string)($body['date']             ?? ''));
+    $edition         = max(1, (int)($body['edition'] ?? 1));
+    $page_id         = (int)($body['pageId']         ?? 0);
+    $original_sec_id = sanitize_text_field((string)($body['originalSectionId'] ?? ''));
+    $section         = isset($body['section']) && is_array($body['section']) ? $body['section'] : null;
+
+    if (!$date || !$page_id || !$section) {
+      return new WP_REST_Response(['error' => 'date, pageId and section are required'], 400);
+    }
+
+    // Enforce server-side lock: only the lock holder may modify sections on this page.
+    $resource = $date . ':' . $edition . ':' . $page_id;
+    if (!$this->lock_belongs_to_current_user($resource)) {
+      return $this->locked_response($resource);
+    }
+
+    $new_sec_id = sanitize_text_field((string)($section['id'] ?? ''));
+    $lookup_id  = $original_sec_id ?: $new_sec_id;
+
+    $data = $this->get_data();
+
+    foreach ($data['editions'] as &$ed) {
+      if ((string)($ed['date'] ?? '') === $date && (int)($ed['edition'] ?? 1) === $edition) {
+        foreach ($ed['pages'] as &$p) {
+          if ((int)($p['id'] ?? 0) === $page_id) {
+            $found_section = false;
+
+            foreach ($p['sections'] as &$s) {
+              if ((string)($s['id'] ?? '') === $lookup_id) {
+                $s             = $section;
+                $found_section = true;
+                break;
+              }
+            }
+            unset($s);
+
+            if (!$found_section) {
+              $p['sections'][] = $section;
+            }
+            break 2;
+          }
+        }
+        unset($p);
+        break;
+      }
+    }
+    unset($ed);
+
+    // Note: snapshot is throttled (max once per 5 min) to preserve backup slot history.
+    $result = $this->save_data($data, $this->current_user_display(), 0.0, true);
+
+    $this->log_auth_user_action('section_save', 'Saved section (atomic)', [
+      'date'      => $date,
+      'edition'   => (string)$edition,
+      'pageId'    => (string)$page_id,
+      'sectionId' => $new_sec_id,
+      'title'     => (string)($section['title'] ?? ''),
+    ]);
+
+    return rest_ensure_response(['success' => true, 'newDataVersion' => $result['newDataVersion']]);
+  }
+
+  /**
+   * DELETE /data/section
+   *
+   * Atomically remove a single section from a page.
+   * Body: { date, edition, pageId, sectionId }
+   */
+  public function delete_section_endpoint(WP_REST_Request $request): WP_REST_Response {
+    $body       = $request->get_json_params();
+    $date       = sanitize_text_field((string)($body['date']      ?? ''));
+    $edition    = max(1, (int)($body['edition']  ?? 1));
+    $page_id    = (int)($body['pageId']   ?? 0);
+    $section_id = sanitize_text_field((string)($body['sectionId'] ?? ''));
+
+    if (!$date || !$page_id || !$section_id) {
+      return new WP_REST_Response(['error' => 'date, pageId and sectionId are required'], 400);
+    }
+
+    // Enforce server-side lock: only the lock holder may delete sections on this page.
+    $resource = $date . ':' . $edition . ':' . $page_id;
+    if (!$this->lock_belongs_to_current_user($resource)) {
+      return $this->locked_response($resource);
+    }
+
+    $data = $this->get_data();
+
+    foreach ($data['editions'] as &$ed) {
+      if ((string)($ed['date'] ?? '') === $date && (int)($ed['edition'] ?? 1) === $edition) {
+        foreach ($ed['pages'] as &$p) {
+          if ((int)($p['id'] ?? 0) === $page_id) {
+            $p['sections'] = array_values(
+              array_filter($p['sections'], static fn($s) => (string)($s['id'] ?? '') !== $section_id)
+            );
+            break 2;
+          }
+        }
+        unset($p);
+        break;
+      }
+    }
+    unset($ed);
+
+    // Snapshot throttled for atomic section deletes to preserve backup history.
+    $result = $this->save_data($data, $this->current_user_display(), 0.0, true);
+
+    $this->log_auth_user_action('section_delete', 'Deleted section (atomic)', [
+      'date'      => $date,
+      'edition'   => (string)$edition,
+      'pageId'    => (string)$page_id,
+      'sectionId' => $section_id,
+    ]);
+
+    return rest_ensure_response(['success' => true, 'newDataVersion' => $result['newDataVersion']]);
+  }
+
   public function login(WP_REST_Request $request) {
+    // ── Brute-force rate limiting: max 5 failed attempts per IP per 10 min ──
+    $client_ip  = sanitize_text_field((string) ($_SERVER['HTTP_X_FORWARDED_FOR'] ?? $_SERVER['REMOTE_ADDR'] ?? ''));
+    $rate_key   = 'dn_login_attempts_' . md5($client_ip);
+    $attempts   = (int) get_transient($rate_key);
+    if ($attempts >= 5) {
+      $this->log_activity('login_blocked', 'Login blocked (rate limit)', ['ip' => $client_ip], 0, 'unknown', 'unknown');
+      return new WP_REST_Response([
+        'error' => 'Too many failed login attempts. Please wait 10 minutes before trying again.',
+      ], 429);
+    }
+
     $params = $request->get_json_params();
     if (!is_array($params) || empty($params)) {
       $params = $request->get_body_params();
@@ -1623,13 +2176,34 @@ HTML;
 
     $user = wp_authenticate($username, $password);
     if (is_wp_error($user)) {
-      return new WP_REST_Response(['error' => 'Invalid credentials'], 401);
+      // Increment failure counter (10-minute window, auto-expires)
+      set_transient($rate_key, $attempts + 1, 600);
+      $remaining = max(0, 4 - $attempts);
+      return new WP_REST_Response([
+        'error' => 'Invalid credentials',
+        'attemptsRemaining' => $remaining,
+      ], 401);
     }
+
+    // Successful login — clear the failure counter
+    delete_transient($rate_key);
 
     $token = $this->generate_token($user->ID);
 
     $roles = (array) $user->roles;
     $role   = !empty($roles) ? $roles[0] : 'subscriber';
+
+    // Set the standard WordPress session cookie so that subsequent REST API
+    // calls carry a valid WordPress auth cookie.  Imunify360 bot-protection
+    // trusts requests that include a recognised WordPress session cookie and
+    // does not treat them as bot traffic — without this cookie every POST from
+    // the Angular app looks like an unauthenticated automation request.
+    // 'remember = true' matches a typical "stay logged in" session length
+    // (14 days) so the cookie remains valid as long as the JWT.
+    wp_set_auth_cookie($user->ID, true /* remember */);
+
+    // Activity log (login success)
+    $this->log_activity('login', 'User logged in', ['role' => $role], $user->ID, $user->display_name ?: $user->user_login, $role);
 
     return rest_ensure_response([
       'token' => $token,
@@ -1926,15 +2500,16 @@ HTML;
       return $result;
     }
 
-    if (is_user_logged_in()) {
-      return $result;
-    }
-
     $token = $this->get_bearer_token_from_globals();
     if (!$token) {
+      // No Bearer token present — let WordPress's own cookie/nonce auth handle it.
       return $result;
     }
 
+    // Bearer token present: JWT identity always takes precedence over any
+    // existing cookie-authenticated session.  This ensures the correct user is
+    // resolved even when two different users share the same browser (one logged
+    // into WP admin via cookie, the other sending a different JWT).
     $payload = $this->verify_token($token);
     if (!$payload || empty($payload['sub'])) {
       return new WP_Error('dn_unauthorized', 'Invalid token', ['status' => 401]);
@@ -2124,6 +2699,544 @@ HTML;
     }
     return 'dn_fallback_secret';
   }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  ACTIVITY LOG  —  custom database table for indexed, sortable storage
+  // ══════════════════════════════════════════════════════════════════════════
+
+  const DB_TABLE_SUFFIX  = 'dn_activity_log';
+  const DB_VERSION_KEY   = 'dn_activity_log_db_version';
+  const DB_VERSION       = 2;              // bump to force schema re-run
+
+  // ── Schema ────────────────────────────────────────────────────────────────
+
+  /**
+   * Create or upgrade the activity-log DB table.
+   * Safe to call on every request (uses dbDelta / version gate).
+   */
+  public function maybe_create_activity_table(): void {
+    global $wpdb;
+    $installed = (int) get_option(self::DB_VERSION_KEY, 0);
+    if ($installed >= self::DB_VERSION) return;
+
+    $table   = $wpdb->prefix . self::DB_TABLE_SUFFIX;
+    $charset = $wpdb->get_charset_collate();
+
+    $sql = "CREATE TABLE {$table} (
+      id           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      user_id      BIGINT UNSIGNED NOT NULL DEFAULT 0,
+      display_name VARCHAR(255)    NOT NULL DEFAULT '',
+      role         VARCHAR(100)    NOT NULL DEFAULT '',
+      action       VARCHAR(100)    NOT NULL DEFAULT '',
+      label        VARCHAR(255)    NOT NULL DEFAULT '',
+      details      LONGTEXT,
+      ip           VARCHAR(45)     NOT NULL DEFAULT '',
+      user_agent   VARCHAR(500)    NOT NULL DEFAULT '',
+      session_id   VARCHAR(64)     NOT NULL DEFAULT '',
+      created_at   DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY  (id),
+      INDEX idx_user_id   (user_id),
+      INDEX idx_created   (created_at),
+      INDEX idx_action    (action),
+      INDEX idx_user_date (user_id, created_at)
+    ) {$charset};";
+
+    require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+    dbDelta($sql);
+
+    update_option(self::DB_VERSION_KEY, self::DB_VERSION, false);
+
+    // One-time migration: move any old wp_options log into the new table
+    $old_log = get_option('dn_activity_log', null);
+    if (is_array($old_log) && !empty($old_log)) {
+      foreach (array_reverse($old_log) as $entry) {
+        $this->db_insert_entry(
+          (int)    ($entry['userId']      ?? 0),
+          (string) ($entry['displayName'] ?? ''),
+          (string) ($entry['role']        ?? ''),
+          (string) ($entry['action']      ?? ''),
+          (string) ($entry['action']      ?? ''),   // label same as action for migrated rows
+          (array)  ($entry['details']     ?? []),
+          (string) ($entry['ip']          ?? ''),
+          (string) ($entry['userAgent']   ?? ''),
+          '',
+          (string) ($entry['timestamp']   ?? '')
+        );
+      }
+      delete_option('dn_activity_log');
+    }
+  }
+
+  /** Low-level DB insert — always silent, never throws. */
+  private function db_insert_entry(
+    int    $user_id,
+    string $display_name,
+    string $role,
+    string $action,
+    string $label,
+    array  $details,
+    string $ip,
+    string $user_agent,
+    string $session_id,
+    string $created_at = ''
+  ): void {
+    try {
+      global $wpdb;
+      $table = $wpdb->prefix . self::DB_TABLE_SUFFIX;
+      $wpdb->insert($table, [
+        'user_id'      => $user_id,
+        'display_name' => substr($display_name, 0, 255),
+        'role'         => substr($role,         0, 100),
+        'action'       => substr($action,       0, 100),
+        'label'        => substr($label,        0, 255),
+        'details'      => wp_json_encode($details, JSON_UNESCAPED_UNICODE),
+        'ip'           => substr($ip,           0,  45),
+        'user_agent'   => substr($user_agent,   0, 500),
+        'session_id'   => substr($session_id,   0,  64),
+        'created_at'   => $created_at ?: gmdate('Y-m-d H:i:s'),
+      ], ['%d','%s','%s','%s','%s','%s','%s','%s','%s','%s']);
+    } catch (\Throwable $e) {
+      error_log('[Digital Newspaper] db_insert_entry: ' . $e->getMessage());
+    }
+  }
+
+  // ── Public logging API ────────────────────────────────────────────────────
+
+  /**
+   * Log a single activity entry.  Always silent.
+   *
+   * @param string $action        Machine-readable key, e.g. "save_data".
+   * @param string $label         Human-readable description shown in the UI.
+   * @param array  $details       Arbitrary extra context.
+   * @param int    $user_id
+   * @param string $display_name
+   * @param string $role
+   * @param string $session_id    Optional browser session token (for grouping).
+   */
+  public function log_activity(
+    string $action,
+    string $label        = '',
+    array  $details      = [],
+    int    $user_id      = 0,
+    string $display_name = '',
+    string $role         = '',
+    string $session_id   = ''
+  ): void {
+    $this->maybe_create_activity_table();
+    $raw_ip = $_SERVER['REMOTE_ADDR'] ?? '';
+    $this->db_insert_entry(
+      $user_id,
+      $display_name,
+      $role,
+      $action,
+      $label ?: $action,
+      $details,
+      $this->anonymize_ip($raw_ip),
+      substr($_SERVER['HTTP_USER_AGENT'] ?? '', 0, 500),
+      $session_id
+    );
+  }
+
+  private function anonymize_ip(string $ip): string {
+    if ($ip === '') return '';
+    if (strpos($ip, ':') !== false) {
+      $parts = explode(':', $ip);
+      return implode(':', array_slice($parts, 0, 3)) . '::/48';
+    }
+    $parts = explode('.', $ip);
+    array_pop($parts);
+    return implode('.', $parts) . '.*';
+  }
+
+  /** Log the currently authenticated REST-request user. */
+  private function log_auth_user_action(string $action, string $label = '', array $details = []): void {
+    $user = wp_get_current_user();
+    if (!$user || !$user->ID) return;
+    $roles = (array) $user->roles;
+    $this->log_activity(
+      $action,
+      $label ?: $action,
+      $details,
+      $user->ID,
+      $user->display_name ?: $user->user_login,
+      !empty($roles) ? $roles[0] : 'subscriber'
+    );
+  }
+
+  // ── REST endpoints ────────────────────────────────────────────────────────
+
+  /**
+   * GET /activity-log
+   * Supports: page, per_page, sort_by (created_at|user_id|action), sort_dir (asc|desc),
+   *           action, userId, from (YYYY-MM-DD), to (YYYY-MM-DD), search (display_name LIKE).
+   */
+  public function list_activity_log(WP_REST_Request $request): WP_REST_Response {
+    $this->maybe_create_activity_table();
+    global $wpdb;
+    $table = $wpdb->prefix . self::DB_TABLE_SUFFIX;
+
+    $per_page  = max(1, min(200, (int) ($request->get_param('per_page') ?? 50)));
+    $page      = max(1, (int) ($request->get_param('page')     ?? 1));
+    $sort_by   = in_array($request->get_param('sort_by'),  ['created_at', 'user_id', 'action', 'display_name'], true)
+                   ? $request->get_param('sort_by') : 'created_at';
+    $sort_dir  = strtoupper((string) ($request->get_param('sort_dir') ?? 'DESC')) === 'ASC' ? 'ASC' : 'DESC';
+    $action_f  = sanitize_text_field((string) ($request->get_param('action')  ?? ''));
+    $user_f    = (int) ($request->get_param('userId') ?? 0);
+    $from_f    = sanitize_text_field((string) ($request->get_param('from')    ?? ''));
+    $to_f      = sanitize_text_field((string) ($request->get_param('to')      ?? ''));
+    $search_f  = sanitize_text_field((string) ($request->get_param('search')  ?? ''));
+
+    // Build WHERE
+    $where  = '1=1';
+    $params = [];
+    if ($action_f) { $where .= ' AND action = %s';                          $params[] = $action_f; }
+    if ($user_f)   { $where .= ' AND user_id = %d';                         $params[] = $user_f; }
+    if ($from_f)   { $where .= ' AND created_at >= %s';                     $params[] = $from_f . ' 00:00:00'; }
+    if ($to_f)     { $where .= ' AND created_at <= %s';                     $params[] = $to_f   . ' 23:59:59'; }
+    if ($search_f) { $where .= ' AND display_name LIKE %s';                 $params[] = '%' . $wpdb->esc_like($search_f) . '%'; }
+
+    $offset    = ($page - 1) * $per_page;
+    $order_sql = "ORDER BY {$sort_by} {$sort_dir}";  // both whitelisted above
+
+    // ── Always go through $wpdb->prepare to satisfy WordPress 6.x requirements.
+    // All user-supplied filters go into the $params array as positional arguments;
+    // LIMIT/OFFSET are appended last so they are never embedded as raw strings.
+    $count_params = array_merge($params);
+    $count_sql    = $wpdb->prepare(
+      "SELECT COUNT(*) FROM {$table} WHERE {$where}",
+      ...$count_params
+    );
+    $total = (int) $wpdb->get_var($count_sql);
+
+    $data_params = array_merge($params, [$per_page, $offset]);
+    $data_sql    = $wpdb->prepare(
+      "SELECT id,user_id,display_name,role,action,label,details,ip,created_at
+       FROM {$table} WHERE {$where} {$order_sql} LIMIT %d OFFSET %d",
+      ...$data_params
+    );
+    $rows = $wpdb->get_results($data_sql, ARRAY_A) ?: [];
+
+    // Normalize field names and decode JSON details
+    foreach ($rows as &$row) {
+      $row['details']     = json_decode((string) ($row['details'] ?? '{}'), true) ?: (object)[];
+      $row['userId']      = (int) $row['user_id'];
+      $row['displayName'] = (string) $row['display_name'];
+      // Return created_at as ISO-8601 so Angular can parse it reliably
+      $row['createdAt']   = isset($row['created_at'])
+        ? (new \DateTime($row['created_at'], new \DateTimeZone('UTC')))->format('c')
+        : '';
+      unset($row['user_id'], $row['display_name'], $row['created_at']);
+    }
+    unset($row);
+
+    // Unique users for filter dropdown — no user input in this query
+    $users_sql = $wpdb->prepare(
+      "SELECT DISTINCT user_id, display_name FROM {$table} ORDER BY display_name ASC LIMIT %d",
+      200
+    );
+    $users_raw = $wpdb->get_results($users_sql, ARRAY_A) ?: [];
+    $users = array_map(
+      static fn($u) => ['userId' => (int) $u['user_id'], 'displayName' => (string) $u['display_name']],
+      $users_raw
+    );
+
+    return new WP_REST_Response([
+      'total'    => $total,
+      'page'     => $page,
+      'per_page' => $per_page,
+      'sort_by'  => $sort_by,
+      'sort_dir' => $sort_dir,
+      'entries'  => $rows,
+      'users'    => $users,
+    ], 200);
+  }
+
+  /** DELETE /activity-log */
+  public function clear_activity_log(WP_REST_Request $request): WP_REST_Response {
+    $this->maybe_create_activity_table();
+    global $wpdb;
+    $table = $wpdb->prefix . self::DB_TABLE_SUFFIX;
+    $this->log_auth_user_action('clear_activity_log', 'Cleared activity log');
+    $wpdb->query("TRUNCATE TABLE {$table}");
+    return new WP_REST_Response(['cleared' => true], 200);
+  }
+
+  /**
+   * POST /activity-log/batch — accept an array of client-side events in one request.
+   * Much more efficient than one HTTP call per action.
+   * Max 50 events per batch to prevent abuse.
+   */
+  public function log_client_batch(WP_REST_Request $request): WP_REST_Response {
+    $this->maybe_create_activity_table();
+    $params = $request->get_json_params();
+    if (!is_array($params) || !isset($params['events']) || !is_array($params['events'])) {
+      return new WP_REST_Response(['error' => 'Invalid payload'], 400);
+    }
+
+    $user = wp_get_current_user();
+    if (!$user || !$user->ID) {
+      return new WP_REST_Response(['error' => 'Unauthorized'], 401);
+    }
+
+    // Rate-limit: max 120 batches per user per 60 s to prevent log flooding.
+    $rate_key = 'dn_log_rate_' . $user->ID;
+    $rate     = (int) get_transient($rate_key);
+    if ($rate >= 120) {
+      return new WP_REST_Response(['error' => 'Rate limit exceeded'], 429);
+    }
+    set_transient($rate_key, $rate + 1, 60);
+
+    $roles       = (array) $user->roles;
+    $role        = !empty($roles) ? $roles[0] : 'subscriber';
+    $display     = $user->display_name ?: $user->user_login;
+    $session_id  = sanitize_text_field((string) ($params['sessionId'] ?? ''));
+    $raw_ip      = $_SERVER['REMOTE_ADDR'] ?? '';
+    $safe_ip     = $this->anonymize_ip($raw_ip);
+    $ua          = substr($_SERVER['HTTP_USER_AGENT'] ?? '', 0, 500);
+
+    $events = array_slice($params['events'], 0, 50);   // hard cap per batch
+    $logged = 0;
+
+    foreach ($events as $ev) {
+      if (!is_array($ev)) continue;
+      $action     = substr(sanitize_text_field((string) ($ev['action']    ?? '')), 0, 100);
+      $label      = substr(sanitize_text_field((string) ($ev['label']     ?? '')), 0, 255);
+      $created_at = '';
+
+      // Respect client-provided timestamp if valid ISO-8601
+      if (!empty($ev['timestamp'])) {
+        $ts = strtotime((string) $ev['timestamp']);
+        if ($ts && $ts > 0) {
+          $created_at = gmdate('Y-m-d H:i:s', $ts);
+        }
+      }
+
+      if ($action === '') continue;
+
+      // Sanitize details
+      $details = [];
+      if (isset($ev['details']) && is_array($ev['details'])) {
+        foreach ($ev['details'] as $k => $v) {
+          $dk = sanitize_key((string) $k);
+          $details[$dk] = is_scalar($v) ? sanitize_text_field((string) $v) : '';
+        }
+      }
+
+      $this->db_insert_entry($user->ID, $display, $role, $action, $label, $details, $safe_ip, $ua, $session_id, $created_at);
+      $logged++;
+    }
+
+    return new WP_REST_Response(['logged' => $logged], 200);
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  PAGE / SECTION LOCKING
+  // ══════════════════════════════════════════════════════════════════════════
+
+  /** Lock TTL in seconds. Clients must send a heartbeat within this window. */
+  const LOCK_TTL = 90;
+
+  /**
+   * Build the WordPress transient key for a resource.
+   * resource is validated against a strict whitelist pattern before use.
+   */
+  private function lock_transient_key(string $resource): string {
+    // Transient keys are limited to 172 chars; resource is already short-safe.
+    return 'dn_lock_' . substr(md5($resource), 0, 12);
+  }
+
+  /**
+   * Validates and sanitizes the resource identifier from the URL parameter.
+   * Accepts: date:edition, date:edition:pageId (colon-separated numbers/dates).
+   * Returns the sanitized resource string or empty string on failure.
+   */
+  private function sanitize_lock_resource(string $resource): string {
+    // Allow digits, colons, hyphens (dates like 2026-06-05:1:3)
+    if (!preg_match('/^[\d:.-]{1,60}$/', $resource)) {
+      return '';
+    }
+    return $resource;
+  }
+
+  /** GET /locks/{resource} — read the current lock status without acquiring it. */
+  public function get_lock(WP_REST_Request $request): WP_REST_Response {
+    $resource = $this->sanitize_lock_resource(
+      (string) ($request->get_param('resource') ?? '')
+    );
+    if ($resource === '') {
+      return new WP_REST_Response(['error' => 'Invalid resource identifier'], 400);
+    }
+
+    $transient_key = $this->lock_transient_key($resource);
+    $now           = time();
+    $existing      = get_transient($transient_key);
+
+    if ($existing && is_array($existing) && $existing['expiresAt'] > $now) {
+      return new WP_REST_Response([
+        'locked'    => true,
+        'heldBy'    => $existing['displayName'] ?? 'Another user',
+        'userId'    => (int) $existing['userId'],
+        'lockedAt'  => $existing['lockedAt'],
+        'expiresAt' => $existing['expiresAt'],
+      ], 200);
+    }
+
+    return new WP_REST_Response(['locked' => false], 200);
+  }
+
+  /** POST /locks/{resource} — acquire or refresh a lock. */
+  public function acquire_lock(WP_REST_Request $request): WP_REST_Response {
+    $resource = $this->sanitize_lock_resource(
+      (string) ($request->get_param('resource') ?? '')
+    );
+    if ($resource === '') {
+      return new WP_REST_Response(['error' => 'Invalid resource identifier'], 400);
+    }
+
+    $user = wp_get_current_user();
+    if (!$user || !$user->ID) {
+      return new WP_REST_Response(['error' => 'Unauthorized'], 401);
+    }
+
+    $transient_key = $this->lock_transient_key($resource);
+    $now           = time();
+    $existing      = get_transient($transient_key);
+
+    if ($existing && is_array($existing)) {
+      // Lock is held by a different user and has not expired
+      if ((int) $existing['userId'] !== $user->ID && $existing['expiresAt'] > $now) {
+        return new WP_REST_Response([
+          'locked'       => true,
+          'heldBy'       => $existing['displayName'] ?? 'Another user',
+          'userId'       => (int) $existing['userId'],
+          'lockedAt'     => $existing['lockedAt'],
+          'expiresAt'    => $existing['expiresAt'],
+        ], 423);
+      }
+    }
+
+    $lock = [
+      'resource'    => $resource,
+      'userId'      => $user->ID,
+      'displayName' => $user->display_name ?: $user->user_login,
+      'lockedAt'    => $now,
+      'expiresAt'   => $now + self::LOCK_TTL,
+    ];
+
+    set_transient($transient_key, $lock, self::LOCK_TTL);
+
+    // Track this key in the active-locks index so list_locks() can find it.
+    $this->register_lock_key($transient_key);
+
+    return new WP_REST_Response([
+      'locked'      => false,
+      'acquired'    => true,
+      'resource'    => $resource,
+      'expiresAt'   => $lock['expiresAt'],
+    ], 200);
+  }
+
+  /** DELETE /locks/{resource} — release a held lock. */
+  public function release_lock(WP_REST_Request $request): WP_REST_Response {
+    $resource = $this->sanitize_lock_resource(
+      (string) ($request->get_param('resource') ?? '')
+    );
+    if ($resource === '') {
+      return new WP_REST_Response(['error' => 'Invalid resource identifier'], 400);
+    }
+
+    $user          = wp_get_current_user();
+    $transient_key = $this->lock_transient_key($resource);
+    $existing      = get_transient($transient_key);
+    $force         = $request->get_param('force') === '1';
+
+    // Only the lock holder (or an admin using ?force=1) may release.
+    if ($existing && is_array($existing)) {
+      if (!$force && (int) $existing['userId'] !== $user->ID) {
+        return new WP_REST_Response(['error' => 'Forbidden — you do not hold this lock'], 403);
+      }
+    }
+
+    delete_transient($transient_key);
+    $this->unregister_lock_key($transient_key);
+
+    return new WP_REST_Response(['released' => true], 200);
+  }
+
+  /** POST /locks/{resource}/heartbeat — renew TTL of a held lock. */
+  public function heartbeat_lock(WP_REST_Request $request): WP_REST_Response {
+    $resource = $this->sanitize_lock_resource(
+      (string) ($request->get_param('resource') ?? '')
+    );
+    if ($resource === '') {
+      return new WP_REST_Response(['error' => 'Invalid resource identifier'], 400);
+    }
+
+    $user          = wp_get_current_user();
+    $transient_key = $this->lock_transient_key($resource);
+    $existing      = get_transient($transient_key);
+
+    if (!$existing || !is_array($existing)) {
+      return new WP_REST_Response(['error' => 'Lock not found or expired'], 404);
+    }
+
+    if ((int) $existing['userId'] !== $user->ID) {
+      return new WP_REST_Response(['error' => 'You do not hold this lock'], 403);
+    }
+
+    $now               = time();
+    $existing['expiresAt'] = $now + self::LOCK_TTL;
+    set_transient($transient_key, $existing, self::LOCK_TTL);
+
+    return new WP_REST_Response(['renewed' => true, 'expiresAt' => $existing['expiresAt']], 200);
+  }
+
+  /** GET /locks — list all currently active locks (admin only). */
+  public function list_locks(WP_REST_Request $request): WP_REST_Response {
+    $now        = time();
+    $lock_keys  = get_option('dn_lock_index', []);
+    if (!is_array($lock_keys)) $lock_keys = [];
+
+    $active = [];
+    $prune  = [];
+
+    foreach ($lock_keys as $key) {
+      $lock = get_transient($key);
+      if (!$lock || !is_array($lock)) {
+        $prune[] = $key;
+        continue;
+      }
+      if ($lock['expiresAt'] <= $now) {
+        $prune[] = $key;
+        continue;
+      }
+      $active[] = $lock;
+    }
+
+    // Prune stale keys from the index
+    if ($prune) {
+      $clean = array_values(array_diff($lock_keys, $prune));
+      update_option('dn_lock_index', $clean, false);
+    }
+
+    return new WP_REST_Response(['locks' => $active], 200);
+  }
+
+  private function register_lock_key(string $key): void {
+    $index = get_option('dn_lock_index', []);
+    if (!is_array($index)) $index = [];
+    if (!in_array($key, $index, true)) {
+      $index[] = $key;
+      update_option('dn_lock_index', $index, false);
+    }
+  }
+
+  private function unregister_lock_key(string $key): void {
+    $index = get_option('dn_lock_index', []);
+    if (!is_array($index)) return;
+    $index = array_values(array_filter($index, fn($k) => $k !== $key));
+    update_option('dn_lock_index', $index, false);
+  }
 }
 
 new Digital_Newspaper_API();
@@ -2132,4 +3245,6 @@ register_activation_hook(__FILE__, function () {
   if (!get_option(Digital_Newspaper_API::OPTION_KEY)) {
     update_option(Digital_Newspaper_API::OPTION_KEY, Digital_Newspaper_API::default_data(), false);
   }
+  // Create the activity-log DB table immediately on activation
+  (new Digital_Newspaper_API())->maybe_create_activity_table();
 });

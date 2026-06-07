@@ -40,6 +40,7 @@
   --color-border:         #f9f9f9;
   --color-border-ui:      #e5e7eb;   /* admin UI borders */
   --color-border-dashed:  #d1d5db;
+  --color-border-grey:    #CCCCCC;
   --color-scrollbar-thumb:       #888;
   --color-scrollbar-thumb-hover: #555;
   --color-scrollbar-thumb-admin: #d1d5db;

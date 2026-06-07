@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy, ChangeDetectorRef, ElementRef, ViewChild, Inject } from '@angular/core';
+import { Component, OnInit, OnDestroy, AfterViewChecked, ChangeDetectorRef, ElementRef, ViewChild, Inject } from '@angular/core';
 import { CommonModule, Location, DOCUMENT } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute } from '@angular/router';
@@ -19,17 +19,24 @@ import { Subscription } from 'rxjs';
   templateUrl: './newspaper.component.html',
   styleUrls: ['./newspaper.component.css']
 })
-export class NewspaperComponent implements OnInit, OnDestroy {
+export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
   @ViewChild('mainImage') mainImageRef?: ElementRef<HTMLImageElement>;
+  @ViewChild('paginationBar') private paginationBarRef?: ElementRef<HTMLElement>;
+  private paginationContainerWidth = 0;
+  private paginationObserver?: ResizeObserver;
   pages: NewspaperPage[] = [];
   currentPage: NewspaperPage | null = null;
   selectedSection: NewsSection | null = null;
   imageLoaded = false;
   assetLogoError = false;
+  showSlowConnectionWarning = false;
+  private slowConnectionTimer?: ReturnType<typeof setTimeout>;
   croppedSectionImage: string | null = null;
   showContentModal = false;
   showImageModal = false;
   linkedSections: NewsSection[] = [];
+  /** Resolved primary section ID for the current section's link group. Set by loadLinkedSections(). */
+  private linkedSectionPrimaryId: string | undefined;
   private imageElement: HTMLImageElement | null = null;
   
   // Modal image state
@@ -46,6 +53,8 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   isMobileView = false;
   mobileHeaderMenuOpen = false;
   pendingMobileModal = false;
+  /** Which panel is active in the mobile image modal: 'image' or 'text'. */
+  mobileModalView: 'image' | 'text' = 'image';
   private resizeListener?: () => void;
   private resizeDebounceTimer?: ReturnType<typeof setTimeout>;
 
@@ -155,6 +164,21 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     
     this.loadNewspaperData();
 
+    // ── Remote-change detection ──────────────────────────────────────────────
+    // Poll the server's lightweight /data/version endpoint every 60 s.
+    // When a new version is detected (another user added/edited content), reload
+    // the data transparently so readers always see the latest edition without
+    // having to refresh the browser tab.
+    this.dataService.startVersionPoll(60_000);
+    const versionSub = this.dataService.remoteDataChanged$.subscribe(() => {
+      // Only reload if the user is not viewing a modal (section detail / image)
+      if (!this.showContentModal && !this.showImageModal) {
+        this.dataService.loadData().subscribe();
+        // dataService.data$ subscriber above handles UI refresh automatically
+      }
+    });
+    this.subscriptions.push(versionSub);
+
     // Detect mobile/tablet view and keep it updated on resize
     this.updateIsMobileView();
     this.resizeListener = () => {
@@ -166,9 +190,32 @@ export class NewspaperComponent implements OnInit, OnDestroy {
 
   ngOnDestroy() {
     this.subscriptions.forEach(sub => sub.unsubscribe());
+    this.dataService.stopVersionPoll();
+    this.clearSlowConnectionTimer();
+    this.paginationObserver?.disconnect();
     clearTimeout(this.resizeDebounceTimer);
     if (this.resizeListener) {
       window.removeEventListener('resize', this.resizeListener);
+    }
+  }
+
+  ngAfterViewChecked(): void {
+    const el = this.paginationBarRef?.nativeElement;
+    if (el && !this.paginationObserver) {
+      // Element just became visible — start observing its width.
+      this.paginationObserver = new ResizeObserver(entries => {
+        const w = Math.floor(entries[0]?.contentRect.width ?? 0);
+        if (w !== this.paginationContainerWidth) {
+          this.paginationContainerWidth = w;
+          this.cdr.detectChanges();
+        }
+      });
+      this.paginationObserver.observe(el);
+    } else if (!el && this.paginationObserver) {
+      // Element removed from DOM (*ngIf) — clean up.
+      this.paginationObserver.disconnect();
+      this.paginationObserver = undefined;
+      this.paginationContainerWidth = 0;
     }
   }
 
@@ -505,6 +552,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   selectPage(page: NewspaperPage, targetSectionId?: string) {
     this.currentPage = page;
     this.imageLoaded = false;
+    this.startSlowConnectionTimer();
 
     // If the image is already cached, the load event may not fire
     setTimeout(() => {
@@ -575,6 +623,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   }
 
   onImageLoad() {
+    this.clearSlowConnectionTimer();
     this.imageLoaded = true;
     
     // Store reference to the loaded image for cropping
@@ -591,7 +640,75 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   }
 
   onImageError() {
+    this.clearSlowConnectionTimer();
     this.imageLoaded = true;
+  }
+
+  /** Reload the entire page when the user requests it from the slow-connection notice. */
+  refreshPage(): void {
+    this.document.defaultView?.location.reload();
+  }
+
+  /**
+   * Starts an 8-second timer; if the image is still not loaded when it fires,
+   * shows the slow-connection notice.
+   */
+  private startSlowConnectionTimer(): void {
+    this.clearSlowConnectionTimer();
+    this.slowConnectionTimer = setTimeout(() => {
+      if (!this.imageLoaded) {
+        this.showSlowConnectionWarning = true;
+        this.cdr.detectChanges();
+      }
+    }, 8000);
+  }
+
+  private clearSlowConnectionTimer(): void {
+    if (this.slowConnectionTimer !== undefined) {
+      clearTimeout(this.slowConnectionTimer);
+      this.slowConnectionTimer = undefined;
+    }
+    this.showSlowConnectionWarning = false;
+  }
+
+  /**
+   * Returns the page-number items to render in the pagination bar.
+   * Numbers are 1-based indices into this.pages[]. null represents an ellipsis.
+   *
+   * If the measured container width is large enough to fit all page buttons on
+   * one line they are all shown. Otherwise a smart window of 7 items with
+   * ellipsis keeps everything on a single line.
+   */
+  getPaginationPages(): (number | null)[] {
+    const total = this.pages.length;
+
+    // Determine whether all page buttons fit in the available space.
+    // Each page button width: min-width 32px; numbers ≥10 render wider (~44px).
+    // 2 nav arrows (32px each) + page buttons + gaps (4px × (total+1 slots)).
+    const allFit = (): boolean => {
+      if (this.paginationContainerWidth <= 0) return total <= 7; // pre-measurement fallback
+      const needed = 64
+        + this.pages.reduce((s, p) => s + (p.id >= 10 ? 44 : 32), 0)
+        + (total + 1) * 4;
+      return needed <= this.paginationContainerWidth;
+    };
+
+    if (allFit()) {
+      return Array.from({ length: total }, (_, i) => i + 1);
+    }
+
+    // Windowed pagination: always exactly 7 visible slots so the bar stays single-line.
+    const current = this.pages.indexOf(this.currentPage!) + 1;
+    if (current <= 4) {
+      // Near start: 1 2 3 4 5 … last
+      return [1, 2, 3, 4, 5, null, total];
+    }
+    if (current >= total - 3) {
+      // Near end: 1 … last-4 last-3 last-2 last-1 last
+      return [1, null, total - 4, total - 3, total - 2, total - 1, total];
+    }
+    // Middle: 1 … prev current next … last
+    return [1, null, current - 1, current, current + 1, null, total];
   }
 
   selectSection(section: NewsSection) {
@@ -673,9 +790,13 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     if (this.pendingMobileModal) {
       this.pendingMobileModal = false;
       if (this.selectedSection && this.currentPage) {
+        const allSections = this.getModalSectionOrder();
+        // The main image failed — keep null for the first slot and show the
+        // selected section's title so the user has context for the error.
         this.modalImage = null;
         this.modalImageTitle = this.selectedSection.title;
-        this.modalLinkedSections = [...this.linkedSections];
+        this.modalLinkedSections = allSections.filter(s => s.id !== this.selectedSection!.id);
+        this.mobileModalView = 'image';
         this.showImageModal = true;
       }
     }
@@ -758,19 +879,8 @@ export class NewspaperComponent implements OnInit, OnDestroy {
 
   openImageModal() {
     if (this.croppedSectionImage && this.selectedSection && this.currentPage) {
-      // Collect all sections: main + linked
-      const allSections: NewsSection[] = [
-        { ...this.selectedSection, pageId: this.currentPage.id },
-        ...this.linkedSections
-      ];
-      
-      // Sort by page number
-      allSections.sort((a, b) => {
-        const pageA = a.pageId || 0;
-        const pageB = b.pageId || 0;
-        return pageA - pageB;
-      });
-      
+      const allSections = this.getModalSectionOrder();
+
       // Set first section as main modal image
       const firstSection = allSections[0];
       this.modalImage = firstSection.pageId === this.currentPage.id ? this.croppedSectionImage : this.getCroppedImageForSection(firstSection);
@@ -778,6 +888,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
       
       // Rest of the sections
       this.modalLinkedSections = allSections.slice(1);
+      this.mobileModalView = 'image';
       this.showImageModal = true;
     }
   }
@@ -787,6 +898,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     this.modalImage = null;
     this.modalImageTitle = '';
     this.modalLinkedSections = [];
+    this.mobileModalView = 'image';
   }
 
   private getPrintDocument(contentHtml: string, styles: string = ''): string {
@@ -990,21 +1102,9 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   }
 
   openLinkedSectionImage(linkedSection: NewsSection) {
-    // Show all sections in page order
     if (this.selectedSection && this.currentPage) {
-      // Collect all sections: main + linked
-      const allSections: NewsSection[] = [
-        { ...this.selectedSection, pageId: this.currentPage.id },
-        ...this.linkedSections
-      ];
-      
-      // Sort by page number
-      allSections.sort((a, b) => {
-        const pageA = a.pageId || 0;
-        const pageB = b.pageId || 0;
-        return pageA - pageB;
-      });
-      
+      const allSections = this.getModalSectionOrder(linkedSection);
+
       // Set first section as main modal image
       const firstSection = allSections[0];
       this.modalImage = firstSection.pageId === this.currentPage.id ? this.croppedSectionImage : this.getCroppedImageForSection(firstSection);
@@ -1018,37 +1118,115 @@ export class NewspaperComponent implements OnInit, OnDestroy {
 
   private loadLinkedSections(section: NewsSection) {
     this.linkedSections = [];
-    
-    if (!section.linkedSectionIds || section.linkedSectionIds.length === 0) {
-      return;
-    }
-    
-    // Find all linked sections across all pages
+
+    // Build a full lookup of every section across all pages.
+    const sectionById = new Map<string, NewsSection>();
     for (const page of this.pages) {
       for (const pageSection of page.sections) {
-        if (section.linkedSectionIds.includes(pageSection.id)) {
-          // Add pageId to the section for reference
-          this.linkedSections.push({
-            ...pageSection,
-            pageId: page.id
-          });
-        }
+        sectionById.set(pageSection.id, { ...pageSection, pageId: page.id });
       }
     }
-    
-    // Sort linked sections by pageId to maintain consistent order
-    this.linkedSections.sort((a, b) => {
-      const pageA = a.pageId || 0;
-      const pageB = b.pageId || 0;
-      return pageA - pageB;
-    });
 
-    // Trigger canvas cropping for linked sections that don't have their own imageUrl
-    for (const linked of this.linkedSections) {
-      if (!linked.imageUrl) {
-        this.cropLinkedSectionImage(linked);
+    // 1) Forward-linked sections: those this section explicitly names in linkedSectionIds.
+    const forwardIds = new Set<string>(section.linkedSectionIds ?? []);
+    const forwardLinked: NewsSection[] = (section.linkedSectionIds ?? [])
+      .map(id => sectionById.get(id))
+      .filter((s): s is NewsSection => !!s);
+
+    // 2) Reverse-reference sections: other sections that explicitly link TO this section.
+    //    This is a safety net — catches cases where the back-link atomic save failed
+    //    (server race condition) or was never stored (legacy data).
+    const reverseLinked: NewsSection[] = [];
+    for (const [id, other] of sectionById) {
+      if (id === section.id) continue;
+      if (!forwardIds.has(id) && other.linkedSectionIds?.includes(section.id)) {
+        reverseLinked.push(other);
       }
     }
+
+    // 3) Merge and deduplicate by ID.
+    const seen = new Set<string>();
+    const combined: NewsSection[] = [];
+    for (const s of [...forwardLinked, ...reverseLinked]) {
+      if (!seen.has(s.id)) {
+        seen.add(s.id);
+        combined.push(s);
+      }
+    }
+
+    // 4) Resolve the group primary: the section that was explicitly designated as primary
+    //    by another section's linkedSectionPrimary field takes precedence over timestamp order.
+    //    Include the current section in the group scan so its own linkedSectionPrimary is read too.
+    const fullGroup: NewsSection[] = [section, ...combined];
+    this.linkedSectionPrimaryId = this.resolveGroupPrimary(fullGroup);
+
+    // 5) Sort — explicit primary gets key 0 (always first); others sort by creation timestamp.
+    combined.sort((a, b) => this.getSectionSortKey(a, this.linkedSectionPrimaryId) - this.getSectionSortKey(b, this.linkedSectionPrimaryId));
+    this.linkedSections = combined;
+
+    // 6) Trigger canvas cropping for linked sections that don't have their own imageUrl.
+    for (const linked of this.linkedSections) {
+      if (!linked.imageUrl) this.cropLinkedSectionImage(linked);
+    }
+  }
+
+  /**
+   * Scans a group of sections to find an explicitly designated primary.
+   * A section designates a primary by setting linkedSectionPrimary to the ID of the
+   * main article in its group. The first designation found that points to a section
+   * actually present in the group wins. Returns undefined → fall back to timestamp sort.
+   */
+  private resolveGroupPrimary(group: NewsSection[]): string | undefined {
+    const groupIds = new Set(group.map(s => s.id));
+    for (const s of group) {
+      if (s.linkedSectionPrimary && groupIds.has(s.linkedSectionPrimary)) {
+        return s.linkedSectionPrimary;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Returns a numeric sort key for ordering sections within a group.
+   * - The explicitly-designated primary (primaryId) always gets key 0 → sorts first.
+   * - Other sections: sort by creation timestamp extracted from 'post-{Date.now()}' IDs.
+   * - Non-timestamp IDs (e.g. XML-imported) sort last (MAX_SAFE_INTEGER).
+   */
+  private getSectionSortKey(section: NewsSection, primaryId?: string): number {
+    if (primaryId !== undefined && section.id === primaryId) return 0;
+    const match = /^post-(\d+)$/.exec(section.id ?? '');
+    return match ? parseInt(match[1], 10) : Number.MAX_SAFE_INTEGER;
+  }
+
+  /**
+   * Returns all sections in the modal group (selected + linked) sorted by creation
+   * timestamp so the primary/earlier article always appears first — regardless of
+   * which section is currently selected or was clicked.
+   *
+   * Section IDs follow 'post-{Date.now()}' format; lower timestamp = created first
+   * = main/primary article. This produces a consistent, symmetric order:
+   * [Section-1 (older), Section-2 (newer), ...] from any viewing direction.
+   */
+  private getModalSectionOrder(_clickedLinkedSection?: NewsSection): NewsSection[] {
+    if (!this.selectedSection || !this.currentPage) return [];
+
+    const selectedWithPage: NewsSection = {
+      ...this.selectedSection,
+      pageId: this.currentPage.id
+    };
+
+    // Combine selected + linked, dedup by ID (guards against old mutual-link data),
+    // then sort by creation timestamp ascending.
+    const seen = new Set<string>();
+    const all: NewsSection[] = [];
+    for (const s of [selectedWithPage, ...this.linkedSections]) {
+      if (!seen.has(s.id)) {
+        seen.add(s.id);
+        all.push(s);
+      }
+    }
+    all.sort((a, b) => this.getSectionSortKey(a, this.linkedSectionPrimaryId) - this.getSectionSortKey(b, this.linkedSectionPrimaryId));
+    return all;
   }
 
   selectLinkedSection(linkedSection: NewsSection) {
@@ -1266,11 +1444,12 @@ export class NewspaperComponent implements OnInit, OnDestroy {
    *  Pass null to reset to site-level defaults. */
   private updateMetaTags(section: NewsSection | null): void {
     const siteName = this.settings?.logo?.alt || 'ইপেপার - দৈনিক সংগ্রাম';
+    const othersTitle = this.settings?.othersPageTitle?.trim() || siteName;
     const pageUrl = window.location.href;
 
     if (section) {
       // Title
-      const title = `${section.title} | ${siteName}`;
+      const title = `${section.title} - ${othersTitle}`;
       this.titleService.setTitle(title);
 
       // Description: strip HTML tags, collapse whitespace, truncate to 155 chars
@@ -1302,6 +1481,30 @@ export class NewspaperComponent implements OnInit, OnDestroy {
       this.meta.updateTag({ name: 'twitter:description', content: description });
       this.meta.updateTag({ name: 'twitter:creator',     content: siteName });
       this.meta.updateTag({ name: 'twitter:image',       content: imageUrl });
+    } else if (this.currentPage) {
+      const pageLabel = this.getPageLabel(this.currentPage);
+      const displayDate = this.translationService.formatDate(this.selectedDate, 'long');
+      const pageTitle = `${pageLabel} ${displayDate} - ${othersTitle}`;
+      const pageImageUrl = this.resolveImageUrl(this.currentPage.fullImage?.trim() ?? '');
+
+      this.titleService.setTitle(pageTitle);
+
+      this.meta.updateTag({ property: 'og:site_name', content: siteName });
+      this.meta.updateTag({ property: 'og:type',      content: 'article' });
+      this.meta.updateTag({ property: 'og:title',     content: pageTitle });
+      this.meta.updateTag({ property: 'og:description', content: pageTitle });
+      this.meta.updateTag({ property: 'og:url',       content: pageUrl });
+      this.meta.updateTag({ property: 'og:image',        content: pageImageUrl });
+      this.meta.updateTag({ property: 'og:image:secure_url', content: pageImageUrl });
+      this.meta.updateTag({ property: 'og:image:width',  content: '' });
+      this.meta.updateTag({ property: 'og:image:height', content: '' });
+
+      this.meta.updateTag({ name: 'twitter:card',        content: 'summary_large_image' });
+      this.meta.updateTag({ name: 'twitter:site',        content: siteName });
+      this.meta.updateTag({ name: 'twitter:title',       content: pageTitle });
+      this.meta.updateTag({ name: 'twitter:description', content: pageTitle });
+      this.meta.updateTag({ name: 'twitter:creator',     content: siteName });
+      this.meta.updateTag({ name: 'twitter:image',       content: pageImageUrl });
     } else {
       // Reset to site-level defaults
       this.titleService.setTitle(siteName);

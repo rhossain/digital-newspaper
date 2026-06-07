@@ -1,7 +1,7 @@
 import { Injectable } from '@angular/core';
 import { HttpClient, HttpResponse } from '@angular/common/http';
-import { Observable, BehaviorSubject, timer, forkJoin, of, throwError } from 'rxjs';
-import { tap, map, catchError, timeout, retry, switchMap } from 'rxjs/operators';
+import { Observable, BehaviorSubject, Subject, Subscription, timer, forkJoin, interval, of, throwError } from 'rxjs';
+import { tap, map, catchError, timeout, retry, switchMap, debounceTime, distinctUntilChanged } from 'rxjs/operators';
 import { AuthService } from './auth.service';
 import { WP_BASE_URL } from '../config';
 
@@ -16,7 +16,19 @@ export interface NewsSection {
   imageUrl?: string;
   pageId?: number;
   linkedSectionIds?: string[];
+  /**
+   * The ID of the primary (main article) section within this section's link group.
+   * Set automatically when the admin saves explicit linked sections — the earliest-created
+   * linked section becomes the primary. Used by the viewer for deterministic ordering:
+   * the primary always appears first in the right panel and modal, regardless of which
+   * section is currently selected. Absent on old data → viewer falls back to ID-timestamp sort.
+   */
+  linkedSectionPrimary?: string;
   showCaption?: boolean;
+  /** WordPress post ID returned by the PHP plugin after sync. Read-only from Angular. */
+  wpPostId?: number;
+  /** Origin of this section — 'xml' for bulk-imported, 'manual' for admin-created. */
+  importSource?: 'xml' | 'manual';
 }
 
 export interface NewspaperPage {
@@ -28,6 +40,8 @@ export interface NewspaperPage {
   sections: NewsSection[];
   /** Multilingual page name keyed by language code, e.g. { en: 'Sports', bn: 'খেলাধুলা' } */
   pageLabels?: { [lang: string]: string };
+  /** 'pending' = skeleton page created by XML import, no image yet. Absent or 'ready' = has image. */
+  imageStatus?: 'pending' | 'ready';
 }
 
 export interface NewspaperEdition {
@@ -81,11 +95,19 @@ export interface GlobalSettings {
   maintenanceMessage?: string;
   /** Raw HTML string of <script> / <noscript> tags to inject into <head> (e.g. Google Analytics). */
   headScripts?: string;
+  /** Site name appended to individual post/section page titles, e.g. "দৈনিক সংগ্রাম ই-পেপার". */
+  othersPageTitle?: string;
 }
 
 export interface NewspaperData {
   settings?: GlobalSettings;
   editions: NewspaperEdition[];
+  /**
+   * Monotonically-increasing float timestamp stamped by PHP on every save.
+   * Angular reads it on load and echoes it back on save; the server uses it
+   * to detect concurrent-edit conflicts (optimistic concurrency control).
+   */
+  dataVersion?: number;
 }
 
 interface WpMediaItem {
@@ -154,6 +176,8 @@ export interface ServerDataBackupSummary {
 export interface SaveDataOptions {
   allowRecoveredData?: boolean;
   forceEmptyOverwrite?: boolean;
+  /** Bypass the optimistic-concurrency version check (admin force-save). */
+  forceVersionOverwrite?: boolean;
 }
 
 export interface ImportValidationResult {
@@ -188,6 +212,46 @@ export interface ImportOptions {
   newBaseUrl?: string;
 }
 
+// ─── XML Import types ─────────────────────────────────────────────────────────
+
+export interface XmlImportRow {
+  title: string;
+  content: string;
+  date: string;           // YYYY-MM-DD
+  edition: number;        // default 1
+  page: number;
+  derivedId: string;      // deterministic ID
+  duplicateStatus: 'new' | 'duplicate-exact' | 'duplicate-key';
+  importAction: 'skip' | 'overwrite' | 'import-as-new';
+  assignedPageId: number; // may differ from XML page after manual reassignment
+  rowIndex: number;
+  rawTitle: string;       // pre-sanitization, for display
+}
+
+export interface XmlParseError {
+  rowIndex: number;
+  field: string;
+  message: string;
+  severity: 'error' | 'warning';
+}
+
+export interface XmlImportResult {
+  rows: XmlImportRow[];
+  errors: XmlParseError[];
+  totalRows: number;
+  newCount: number;
+  duplicateCount: number;
+  errorCount: number;
+  dateRange: { min: string; max: string };
+}
+
+export interface XmlImportSummary {
+  created: number;
+  updated: number;
+  skipped: number;
+  skeletonPagesCreated: number;
+}
+
 @Injectable({
   providedIn: 'root'
 })
@@ -199,9 +263,19 @@ export class NewspaperDataService {
 
   private dataSubject!: BehaviorSubject<NewspaperData>;
   private currentDateSubject!: BehaviorSubject<string>;
-  
+
   currentDate$!: Observable<string>;
   public data$!: Observable<NewspaperData>;
+
+  /**
+   * Emits the server's new dataVersion whenever the version poll detects
+   * a remote change. Components subscribe to decide whether to silently
+   * reload or warn the user before doing so.
+   */
+  readonly remoteDataChanged$ = new Subject<number>();
+
+  private versionPollSub?: Subscription;
+  private readonly versionUrl = `${WP_BASE_URL}/wp-json/digital-newspaper/v1/data/version`;
   
   // WordPress REST API base
   private assetsUrl = '/assets/newspaper-data.json';
@@ -222,7 +296,10 @@ export class NewspaperDataService {
     this.currentDateSubject = new BehaviorSubject<string>(this.getTodayDate());
     this.currentDate$ = this.currentDateSubject.asObservable();
     this.data$ = this.dataSubject.asObservable();
-    this.dataSubject.subscribe(data => this.cacheEmergencyDraft(data));
+    // Debounce emergency-draft writes: atomic saves fire rapidly; serialising
+    // the full dataset to JSON on every emission is expensive. 2 s is enough
+    // to capture any crash that happens during active editing.
+    this.dataSubject.pipe(debounceTime(2000)).subscribe(data => this.cacheEmergencyDraft(data));
   }
 
   // Date helper methods
@@ -425,7 +502,7 @@ export class NewspaperDataService {
           ...section,
           imageUrl: typeof section.imageUrl === 'string' ? section.imageUrl : undefined,
         })) : [],
-      })) : [];
+      })).sort((a, b) => a.id - b.id) : [];
     });
     return result;
   }
@@ -744,6 +821,58 @@ export class NewspaperDataService {
     return fallback || '';
   }
 
+  // ─── Atomic (granular) save methods ─────────────────────────────────────
+  // Each method posts only the changed record to a dedicated PHP endpoint that
+  // does a server-side read-modify-write.  Two users editing DIFFERENT pages
+  // can now save simultaneously without overwriting each other's work.
+
+  private readonly pageAtomicUrl    = `${this.wpBaseUrl}/wp-json/digital-newspaper/v1/data/page`;
+  private readonly sectionAtomicUrl = `${this.wpBaseUrl}/wp-json/digital-newspaper/v1/data/section`;
+
+  private patchDataVersion(res: any): void {
+    if (res?.newDataVersion) {
+      this.dataSubject.next({ ...this.dataSubject.value, dataVersion: res.newDataVersion });
+    }
+  }
+
+  /** Atomically upsert a single page on the server (PUT /data/page). */
+  savePageAtomically(page: NewspaperPage, date: string, edition: number): Observable<any> {
+    const headers = this.auth.getAuthHeaders();
+    return this.http.put<any>(this.pageAtomicUrl, { date, edition, page }, { headers }).pipe(
+      tap(res => this.patchDataVersion(res))
+    );
+  }
+
+  /** Atomically delete a single page on the server (DELETE /data/page). */
+  deletePageAtomically(pageId: number, date: string, edition: number): Observable<any> {
+    const headers = this.auth.getAuthHeaders();
+    return this.http.delete<any>(this.pageAtomicUrl, { headers, body: { date, edition, pageId } }).pipe(
+      tap(res => this.patchDataVersion(res))
+    );
+  }
+
+  /**
+   * Atomically upsert a single section on the server (PUT /data/section).
+   * @param originalSectionId  The section's ID before any normalization/rename.
+   *                           Pass the same value as section.id if unchanged.
+   */
+  saveSectionAtomically(
+    pageId: number, section: NewsSection, originalSectionId: string, date: string, edition: number
+  ): Observable<any> {
+    const headers = this.auth.getAuthHeaders();
+    return this.http.put<any>(this.sectionAtomicUrl,
+      { date, edition, pageId, originalSectionId, section }, { headers }
+    ).pipe(tap(res => this.patchDataVersion(res)));
+  }
+
+  /** Atomically delete a single section on the server (DELETE /data/section). */
+  deleteSectionAtomically(pageId: number, sectionId: string, date: string, edition: number): Observable<any> {
+    const headers = this.auth.getAuthHeaders();
+    return this.http.delete<any>(this.sectionAtomicUrl,
+      { headers, body: { date, edition, pageId, sectionId } }
+    ).pipe(tap(res => this.patchDataVersion(res)));
+  }
+
   saveData(data: NewspaperData, options: SaveDataOptions = {}): Observable<any> {
     if (this.dataRecoveredFromMediaLibrary && !options.allowRecoveredData) {
       return throwError(() => new Error(
@@ -753,27 +882,88 @@ export class NewspaperDataService {
 
     // Update the local data
     this.dataSubject.next(data);
-    
+
     // Persist settings to localStorage for cross-window availability
     if (data.settings) {
       this.cacheSettings(data.settings);
     }
-    
-    // Save to backend API
+
+    // Save to backend API.
+    // Include the current dataVersion so the server can detect concurrent edits.
+    // ?force=1 bypasses both the empty-overwrite guard and the version check.
     const headers = this.auth.getAuthHeaders();
-    const saveUrl = options.forceEmptyOverwrite ? `${this.apiUrl}?force=1` : this.apiUrl;
+    const forceParam = (options.forceEmptyOverwrite || options.forceVersionOverwrite)
+      ? '?force=1'
+      : '';
+    const saveUrl = `${this.apiUrl}${forceParam}`;
+
     return this.http.post<unknown>(saveUrl, data, { headers }).pipe(
       map((response) => this.assertSaveAccepted(response)),
-      tap(() => {
+      tap((response: any) => {
         if (options.allowRecoveredData) {
           this.dataRecoveredFromMediaLibrary = false;
         }
+        // Update local dataVersion to what the server stamped, so the NEXT save
+        // carries the correct version and won't trip the conflict guard.
+        if (response?.newDataVersion) {
+          const current = this.dataSubject.value;
+          this.dataSubject.next({ ...current, dataVersion: response.newDataVersion });
+        }
+      }),
+      catchError((err) => {
+        // On any save failure, silently fetch the server's current dataVersion
+        // and patch it into the local state.  If the save actually reached
+        // WordPress but the HTTP response was blocked (e.g. by Imunify360 WAF),
+        // the server will have advanced its version.  Without this refresh the
+        // next save attempt sends the old version and gets a false 409 Conflict.
+        this.http.get<{ dataVersion: number }>(this.versionUrl)
+          .pipe(catchError(() => of(null)))
+          .subscribe(res => {
+            if (res?.dataVersion) {
+              const cur = this.dataSubject.value;
+              if (res.dataVersion !== cur.dataVersion) {
+                this.dataSubject.next({ ...cur, dataVersion: res.dataVersion });
+              }
+            }
+          });
+        return throwError(() => err);
       })
     );
   }
 
+  /**
+   * Applies the sectionPostIds map returned by the PHP plugin after a save,
+   * patching wpPostId onto every matching NewsSection in the in-memory data.
+   * The map key format is "{date}:{editionNumber}:{pageId}:{sectionId}".
+   */
+  private patchWpPostIds(sectionPostIds: Record<string, number>): void {
+    if (!sectionPostIds || typeof sectionPostIds !== 'object') return;
+    const currentData = this.getData();
+    const newEditions = currentData.editions.map(edition => {
+      const date = edition.date;
+      const edNum = edition.edition ?? 1;
+      return {
+        ...edition,
+        pages: edition.pages.map(page => ({
+          ...page,
+          sections: page.sections.map(section => {
+            const key = `${date}:${edNum}:${page.id}:${section.id}`;
+            const wpPostId = sectionPostIds[key];
+            return wpPostId ? { ...section, wpPostId } : section;
+          }),
+        })),
+      };
+    });
+    this.dataSubject.next({ ...currentData, editions: newEditions });
+  }
+
   private assertSaveAccepted(response: unknown): unknown {
     if (response && typeof response === 'object' && (response as { success?: unknown }).success === true) {
+      // Patch wpPostIds if the PHP plugin returned them
+      const payload = response as { sectionPostIds?: Record<string, number> };
+      if (payload.sectionPostIds) {
+        this.patchWpPostIds(payload.sectionPostIds);
+      }
       return response;
     }
 
@@ -825,7 +1015,9 @@ export class NewspaperDataService {
     const newEditions = currentData.editions.map(edition => {
       if (this.editionMatches(edition, targetDate, editionNumber)) {
         foundEdition = true;
-        return { ...edition, pages: [...edition.pages, {...page, sections: [...page.sections]}] };
+        const sorted = [...edition.pages, {...page, sections: [...page.sections]}]
+          .sort((a, b) => a.id - b.id);
+        return { ...edition, pages: sorted };
       }
       return edition;
     });
@@ -915,15 +1107,21 @@ export class NewspaperDataService {
               return { ...updatedSection };
             }
 
-            if (!s.linkedSectionIds || s.linkedSectionIds.length === 0 || sectionId === nextSectionId) {
-              return s;
-            }
+            // When the ID is not changing, no cross-references need updating.
+            if (sectionId === nextSectionId) return s;
 
-            const linkedSectionIds = s.linkedSectionIds.map(linkedId =>
-              linkedId === sectionId ? nextSectionId : linkedId
-            );
+            // Update any references to the renamed section in linkedSectionIds and linkedSectionPrimary.
+            const hasLinkedRef = s.linkedSectionIds?.includes(sectionId) ?? false;
+            const hasPrimaryRef = s.linkedSectionPrimary === sectionId;
+            if (!hasLinkedRef && !hasPrimaryRef) return s;
 
-            return { ...s, linkedSectionIds };
+            return {
+              ...s,
+              ...(hasLinkedRef && {
+                linkedSectionIds: (s.linkedSectionIds ?? []).map(id => id === sectionId ? nextSectionId : id)
+              }),
+              ...(hasPrimaryRef && { linkedSectionPrimary: nextSectionId }),
+            };
           });
 
           return { ...page, sections: newSections };
@@ -1000,6 +1198,51 @@ export class NewspaperDataService {
     });
     // Persist to localStorage so new windows pick it up immediately
     this.cacheSettings(settings);
+  }
+
+  /**
+   * Replace the editions array in the in-memory store without a server round-trip.
+   * Use this for admin-side operations (edition label edits, edition deletion)
+   * that modify editions directly and rely on a subsequent saveAllData() or
+   * autoSaveForVintage() to persist the change.
+   *
+   * Prefer specific service methods (addPage, updateSection, …) for targeted edits.
+   */
+  updateEditions(editions: NewspaperEdition[]): void {
+    this.dataSubject.next({ ...this.dataSubject.value, editions });
+  }
+
+  // ─── Remote-change detection (version polling) ────────────────────────────
+
+  /**
+   * Start polling the lightweight /data/version endpoint every `intervalMs`
+   * milliseconds (default 30 s).
+   *
+   * When the server's dataVersion is newer than the locally cached one,
+   * `remoteDataChanged$` emits the new version. The caller decides whether to
+   * auto-reload silently or warn the user first (e.g., if they are mid-edit).
+   *
+   * Calling this a second time stops any existing poll before starting a new one.
+   */
+  startVersionPoll(intervalMs = 30_000): void {
+    this.stopVersionPoll();
+    // Emit immediately once, then every interval
+    this.versionPollSub = interval(intervalMs).subscribe(() => {
+      this.http.get<{ dataVersion: number }>(this.versionUrl).pipe(
+        catchError(() => of(null)) // network error → skip silently
+      ).subscribe(res => {
+        if (!res) return;
+        const local = this.dataSubject.value.dataVersion ?? 0;
+        if (res.dataVersion > local) {
+          this.remoteDataChanged$.next(res.dataVersion);
+        }
+      });
+    });
+  }
+
+  stopVersionPoll(): void {
+    this.versionPollSub?.unsubscribe();
+    this.versionPollSub = undefined;
   }
 
   getDefaultDate(): string {
