@@ -2476,15 +2476,16 @@ HTML;
       return $result;
     }
 
-    if (is_user_logged_in()) {
-      return $result;
-    }
-
     $token = $this->get_bearer_token_from_globals();
     if (!$token) {
+      // No Bearer token present — let WordPress's own cookie/nonce auth handle it.
       return $result;
     }
 
+    // Bearer token present: JWT identity always takes precedence over any
+    // existing cookie-authenticated session.  This ensures the correct user is
+    // resolved even when two different users share the same browser (one logged
+    // into WP admin via cookie, the other sending a different JWT).
     $payload = $this->verify_token($token);
     if (!$payload || empty($payload['sub'])) {
       return new WP_Error('dn_unauthorized', 'Invalid token', ['status' => 401]);

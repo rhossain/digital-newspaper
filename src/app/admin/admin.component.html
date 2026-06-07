@@ -69,8 +69,16 @@
 
         <span class="vhdr-sep" aria-hidden="true">|</span>
 
-        <!-- Authenticated user name -->
-        <span class="vhdr-user">{{ currentUserName }}</span>
+        <!-- Authenticated user name — visually prominent so any visitor immediately
+             sees whose session is active and can log out if it is not theirs. -->
+        <span class="vhdr-user" [title]="'Logged in as ' + currentUserName">
+          <svg class="vhdr-user-icon" width="13" height="13" viewBox="0 0 24 24"
+               fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+            <circle cx="12" cy="7" r="4"></circle>
+          </svg>
+          <span class="vhdr-user-name">{{ currentUserName }}</span>
+        </span>
 
         <span class="vhdr-sep" aria-hidden="true">|</span>
 
@@ -117,7 +125,7 @@
             <span class="vhdr-group-label">E-post</span>
             <button class="vhdr-menu-item vhdr-menu-item--soon" (click)="closeMenu()" role="menuitem">All E-posts</button>
             <button class="vhdr-menu-item vhdr-menu-item--soon" (click)="closeMenu()" role="menuitem">Add New E-post</button>
-            <button class="vhdr-menu-item" (click)="openBulkXmlImport()" dnTrack="bulk_xml_open" role="menuitem">Add Bulk E-post</button>
+            <button class="vhdr-menu-item" disabled (click)="openBulkXmlImport()" dnTrack="bulk_xml_open" role="menuitem">Add Bulk E-post</button>
           </div>
 
           <!-- Admin-only section -->

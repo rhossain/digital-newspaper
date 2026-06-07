@@ -1,7 +1,7 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { Observable, of } from 'rxjs';
-import { tap, map } from 'rxjs';
+import { Observable, of, throwError } from 'rxjs';
+import { tap, map, switchMap } from 'rxjs';
 import { WP_BASE_URL } from '../config';
 
 interface LoginResponse {
@@ -21,6 +21,13 @@ interface MeResponse {
   email: string;
   displayName: string;
   role: string;
+}
+
+/** Shape of the user profile persisted in localStorage under `dn_wp_user`. */
+interface StoredUser {
+  displayName: string;
+  role: string;
+  userId: number;
 }
 
 @Injectable({
@@ -60,6 +67,7 @@ export class AuthService {
           localStorage.setItem(this.userKey, JSON.stringify({
             displayName: response.user?.displayName ?? '',
             role: response.user?.role ?? 'editor',
+            userId: response.user?.id ?? 0,
           }));
         }
       })
@@ -80,7 +88,7 @@ export class AuthService {
     localStorage.removeItem(this.userKey);
   }
 
-  private getStoredUser(): { displayName: string; role: string } | null {
+  private getStoredUser(): StoredUser | null {
     const raw = localStorage.getItem(this.userKey);
     if (!raw) return null;
     try { return JSON.parse(raw); } catch { return null; }
@@ -92,6 +100,11 @@ export class AuthService {
 
   getUserRole(): string {
     return this.getStoredUser()?.role ?? 'editor';
+  }
+
+  /** Returns the WordPress user ID of the currently stored session, or 0 if unknown. */
+  getUserId(): number {
+    return this.getStoredUser()?.userId ?? 0;
   }
 
   /** Returns true only when the authenticated user has the WordPress administrator role. */
@@ -114,6 +127,15 @@ export class AuthService {
       const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
       if (payload?.exp && Math.floor(Date.now() / 1000) > payload.exp) {
         this.logout(); // Clear the expired token immediately
+        return false;
+      }
+      // Cross-validate: the JWT sub claim must match the stored userId.
+      // Catches stale profile data from a previous user remaining in localStorage
+      // while a different user's token is present (e.g. partial overwrite).
+      // Skipped when userId is absent (pre-fix sessions) — backward compatible.
+      const storedUserId = this.getStoredUser()?.userId;
+      if (storedUserId && payload?.sub && Number(payload.sub) !== Number(storedUserId)) {
+        this.logout();
         return false;
       }
     } catch {
@@ -140,16 +162,39 @@ export class AuthService {
     }
     const meUrl = `${this.wpBaseUrl}/wp-json/digital-newspaper/v1/auth/me`;
     return this.http.get<MeResponse>(meUrl, { headers, withCredentials: true }).pipe(
-      tap((user) => {
-        // Refresh stored user info (role may have changed since last login).
+      switchMap((user) => {
+        // Guard: the user ID returned by the server must match the sub claim in
+        // the stored JWT. A mismatch means server-side cookie auth silently
+        // overrode the Bearer token — force logout so the UI never shows the
+        // wrong user's name.
+        const token = this.getToken();
+        if (token) {
+          try {
+            const parts = token.split('.');
+            if (parts.length === 3) {
+              const payload = JSON.parse(
+                atob(parts[1].replace(/-/g, '+').replace(/_/g, '/'))
+              );
+              if (payload?.sub && user?.id && Number(payload.sub) !== Number(user.id)) {
+                this.logout();
+                return throwError(() => new Error('IDENTITY_MISMATCH'));
+              }
+            }
+          } catch {
+            this.logout();
+            return throwError(() => new Error('TOKEN_DECODE_FAILED'));
+          }
+        }
+        // Identity confirmed — refresh stored profile (role may have changed).
         if (user?.displayName !== undefined) {
           localStorage.setItem(this.userKey, JSON.stringify({
             displayName: user.displayName ?? '',
             role: user.role ?? 'editor',
+            userId: user.id ?? 0,
           }));
         }
-      }),
-      map(() => true)
+        return of(true as boolean);
+      })
     );
   }
 }
