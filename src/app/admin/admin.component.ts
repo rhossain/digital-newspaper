@@ -464,7 +464,8 @@ export class AdminComponent implements OnInit, OnDestroy {
           // if it still happens, the REST API paths must be whitelisted server-side.
           const detail = msg.replace('WAF_BLOCKED:', '').trim();
           this.authError = `The login request was blocked by the server's security module. `
-            + `To fix this, whitelist the path /wp-json/digital-newspaper/v1/ in your hosting security settings (Imunify360 / ModSecurity). `
+            + `To fix: whitelist the path /wp-json/digital-newspaper/v1/ in your hosting `
+            + `security settings (Imunify360 → White List, or ModSecurity ignore list). `
             + `Server message: ${detail}`;
         } else if (msg === 'NO_TOKEN' || msg.includes('did not include a token')) {
           this.authError = 'WordPress did not return a login token. Please check: (1) the Digital Newspaper plugin is active, (2) WordPress Permalinks are set to "Post name", and (3) the WordPress URL in the app configuration is correct.';
@@ -2531,6 +2532,10 @@ export class AdminComponent implements OnInit, OnDestroy {
   // ─── Conflict modal state ────────────────────────────────────────
   showConflictModal = false;
   conflictLastSavedBy = '';
+  /** True when the 409 was triggered by a stale version from the current user's
+   *  own previous save (e.g. WAF blocked the success response), not by a
+   *  genuine concurrent edit from a different user. */
+  conflictIsSelf = false;
   private conflictPendingData: any = null;
 
   saveAllData() {
@@ -2569,7 +2574,19 @@ export class AdminComponent implements OnInit, OnDestroy {
         if (error?.status === 409) {
           const body = error?.error ?? {};
           if (body.conflictType === 'version-mismatch') {
-            this.conflictLastSavedBy = body.lastSavedBy || 'another user';
+            const lastSavedBy: string = body.lastSavedBy || '';
+            const myName: string = this.authService.getUserDisplayName();
+            // Self-conflict: the previous save reached the server but its
+            // response was blocked (e.g. by Imunify360 WAF), so the server
+            // advanced its dataVersion while Angular kept the old one.
+            // Force-save is safe here — there is no concurrent editor.
+            if (myName && lastSavedBy === myName) {
+              this.toaster.info('Version out-of-sync — retrying save automatically…');
+              this.persistAllData(currentData, { forceVersionOverwrite: true });
+              return;
+            }
+            this.conflictLastSavedBy = lastSavedBy || 'another user';
+            this.conflictIsSelf = false;
             this.conflictPendingData = currentData;
             this.showConflictModal = true;
             this.cdr.detectChanges();
@@ -2597,10 +2614,28 @@ export class AdminComponent implements OnInit, OnDestroy {
         }
 
         const errMsg: string = error?.message ?? '';
-        if (errMsg.startsWith('WAF_BLOCKED:')) {
-          const detail = errMsg.replace('WAF_BLOCKED:', '').trim();
+
+        // WAF blocks can arrive two ways:
+        //   (a) HTTP 200 + JSON body → assertSaveAccepted() throws WAF_BLOCKED:…
+        //       → errMsg starts with 'WAF_BLOCKED:'
+        //   (b) HTTP 500 + JSON/HTML body → HttpErrorResponse, body parsed below
+        const responseBody = error?.error ?? {};
+        const bodyText: string =
+          typeof responseBody === 'object' && responseBody !== null
+            ? String((responseBody as any)?.message ?? (responseBody as any)?.error ?? '')
+            : (typeof responseBody === 'string' ? responseBody : '');
+        const isWafBlock =
+          errMsg.startsWith('WAF_BLOCKED:') ||
+          (!!bodyText && AuthService.isWafBlockMessage(bodyText));
+
+        if (isWafBlock) {
+          const detail = errMsg.startsWith('WAF_BLOCKED:')
+            ? errMsg.replace('WAF_BLOCKED:', '').trim()
+            : bodyText;
           this.toaster.error(
-            `Save was blocked by the server's security module. Whitelist /wp-json/digital-newspaper/v1/ in your hosting security settings. (${detail})`
+            `Save was blocked by the server's security module. ` +
+            `To fix: log out and log back in (this sets a session cookie Imunify360 trusts), ` +
+            `or whitelist /wp-json/digital-newspaper/v1/ in your hosting security settings. (${detail})`
           );
         } else if ((error?.status ?? -1) === 0) {
           this.toaster.error(
@@ -2618,6 +2653,8 @@ export class AdminComponent implements OnInit, OnDestroy {
   resolveConflictByReloading(): void {
     this.showConflictModal = false;
     this.conflictPendingData = null;
+    this.conflictLastSavedBy = '';
+    this.conflictIsSelf = false;
     this.toaster.info('Reloading latest data from server…');
     this.loadData();
   }
@@ -2628,6 +2665,7 @@ export class AdminComponent implements OnInit, OnDestroy {
     this.showConflictModal = false;
     this.conflictPendingData = null;
     this.conflictLastSavedBy = '';
+    this.conflictIsSelf = false;
     if (data) {
       this.toaster.warning('Force-saving your version…');
       this.persistAllData(data, { forceVersionOverwrite: true });
@@ -2638,6 +2676,7 @@ export class AdminComponent implements OnInit, OnDestroy {
     this.showConflictModal = false;
     this.conflictPendingData = null;
     this.conflictLastSavedBy = '';
+    this.conflictIsSelf = false;
     this.toaster.warning('Your changes are still pending — save again or reload.');
   }
 

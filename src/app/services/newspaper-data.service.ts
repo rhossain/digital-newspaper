@@ -909,6 +909,24 @@ export class NewspaperDataService {
           const current = this.dataSubject.value;
           this.dataSubject.next({ ...current, dataVersion: response.newDataVersion });
         }
+      }),
+      catchError((err) => {
+        // On any save failure, silently fetch the server's current dataVersion
+        // and patch it into the local state.  If the save actually reached
+        // WordPress but the HTTP response was blocked (e.g. by Imunify360 WAF),
+        // the server will have advanced its version.  Without this refresh the
+        // next save attempt sends the old version and gets a false 409 Conflict.
+        this.http.get<{ dataVersion: number }>(this.versionUrl)
+          .pipe(catchError(() => of(null)))
+          .subscribe(res => {
+            if (res?.dataVersion) {
+              const cur = this.dataSubject.value;
+              if (res.dataVersion !== cur.dataVersion) {
+                this.dataSubject.next({ ...cur, dataVersion: res.dataVersion });
+              }
+            }
+          });
+        return throwError(() => err);
       })
     );
   }

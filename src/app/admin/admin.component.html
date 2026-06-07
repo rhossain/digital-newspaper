@@ -2246,12 +2246,21 @@
 
       <div class="conflict-icon">⚠️</div>
 
-      <h2 id="conflict-title" class="conflict-title">Another user saved changes</h2>
-
-      <p class="conflict-body">
-        <strong>{{ conflictLastSavedBy }}</strong> saved new content while you were editing.
-        Your changes have <strong>not</strong> been lost — they are still visible on your screen.
-      </p>
+      @if (conflictIsSelf) {
+        <h2 id="conflict-title" class="conflict-title">Save interrupted — version out of sync</h2>
+        <p class="conflict-body">
+          A previous save attempt was <strong>interrupted</strong> before its response reached your
+          browser (e.g. by a security module or network hiccup). The server saved that data, so its
+          version is now newer than what your browser expects.
+        </p>
+        <p class="conflict-body">Your current changes have <strong>not</strong> been lost.</p>
+      } @else {
+        <h2 id="conflict-title" class="conflict-title">Another user saved changes</h2>
+        <p class="conflict-body">
+          <strong>{{ conflictLastSavedBy }}</strong> saved new content while you were editing.
+          Your changes have <strong>not</strong> been lost — they are still visible on your screen.
+        </p>
+      }
       <p class="conflict-body">Please choose how to continue:</p>
 
       <div class="conflict-options">
@@ -2263,8 +2272,12 @@
             Reload latest version
           </button>
           <p class="conflict-option-desc">
-            Discard your unsaved edits and load what the other user saved.
-            <strong>Recommended</strong> — you can re-enter your changes afterwards.
+            @if (conflictIsSelf) {
+              Discard your unsaved edits and reload the server's current data.
+            } @else {
+              Discard your unsaved edits and load what the other user saved.
+              <strong>Recommended</strong> — you can re-enter your changes afterwards.
+            }
           </p>
         </div>
 
@@ -2273,11 +2286,16 @@
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
               <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
             </svg>
-            Force-save my version
+            @if (conflictIsSelf) { Save my version (recommended) } @else { Force-save my version }
           </button>
           <p class="conflict-option-desc">
-            Overwrite the server with your current screen. Use only if you are sure
-            the other user's changes should be discarded.
+            @if (conflictIsSelf) {
+              <strong>Recommended.</strong> Saves your current changes over the interrupted version.
+              Safe to use when you are the only editor.
+            } @else {
+              Overwrite the server with your current screen. Use only if you are sure
+              the other user's changes should be discarded.
+            }
           </p>
         </div>
       </div>

@@ -62,9 +62,13 @@ class Digital_Newspaper_API {
     }
 
     $rules = [
-      '# Disable ModSecurity rule engine for Digital Newspaper REST API requests.',
-      '# These paths handle login and data save for authenticated admin users;',
-      '# WAF bot-protection must not block them.',
+      '# ── Digital Newspaper REST API — WAF bypass rules ────────────────────────',
+      '# These paths handle admin login and newspaper data saves.  The rules below',
+      '# are needed on shared hosting (Hostinger, cPanel) where Imunify360 and',
+      '# ModSecurity can block legitimate authenticated POST requests.',
+      '',
+      '# 1. Disable ModSecurity for this directory.',
+      '#    mod_security2 (OWASP CRS v3) and legacy mod_security are both covered.',
       '<IfModule mod_security2.c>',
       '  SecRuleEngine Off',
       '</IfModule>',
@@ -72,7 +76,18 @@ class Digital_Newspaper_API {
       '  SecFilterEngine Off',
       '  SecFilterScanPOST Off',
       '</IfModule>',
+      '',
+      '# 2. Mark REST API requests with an environment variable so Apache',
+      '#    access-control rules can explicitly allow them.',
+      '#    Covers both the pretty (/wp-json/) and index (?rest_route=) URL forms.',
+      'SetEnvIf Request_URI "wp-json" dn_api_request=1',
+      'SetEnvIf Query_String "rest_route" dn_api_request=1',
     ];
+    // NOTE: <IfModule mod_rewrite.c> / RewriteRule blocks are intentionally
+    // omitted here. A RewriteRule with [L] inside the Digital Newspaper marker
+    // block would stop WordPress's own rewrite rules from running (the markers
+    // appear before the # BEGIN WordPress block). SetEnvIf above is sufficient
+    // for environment-variable marking without touching the rewrite chain.
 
     insert_with_markers($htaccess, 'Digital Newspaper API', $rules);
   }
@@ -2177,6 +2192,15 @@ HTML;
 
     $roles = (array) $user->roles;
     $role   = !empty($roles) ? $roles[0] : 'subscriber';
+
+    // Set the standard WordPress session cookie so that subsequent REST API
+    // calls carry a valid WordPress auth cookie.  Imunify360 bot-protection
+    // trusts requests that include a recognised WordPress session cookie and
+    // does not treat them as bot traffic — without this cookie every POST from
+    // the Angular app looks like an unauthenticated automation request.
+    // 'remember = true' matches a typical "stay logged in" session length
+    // (14 days) so the cookie remains valid as long as the JWT.
+    wp_set_auth_cookie($user->ID, true /* remember */);
 
     // Activity log (login success)
     $this->log_activity('login', 'User logged in', ['role' => $role], $user->ID, $user->display_name ?: $user->user_login, $role);
