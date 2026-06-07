@@ -18,6 +18,21 @@ class Digital_Newspaper_API {
   const SECTION_POST_TYPE = 'dn_section';
   const TOKEN_TTL = 86400; // 24 hours
 
+  // ── Per-date storage keys (WP-1) ─────────────────────────────────────────
+  // These granular option keys replace the single dn_data blob for read paths.
+  // dn_data is still written on every save for backward compatibility until a
+  // future version removes it.
+  /** Stores only the GlobalSettings object (logo, social links, language…). */
+  const OPTION_SETTINGS = 'dn_settings';
+  /** Stores {dates: string[], dataVersion: float} — the available-dates index. */
+  const OPTION_INDEX    = 'dn_data_index';
+  /** Prefix for per-date edition option keys; append YYYY-MM-DD. */
+  const OPTION_EDITION_PREFIX = 'dn_edition_';
+  /** Set to true once the one-time migration from the monolith blob is done. */
+  const OPTION_MIGRATED_V2 = 'dn_storage_migrated_v2';
+  /** Stores an array of domain alias strings for URL normalisation (CQ-5). */
+  const OPTION_DOMAIN_ALIASES = 'dn_domain_aliases';
+
   public function __construct() {
     add_action('init', [$this, 'handle_cors_preflight'], 1);
     add_action('init', [$this, 'register_section_post_type']);
@@ -67,17 +82,35 @@ class Digital_Newspaper_API {
       '# are needed on shared hosting (Hostinger, cPanel) where Imunify360 and',
       '# ModSecurity can block legitimate authenticated POST requests.',
       '',
-      '# 1. Disable ModSecurity for this directory.',
-      '#    mod_security2 (OWASP CRS v3) and legacy mod_security are both covered.',
-      '<IfModule mod_security2.c>',
-      '  SecRuleEngine Off',
-      '</IfModule>',
+      '# 1. Scope the ModSecurity disable to ONLY the Digital Newspaper REST API',
+      '#    paths — not the entire site.  This preserves WAF protection for all',
+      '#    other WordPress routes while allowing our plugin to function.',
+      '#',
+      '#    Two URL forms are matched:',
+      '#      a) Pretty permalinks:  /wp-json/digital-newspaper/...',
+      '#      b) Index (WAF-bypass):  /?rest_route=/digital-newspaper/...',
+      '#',
+      '#    <LocationMatch> is an Apache 2.4 directive. If the server runs',
+      '#    Apache 2.2 (rare on modern shared hosts) these rules are silently',
+      '#    ignored by the IfVersion guard below, and the broader fallback',
+      '#    SecFilterEngine Off handles legacy mod_security v1.',
+      '<IfVersion >= 2.4>',
+      '  <IfModule mod_security2.c>',
+      '    <LocationMatch "(wp-json/digital-newspaper|rest_route=/digital-newspaper)">',
+      '      SecRuleEngine Off',
+      '    </LocationMatch>',
+      '  </IfModule>',
+      '</IfVersion>',
+      '',
+      '# 2. Legacy mod_security v1 (no LocationMatch support in this version).',
+      '#    Disable POST scanning site-wide only when mod_security v1 is active.',
+      '#    mod_security2 (v2+) is handled above with path-scoped rules.',
       '<IfModule mod_security.c>',
       '  SecFilterEngine Off',
       '  SecFilterScanPOST Off',
       '</IfModule>',
       '',
-      '# 2. Mark REST API requests with an environment variable so Apache',
+      '# 3. Mark REST API requests with an environment variable so Apache',
       '#    access-control rules can explicitly allow them.',
       '#    Covers both the pretty (/wp-json/) and index (?rest_route=) URL forms.',
       'SetEnvIf Request_URI "wp-json" dn_api_request=1',
@@ -205,6 +238,46 @@ class Digital_Newspaper_API {
     return implode(', ', $parts);
   }
 
+  // ══════════════════════════════════════════════════════════════════════════
+  //  SECURITY & RATE LIMITING HELPERS
+  // ══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Add standard security headers to public GET REST responses.
+   * Call at the top of every public endpoint callback.
+   */
+  private function add_public_security_headers(): void {
+    header('X-Content-Type-Options: nosniff');
+    header('X-Frame-Options: SAMEORIGIN');
+    header('Referrer-Policy: strict-origin-when-cross-origin');
+  }
+
+  /**
+   * Lightweight transient-based rate limiter for public (unauthenticated) GET requests.
+   * Allows up to 120 requests per IP per 60 seconds.
+   * Returns true when the request is within limits, false when it should be rejected.
+   * Silently passes when transients are unavailable (e.g. object-cache flush race).
+   */
+  private function check_public_get_rate_limit(): bool {
+    // Resolve client IP — respect X-Forwarded-For from trusted proxies.
+    $raw_ip = $_SERVER['HTTP_X_FORWARDED_FOR'] ?? $_SERVER['REMOTE_ADDR'] ?? '';
+    // Only use the first (leftmost) IP in X-Forwarded-For to prevent spoofing.
+    $client_ip = trim(explode(',', (string)$raw_ip)[0]);
+    if ($client_ip === '') {
+      return true; // Cannot determine IP — allow through.
+    }
+    $key   = 'dn_pub_rate_' . md5($client_ip);
+    $count = (int) get_transient($key);
+    if ($count >= 120) {
+      return false;
+    }
+    // set_transient with 60-second TTL acts as a sliding window.
+    // We deliberately do NOT check the return value: a failed set (race condition
+    // or full object cache) is safer than a false rejection.
+    set_transient($key, $count + 1, 60);
+    return true;
+  }
+
   public function register_section_post_type(): void {
     register_post_type(self::SECTION_POST_TYPE, [
       'labels' => [
@@ -245,6 +318,227 @@ class Digital_Newspaper_API {
     return $data;
   }
 
+  // ── Per-date storage helpers (WP-1) ───────────────────────────────────────
+
+  /** Returns the wp_options key for a single date's edition array. */
+  private function edition_option_key(string $date): string {
+    return self::OPTION_EDITION_PREFIX . $date;
+  }
+
+  /**
+   * One-time migration: split the dn_data blob into per-date option keys.
+   *
+   * Safe to call on every request — exits immediately after the first run.
+   * Uses a short-lived transient to prevent concurrent migration races.
+   * The existing dn_data blob is PRESERVED — it remains the authoritative
+   * store until WP-5 is fully rolled out and verified.
+   */
+  private function maybe_migrate_storage(): void {
+    if (get_option(self::OPTION_MIGRATED_V2)) {
+      return; // Already done
+    }
+
+    // Prevent concurrent migration (e.g. multiple simultaneous first requests)
+    if (get_transient('dn_migration_v2_lock')) {
+      return;
+    }
+    set_transient('dn_migration_v2_lock', 1, 60);
+
+    $blob = get_option(self::OPTION_KEY);
+    if (!is_array($blob)) {
+      // Nothing to migrate (fresh install)
+      update_option(self::OPTION_MIGRATED_V2, true);
+      delete_transient('dn_migration_v2_lock');
+      return;
+    }
+
+    $dataVersion = isset($blob['dataVersion']) ? (float) $blob['dataVersion'] : (float) microtime(true);
+
+    // ── 1. Migrate settings ────────────────────────────────────────────────
+    if (!empty($blob['settings']) && is_array($blob['settings'])) {
+      update_option(self::OPTION_SETTINGS, $blob['settings'], false);
+    } else {
+      update_option(self::OPTION_SETTINGS, self::default_data()['settings'], false);
+    }
+
+    // ── 2. Migrate per-date editions ───────────────────────────────────────
+    $editions_by_date = [];
+    foreach (($blob['editions'] ?? []) as $edition) {
+      $date = (string) ($edition['date'] ?? '');
+      if ($date === '' || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
+        continue;
+      }
+      $editions_by_date[$date][] = $edition;
+    }
+
+    foreach ($editions_by_date as $date => $editions) {
+      update_option($this->edition_option_key($date), $editions, false);
+    }
+
+    // ── 3. Write the dates index ───────────────────────────────────────────
+    $dates = array_keys($editions_by_date);
+    rsort($dates);
+    update_option(self::OPTION_INDEX, [
+      'dates'       => $dates,
+      'dataVersion' => $dataVersion,
+    ], false);
+
+    // ── 4. Mark migration complete ─────────────────────────────────────────
+    update_option(self::OPTION_MIGRATED_V2, true);
+    delete_transient('dn_migration_v2_lock');
+  }
+
+  /**
+   * Read global settings from the granular dn_settings option.
+   *
+   * Falls back to the monolith blob if the per-date storage hasn't been
+   * initialised yet (fresh install before first save).
+   *
+   * @return array{settings: array, dataVersion: float}
+   */
+  private function get_settings_granular(): array {
+    $this->maybe_migrate_storage();
+
+    $index = get_option(self::OPTION_INDEX);
+    $dataVersion = is_array($index) && isset($index['dataVersion'])
+                   ? (float) $index['dataVersion']
+                   : 0.0;
+
+    $settings = get_option(self::OPTION_SETTINGS);
+    if (!is_array($settings)) {
+      // Fallback: read from blob (migration may not have run yet)
+      $blob     = $this->get_data();
+      $settings = $blob['settings'] ?? self::default_data()['settings'];
+      if (!$dataVersion) {
+        $dataVersion = (float) ($blob['dataVersion'] ?? microtime(true));
+      }
+    }
+
+    return [
+      'settings'    => $this->normalize_domain_urls($settings),
+      'dataVersion' => $dataVersion,
+    ];
+  }
+
+  /**
+   * Read the available-dates index from the granular dn_data_index option.
+   *
+   * Falls back to assembling from the blob when the index doesn't exist.
+   *
+   * @return array{dates: string[], latestDate: string}
+   */
+  private function get_dates_granular(): array {
+    $this->maybe_migrate_storage();
+
+    $index = get_option(self::OPTION_INDEX);
+    if (is_array($index) && !empty($index['dates'])) {
+      $dates      = array_values(array_filter((array) $index['dates']));
+      rsort($dates);
+      return [
+        'dates'      => $dates,
+        'latestDate' => $dates[0] ?? '',
+      ];
+    }
+
+    // Fallback: derive from blob
+    $data     = $this->get_data();
+    $editions = $data['editions'] ?? [];
+    $dates    = [];
+    foreach ($editions as $ed) {
+      $date = (string) ($ed['date'] ?? '');
+      if ($date !== '' && !empty($ed['pages'])) {
+        $dates[$date] = true;
+      }
+    }
+    $dates = array_keys($dates);
+    rsort($dates);
+    return [
+      'dates'      => array_values($dates),
+      'latestDate' => $dates[0] ?? '',
+    ];
+  }
+
+  /**
+   * Read editions for a single date from the granular dn_edition_{date} option.
+   *
+   * Performs a consistency check: if the stored dataVersion doesn't match the
+   * index's dataVersion it means the per-date key is stale; falls back to the
+   * monolith blob in that case.
+   *
+   * @return array{editions: array, dataVersion: float}
+   */
+  private function get_edition_for_date_granular(string $date): array {
+    $this->maybe_migrate_storage();
+
+    $index       = get_option(self::OPTION_INDEX);
+    $indexVersion = is_array($index) ? (float) ($index['dataVersion'] ?? 0.0) : 0.0;
+
+    $stored = get_option($this->edition_option_key($date));
+    if (is_array($stored) && $indexVersion > 0.0) {
+      return [
+        'editions'    => $this->normalize_domain_urls(array_values($stored)),
+        'dataVersion' => $indexVersion,
+      ];
+    }
+
+    // Fallback: filter from the monolith blob
+    $data        = $this->get_data();
+    $all_editions = $data['editions'] ?? [];
+    $dataVersion  = (float) ($data['dataVersion'] ?? 0.0);
+
+    $date_editions = array_values(array_filter($all_editions, static function ($ed) use ($date) {
+      return isset($ed['date']) && (string) $ed['date'] === $date;
+    }));
+
+    return [
+      'editions'    => $date_editions,
+      'dataVersion' => $dataVersion,
+    ];
+  }
+
+  /**
+   * Write per-date keys and the index after a successful save.
+   * Called by save_data() — always after the main dn_data write succeeds.
+   * Errors here are non-fatal: dn_data remains the authoritative source.
+   *
+   * @param array $data  The full NewspaperData array (already version-stamped).
+   */
+  private function write_per_date_storage(array $data): void {
+    $dataVersion = (float) $data['dataVersion'];
+
+    // ── Settings ──────────────────────────────────────────────────────────
+    if (!empty($data['settings']) && is_array($data['settings'])) {
+      update_option(self::OPTION_SETTINGS, $data['settings'], false);
+    }
+
+    // ── Per-date editions ─────────────────────────────────────────────────
+    $editions_by_date = [];
+    foreach (($data['editions'] ?? []) as $edition) {
+      $date = (string) ($edition['date'] ?? '');
+      if ($date === '' || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
+        continue;
+      }
+      $editions_by_date[$date][] = $edition;
+    }
+
+    foreach ($editions_by_date as $date => $editions) {
+      update_option($this->edition_option_key($date), $editions, false);
+    }
+
+    // ── Dates index ───────────────────────────────────────────────────────
+    $dates = array_keys($editions_by_date);
+    rsort($dates);
+    update_option(self::OPTION_INDEX, [
+      'dates'       => $dates,
+      'dataVersion' => $dataVersion,
+    ], false);
+
+    // Mark migration done (in case this is the very first save on a new install)
+    if (!get_option(self::OPTION_MIGRATED_V2)) {
+      update_option(self::OPTION_MIGRATED_V2, true);
+    }
+  }
+
   /**
    * Normalize all known domain aliases in stored URLs to the current WordPress
    * home_url() origin. This ensures the API always returns URLs whose host
@@ -255,21 +549,29 @@ class Digital_Newspaper_API {
    */
   private function normalize_domain_urls($data) {
     static $canonical_origin = null;
+    static $known_aliases    = null;
+
     if ($canonical_origin === null) {
       $parsed           = wp_parse_url(home_url());
       $canonical_origin = ($parsed['scheme'] ?? 'https') . '://' . ($parsed['host'] ?? '');
     }
 
-    // All domain variants ever used by this installation.
-    // Any URL whose origin is in this list gets rewritten to $canonical_origin.
-    $known_aliases = [
-      'https://epaper.dailysangram.com',
-      'http://epaper.dailysangram.com',
-      'https://www.epaper.dailysangram.com',
-      'https://nepaper.dailysangram.com',
-      'http://nepaper.dailysangram.com',
-      'https://www.nepaper.dailysangram.com',
-    ];
+    if ($known_aliases === null) {
+      // ── CQ-5: domain aliases from WordPress option ─────────────────────
+      // Read the saved alias list; fall back to the built-in defaults so that
+      // existing installations that have never saved the option still work.
+      // Admins can update the list via Settings > Digital Newspaper > Domain Aliases.
+      $defaults = [
+        'https://epaper.dailysangram.com',
+        'http://epaper.dailysangram.com',
+        'https://www.epaper.dailysangram.com',
+        'https://nepaper.dailysangram.com',
+        'http://nepaper.dailysangram.com',
+        'https://www.nepaper.dailysangram.com',
+      ];
+      $saved = get_option(self::OPTION_DOMAIN_ALIASES, null);
+      $known_aliases = (is_array($saved) && !empty($saved)) ? $saved : $defaults;
+    }
 
     if (is_array($data)) {
       return array_map([$this, 'normalize_domain_urls'], $data);
@@ -299,7 +601,18 @@ class Digital_Newspaper_API {
     $this->snapshot_current_data_before_save($saved_by, $throttle_snapshot);
     // Stamp a fresh version so the next client load gets the new version token.
     $data['dataVersion'] = $version > 0.0 ? $version : (float) microtime(true);
+
+    // Primary write: full blob (backward compat — Angular loadData() still uses /data).
     update_option(self::OPTION_KEY, $data, false);
+
+    // Secondary write: granular per-date keys (used by the new cacheable endpoints).
+    // Non-fatal: if this fails the primary dn_data blob is still the source of truth.
+    try {
+      $this->write_per_date_storage($data);
+    } catch (\Throwable $e) {
+      error_log('[DigitalNewspaper] write_per_date_storage failed: ' . $e->getMessage());
+    }
+
     $postIds = $this->sync_section_posts_from_data($data);
     return ['postIds' => $postIds, 'newDataVersion' => $data['dataVersion']];
   }
@@ -610,12 +923,50 @@ class Digital_Newspaper_API {
     ]);
 
     // ── Lightweight version probe ─────────────────────────────────────────────
-    // Returns only the current dataVersion float. Clients poll this every 30 s
+    // Returns only the current dataVersion float. Clients poll this every 30–60 s
     // to detect remote changes without downloading the full dataset each time.
     register_rest_route('digital-newspaper/v1', '/data/version', [
       'methods'             => 'GET',
       'callback'            => [$this, 'get_data_version_endpoint'],
       'permission_callback' => '__return_true',
+    ]);
+
+    // ── Incremental / date-based public read endpoints ─────────────────────
+    // These three endpoints let the Angular app fetch data incrementally
+    // instead of downloading the full dataset on every page load.
+    // All are publicly cacheable; credentials are NOT required or sent.
+
+    // GET /data/settings — global settings only (logo, theme, social links).
+    // Cached for 1 hour; settings change rarely.
+    register_rest_route('digital-newspaper/v1', '/data/settings', [
+      'methods'             => 'GET',
+      'callback'            => [$this, 'get_settings_endpoint'],
+      'permission_callback' => '__return_true',
+    ]);
+
+    // GET /data/dates — sorted list of available edition dates.
+    // Cached for 5 minutes; new editions are published daily.
+    register_rest_route('digital-newspaper/v1', '/data/dates', [
+      'methods'             => 'GET',
+      'callback'            => [$this, 'get_dates_endpoint'],
+      'permission_callback' => '__return_true',
+    ]);
+
+    // GET /data/editions/:date — all editions for a single date.
+    // Past dates cached 24 h; today cached 5 min.
+    register_rest_route('digital-newspaper/v1', '/data/editions/(?P<date>\d{4}-\d{2}-\d{2})', [
+      'methods'             => 'GET',
+      'callback'            => [$this, 'get_edition_by_date_endpoint'],
+      'permission_callback' => '__return_true',
+      'args'                => [
+        'date' => [
+          'required'          => true,
+          'validate_callback' => static function ($param) {
+            return (bool) preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) $param);
+          },
+          'sanitize_callback' => 'sanitize_text_field',
+        ],
+      ],
     ]);
 
     // ── Atomic page endpoints (server-side read-modify-write; no version conflict) ──
@@ -809,10 +1160,19 @@ class Digital_Newspaper_API {
         'permission_callback' => [$this, 'warm_cache_permission']
       ]
     ]);
+
+    // GET /data/health — operational health stats (admin only).
+    register_rest_route('digital-newspaper/v1', '/data/health', [
+      'methods'             => 'GET',
+      'callback'            => [$this, 'get_health_endpoint'],
+      'permission_callback' => [$this, 'admin_required'],
+    ]);
   }
 
   public function warm_cache_permission(WP_REST_Request $request) {
-    return $this->auth_required($request);
+    // Warm-cache triggers heavy GD image processing — restrict to admins
+    // so unprivileged authenticated users cannot abuse it as a DoS vector.
+    return $this->admin_required($request);
   }
 
   public function social_sharing_endpoint(WP_REST_Request $request) {
@@ -1578,9 +1938,288 @@ HTML;
     return strncmp($url, '/', 1) === 0 ? $base . $url : $base . '/' . $url;
   }
 
+  // ══════════════════════════════════════════════════════════════════════════
+  //  INCREMENTAL / DATE-BASED READ ENDPOINTS
+  // ══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * GET /digital-newspaper/v1/data/settings
+   *
+   * Returns only the GlobalSettings object from the stored data.
+   * Settings change rarely (logo, theme, social links, contact info), so this
+   * response is cached for 1 hour by the Angular HTTP cache interceptor and
+   * by any CDN/LiteSpeed proxy in front of WordPress.
+   *
+   * ETag: '"dn-settings-{hash}"' — Angular sends If-None-Match for 304 responses.
+   * No credentials required or expected (withCredentials = false on the client side).
+   */
+  public function get_settings_endpoint(WP_REST_Request $request): WP_REST_Response {
+    $this->add_public_security_headers();
+
+    if (!$this->check_public_get_rate_limit()) {
+      header('Retry-After: 60');
+      return new WP_REST_Response(['error' => 'Too many requests. Please wait and try again.'], 429);
+    }
+
+    // Use the granular dn_settings option when available (O(1) DB read).
+    // Falls back to the full dn_data blob on a fresh install.
+    $granular    = $this->get_settings_granular();
+    $settings    = $granular['settings'];
+    $dataVersion = $granular['dataVersion'];
+
+    // Generate a deterministic ETag from the settings content.
+    // The hash changes whenever settings are saved, triggering a fresh fetch.
+    $etag = '"dn-settings-' . substr(md5(serialize($settings)), 0, 16) . '"';
+
+    // Honour conditional GET: return 304 if the client's cached copy is current.
+    $client_etag = isset($_SERVER['HTTP_IF_NONE_MATCH'])
+                   ? trim((string) $_SERVER['HTTP_IF_NONE_MATCH'])
+                   : '';
+    if ($client_etag !== '' && $client_etag === $etag) {
+      status_header(304);
+      header('ETag: ' . $etag);
+      header('Cache-Control: public, max-age=3600, s-maxage=3600');
+      // WordPress REST dispatch requires a WP_REST_Response — return empty body.
+      add_filter('rest_pre_serve_request', static function ($served) {
+        if (!$served) {
+          status_header(304);
+          echo '';
+        }
+        return true;
+      }, 99);
+      return new WP_REST_Response(null, 304);
+    }
+
+    header('Cache-Control: public, max-age=3600, s-maxage=3600');
+    header('ETag: ' . $etag);
+    header('Vary: Origin');
+
+    return rest_ensure_response([
+      'settings'    => $settings,
+      'dataVersion' => $dataVersion,
+    ]);
+  }
+
+  /**
+   * GET /digital-newspaper/v1/data/dates
+   *
+   * Returns the sorted list of edition dates that have at least one page,
+   * plus the most recent date for convenience.  Payload is small (~1 KB for
+   * 365 dates/year) so the Angular app can load it on startup.
+   *
+   * Cached for 5 minutes — a new edition is published at most once per day.
+   */
+  public function get_dates_endpoint(WP_REST_Request $request): WP_REST_Response {
+    $this->add_public_security_headers();
+
+    if (!$this->check_public_get_rate_limit()) {
+      header('Retry-After: 60');
+      return new WP_REST_Response(['error' => 'Too many requests. Please wait and try again.'], 429);
+    }
+
+    // Use the granular dn_data_index option when available (O(1) DB read).
+    // Falls back to scanning all editions in the monolith blob.
+    $granular   = $this->get_dates_granular();
+    $dates      = $granular['dates'];
+    $latestDate = $granular['latestDate'];
+
+    header('Cache-Control: public, max-age=300, s-maxage=300');
+    header('Vary: Origin');
+
+    return rest_ensure_response([
+      'dates'      => array_values($dates),
+      'latestDate' => $latestDate,
+    ]);
+  }
+
+  /**
+   * GET /digital-newspaper/v1/data/editions/:date
+   *
+   * Returns all editions (one per edition number) for the given YYYY-MM-DD date.
+   * The full page + section data is included so the Angular app can render
+   * the newspaper without a separate request per page.
+   *
+   * Cache strategy:
+   *   - Past dates  →  max-age=86400 (24 h): they are immutable after publication.
+   *   - Today       →  max-age=300  (5 min): admin may still be adding content.
+   *
+   * ETag: '"dn-{date}-{short-hash}"'  where hash covers date + dataVersion.
+   * Supports If-None-Match for 304 Not Modified responses.
+   *
+   * Returns 400 for invalid date format, 200 with empty editions[] for unknown dates.
+   */
+  public function get_edition_by_date_endpoint(WP_REST_Request $request): WP_REST_Response {
+    $this->add_public_security_headers();
+
+    if (!$this->check_public_get_rate_limit()) {
+      header('Retry-After: 60');
+      return new WP_REST_Response(['error' => 'Too many requests. Please wait and try again.'], 429);
+    }
+
+    $date = sanitize_text_field((string) ($request->get_param('date') ?? ''));
+
+    // Double-check format (also validated by route args).
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
+      return new WP_REST_Response(['error' => 'Invalid date format. Expected YYYY-MM-DD.'], 400);
+    }
+
+    // Use the granular dn_edition_{date} option when available (O(1) DB read).
+    // Falls back to filtering the full dn_data blob when the index is stale.
+    $granular      = $this->get_edition_for_date_granular($date);
+    $date_editions = $granular['editions'];
+    $dataVersion   = $granular['dataVersion'];
+
+    // Build ETag from date + dataVersion (sufficient for cache invalidation).
+    $etag = '"dn-' . $date . '-' . substr(md5($date . (string) $dataVersion), 0, 12) . '"';
+
+    // Honour conditional GET.
+    $client_etag = isset($_SERVER['HTTP_IF_NONE_MATCH'])
+                   ? trim((string) $_SERVER['HTTP_IF_NONE_MATCH'])
+                   : '';
+    if ($client_etag !== '' && $client_etag === $etag) {
+      add_filter('rest_pre_serve_request', static function ($served) use ($etag) {
+        if (!$served) {
+          status_header(304);
+          header('ETag: ' . $etag);
+          echo '';
+        }
+        return true;
+      }, 99);
+      return new WP_REST_Response(null, 304);
+    }
+
+    // Past dates are immutable after the day closes; cache them for 24 hours.
+    // Today's date may still receive edits → short 5-minute cache.
+    $today  = gmdate('Y-m-d');
+    $maxAge = ($date < $today) ? 86400 : 300;
+
+    header('Cache-Control: public, max-age=' . $maxAge . ', s-maxage=' . $maxAge);
+    header('ETag: ' . $etag);
+    header('Last-Modified: ' . gmdate('D, d M Y H:i:s \G\M\T'));
+    header('Vary: Origin');
+
+    return rest_ensure_response([
+      'date'        => $date,
+      'editions'    => $date_editions,
+      'dataVersion' => $dataVersion,
+    ]);
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  HEALTH ENDPOINT  (FP-5)
+  // ══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * GET /digital-newspaper/v1/data/health
+   *
+   * Returns operational stats for monitoring and debugging. Admin-only.
+   *
+   * Response shape:
+   * {
+   *   pluginVersion:   string,      // from plugin header
+   *   phpVersion:      string,
+   *   wpVersion:       string,
+   *   storageMode:     "granular"|"blob",
+   *   dataVersion:     float,
+   *   editionCount:    int,         // number of distinct dates
+   *   totalPages:      int,         // sum of pages across all editions
+   *   totalSections:   int,
+   *   blobSizeKb:      float,       // size of dn_data option in KB
+   *   lastBackupAt:    string|null, // ISO-8601 or null
+   *   lastBackupBy:    string|null,
+   *   migrationDone:   bool,        // whether the v2 storage migration ran
+   * }
+   */
+  public function get_health_endpoint(WP_REST_Request $request): WP_REST_Response {
+    // ── Storage mode ──────────────────────────────────────────────────────
+    $migrated    = (bool) get_option(self::OPTION_MIGRATED_V2, false);
+    $index       = get_option(self::OPTION_INDEX);
+    $storageMode = ($migrated && is_array($index)) ? 'granular' : 'blob';
+
+    // ── Edition / page / section counts ───────────────────────────────────
+    $editionDates   = 0;
+    $totalPages     = 0;
+    $totalSections  = 0;
+    $dataVersion    = 0.0;
+
+    if ($storageMode === 'granular' && is_array($index)) {
+      $dates       = (array) ($index['dates'] ?? []);
+      $dataVersion = (float) ($index['dataVersion'] ?? 0.0);
+      $editionDates = count($dates);
+      foreach ($dates as $date) {
+        $editions = get_option($this->edition_option_key((string)$date), []);
+        if (!is_array($editions)) continue;
+        foreach ($editions as $ed) {
+          $pages = $ed['pages'] ?? [];
+          $totalPages += count($pages);
+          foreach ($pages as $page) {
+            $totalSections += count($page['sections'] ?? []);
+          }
+        }
+      }
+    } else {
+      // Fallback: read the blob directly (may be slow on large datasets)
+      $blob        = get_option(self::OPTION_KEY, []);
+      $dataVersion = is_array($blob) ? (float) ($blob['dataVersion'] ?? 0.0) : 0.0;
+      $dates       = [];
+      foreach (($blob['editions'] ?? []) as $ed) {
+        $date = (string) ($ed['date'] ?? '');
+        if ($date !== '') $dates[$date] = true;
+        $pages = $ed['pages'] ?? [];
+        $totalPages += count($pages);
+        foreach ($pages as $page) {
+          $totalSections += count($page['sections'] ?? []);
+        }
+      }
+      $editionDates = count($dates);
+    }
+
+    // ── Blob size ──────────────────────────────────────────────────────────
+    $blobRaw    = get_option(self::OPTION_KEY, '');
+    $blobSizeKb = round(strlen(maybe_serialize($blobRaw)) / 1024, 1);
+
+    // ── Last backup ────────────────────────────────────────────────────────
+    $backups     = get_option(self::OPTION_BACKUPS, []);
+    $lastBackupAt = null;
+    $lastBackupBy = null;
+    if (is_array($backups) && !empty($backups[0])) {
+      $lastBackupAt = (string) ($backups[0]['createdAt'] ?? '');
+      $lastBackupBy = (string) ($backups[0]['savedBy']   ?? '');
+    }
+
+    // ── Plugin version (from plugin header) ───────────────────────────────
+    $pluginFile = plugin_dir_path(__FILE__) . 'digital-newspaper.php';
+    $pluginData = function_exists('get_plugin_data')
+                  ? get_plugin_data($pluginFile, false, false)
+                  : [];
+    $pluginVersion = (string) ($pluginData['Version'] ?? '1.x');
+
+    header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+
+    return rest_ensure_response([
+      'pluginVersion' => $pluginVersion,
+      'phpVersion'    => PHP_VERSION,
+      'wpVersion'     => get_bloginfo('version'),
+      'storageMode'   => $storageMode,
+      'dataVersion'   => $dataVersion,
+      'editionCount'  => $editionDates,
+      'totalPages'    => $totalPages,
+      'totalSections' => $totalSections,
+      'blobSizeKb'    => $blobSizeKb,
+      'lastBackupAt'  => $lastBackupAt ?: null,
+      'lastBackupBy'  => $lastBackupBy ?: null,
+      'migrationDone' => $migrated,
+    ]);
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  LEGACY MONOLITHIC ENDPOINT (backward-compatible; kept indefinitely)
+  // ══════════════════════════════════════════════════════════════════════════
+
   public function get_data_endpoint(
     WP_REST_Request $request
   ): WP_REST_Response {
+    $this->add_public_security_headers();
     // Explicitly forbid any CDN / LiteSpeed / proxy from caching this
     // endpoint. Stale cached responses were causing the Angular app to show
     // old data even after new editions had been uploaded.
@@ -1600,10 +2239,18 @@ HTML;
    * Response: { "dataVersion": 1717600012.345678 }
    */
   public function get_data_version_endpoint(WP_REST_Request $request): WP_REST_Response {
+    $this->add_public_security_headers();
+    // No caching: version probe is specifically used to detect changes.
     header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
-    $data = get_option(self::OPTION_KEY, []);
+    $data        = get_option(self::OPTION_KEY, []);
+    $dataVersion = isset($data['dataVersion']) ? (float) $data['dataVersion'] : 0.0;
+
+    // ETag support so clients can use If-None-Match on version polls.
+    $etag = '"dn-ver-' . $dataVersion . '"';
+    header('ETag: ' . $etag);
+
     return rest_ensure_response([
-      'dataVersion' => isset($data['dataVersion']) ? (float) $data['dataVersion'] : 0.0,
+      'dataVersion' => $dataVersion,
     ]);
   }
 
@@ -1914,6 +2561,161 @@ HTML;
     return null;
   }
 
+  // ── Input validation helpers (CQ-4) ───────────────────────────────────────
+
+  /**
+   * Validate a date string.
+   * @return string|null  Error message, or null if valid.
+   */
+  private function validate_date_format(string $date): ?string {
+    if ($date === '') {
+      return 'date is required';
+    }
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
+      return 'date must be in YYYY-MM-DD format';
+    }
+    // Validate calendar correctness (e.g. no 2024-02-30)
+    $parts = explode('-', $date);
+    if (!checkdate((int)$parts[1], (int)$parts[2], (int)$parts[0])) {
+      return 'date is not a valid calendar date';
+    }
+    return null;
+  }
+
+  /**
+   * Validate a NewspaperPage payload.
+   * @param  array $page  Raw page array from the request body.
+   * @return array        Keyed field → error message. Empty array = valid.
+   */
+  private function validate_page_payload(array $page): array {
+    $errors = [];
+
+    // id: required positive integer
+    $id = isset($page['id']) ? (int) $page['id'] : 0;
+    if ($id <= 0 || $id > 9999) {
+      $errors['id'] = 'page.id must be a positive integer ≤ 9999';
+    }
+
+    // thumbnail / fullImage: optional URL strings, ≤ 2048 chars
+    foreach (['thumbnail', 'fullImage', 'fullImageHiRes'] as $field) {
+      if (isset($page[$field])) {
+        if (!is_string($page[$field])) {
+          $errors[$field] = "page.{$field} must be a string";
+        } elseif (strlen($page[$field]) > 2048) {
+          $errors[$field] = "page.{$field} must not exceed 2048 characters";
+        }
+      }
+    }
+
+    // sections: must be an array if present
+    if (isset($page['sections']) && !is_array($page['sections'])) {
+      $errors['sections'] = 'page.sections must be an array';
+    }
+
+    // imageStatus: optional enum
+    if (isset($page['imageStatus']) && !in_array($page['imageStatus'], ['pending', 'ready'], true)) {
+      $errors['imageStatus'] = 'page.imageStatus must be "pending" or "ready"';
+    }
+
+    // pageLabels: optional map of lang → string
+    if (isset($page['pageLabels'])) {
+      if (!is_array($page['pageLabels'])) {
+        $errors['pageLabels'] = 'page.pageLabels must be an object';
+      } else {
+        foreach ($page['pageLabels'] as $lang => $label) {
+          if (!is_string($label) || strlen($label) > 200) {
+            $errors['pageLabels'] = "page.pageLabels[{$lang}] must be a string ≤ 200 characters";
+            break;
+          }
+        }
+      }
+    }
+
+    return $errors;
+  }
+
+  /**
+   * Validate a NewsSection payload.
+   * @param  array $section  Raw section array from the request body.
+   * @return array           Keyed field → error message. Empty array = valid.
+   */
+  private function validate_section_payload(array $section): array {
+    $errors = [];
+
+    // id: required non-empty string ≤ 200 chars
+    $sid = (string) ($section['id'] ?? '');
+    if ($sid === '') {
+      $errors['id'] = 'section.id is required';
+    } elseif (strlen($sid) > 200) {
+      $errors['id'] = 'section.id must not exceed 200 characters';
+    }
+
+    // title: required string ≤ 500 chars
+    if (!isset($section['title'])) {
+      $errors['title'] = 'section.title is required';
+    } elseif (!is_string($section['title'])) {
+      $errors['title'] = 'section.title must be a string';
+    } elseif (strlen($section['title']) > 500) {
+      $errors['title'] = 'section.title must not exceed 500 characters';
+    }
+
+    // x, y, width, height: required numeric within reasonable bounds
+    foreach (['x', 'y'] as $coord) {
+      if (!isset($section[$coord])) {
+        $errors[$coord] = "section.{$coord} is required";
+      } elseif (!is_numeric($section[$coord])) {
+        $errors[$coord] = "section.{$coord} must be numeric";
+      } elseif ((float)$section[$coord] < -100000 || (float)$section[$coord] > 100000) {
+        $errors[$coord] = "section.{$coord} must be between -100000 and 100000";
+      }
+    }
+    foreach (['width', 'height'] as $dim) {
+      if (!isset($section[$dim])) {
+        $errors[$dim] = "section.{$dim} is required";
+      } elseif (!is_numeric($section[$dim])) {
+        $errors[$dim] = "section.{$dim} must be numeric";
+      } elseif ((float)$section[$dim] < 0 || (float)$section[$dim] > 100000) {
+        $errors[$dim] = "section.{$dim} must be between 0 and 100000";
+      }
+    }
+
+    // content: optional string ≤ 500 KB
+    if (isset($section['content'])) {
+      if (!is_string($section['content'])) {
+        $errors['content'] = 'section.content must be a string';
+      } elseif (strlen($section['content']) > 512000) {
+        $errors['content'] = 'section.content must not exceed 500 KB';
+      }
+    }
+
+    // imageUrl: optional URL string ≤ 2048 chars
+    if (isset($section['imageUrl'])) {
+      if (!is_string($section['imageUrl'])) {
+        $errors['imageUrl'] = 'section.imageUrl must be a string';
+      } elseif (strlen($section['imageUrl']) > 2048) {
+        $errors['imageUrl'] = 'section.imageUrl must not exceed 2048 characters';
+      }
+    }
+
+    // linkedSectionIds: optional array of strings
+    if (isset($section['linkedSectionIds'])) {
+      if (!is_array($section['linkedSectionIds'])) {
+        $errors['linkedSectionIds'] = 'section.linkedSectionIds must be an array';
+      } else {
+        foreach ($section['linkedSectionIds'] as $i => $lid) {
+          if (!is_string($lid) || strlen($lid) > 200) {
+            $errors['linkedSectionIds'] = "section.linkedSectionIds[{$i}] must be a string ≤ 200 characters";
+            break;
+          }
+        }
+      }
+    }
+
+    return $errors;
+  }
+
+  // ── Atomic write endpoints ─────────────────────────────────────────────────
+
   /**
    * PUT /data/page
    *
@@ -1923,11 +2725,20 @@ HTML;
   public function put_page_endpoint(WP_REST_Request $request): WP_REST_Response {
     $body    = $request->get_json_params();
     $date    = sanitize_text_field((string)($body['date']    ?? ''));
-    $edition = max(1, (int)($body['edition'] ?? 1));
+    $edition = max(1, min(99, (int)($body['edition'] ?? 1)));
     $page    = isset($body['page']) && is_array($body['page']) ? $body['page'] : null;
 
-    if (!$date || !$page) {
-      return new WP_REST_Response(['error' => 'date and page are required'], 400);
+    // ── Validation (CQ-4) ──────────────────────────────────────────────────
+    $date_err = $this->validate_date_format($date);
+    if ($date_err) {
+      return new WP_REST_Response(['error' => 'Validation failed', 'fields' => ['date' => $date_err]], 422);
+    }
+    if (!$page) {
+      return new WP_REST_Response(['error' => 'Validation failed', 'fields' => ['page' => 'page payload is required and must be an object']], 422);
+    }
+    $page_errors = $this->validate_page_payload($page);
+    if (!empty($page_errors)) {
+      return new WP_REST_Response(['error' => 'Validation failed', 'fields' => $page_errors], 422);
     }
 
     // Enforce server-side lock: only the lock holder may update this page.
@@ -1990,11 +2801,16 @@ HTML;
   public function delete_page_endpoint(WP_REST_Request $request): WP_REST_Response {
     $body    = $request->get_json_params();
     $date    = sanitize_text_field((string)($body['date']   ?? ''));
-    $edition = max(1, (int)($body['edition'] ?? 1));
+    $edition = max(1, min(99, (int)($body['edition'] ?? 1)));
     $page_id = (int)($body['pageId'] ?? 0);
 
-    if (!$date || !$page_id) {
-      return new WP_REST_Response(['error' => 'date and pageId are required'], 400);
+    // ── Validation (CQ-4) ──────────────────────────────────────────────────
+    $date_err = $this->validate_date_format($date);
+    if ($date_err) {
+      return new WP_REST_Response(['error' => 'Validation failed', 'fields' => ['date' => $date_err]], 422);
+    }
+    if ($page_id <= 0 || $page_id > 9999) {
+      return new WP_REST_Response(['error' => 'Validation failed', 'fields' => ['pageId' => 'pageId must be a positive integer ≤ 9999']], 422);
     }
 
     // Enforce server-side lock: only the lock holder may delete this page.
@@ -2036,13 +2852,25 @@ HTML;
   public function put_section_endpoint(WP_REST_Request $request): WP_REST_Response {
     $body            = $request->get_json_params();
     $date            = sanitize_text_field((string)($body['date']             ?? ''));
-    $edition         = max(1, (int)($body['edition'] ?? 1));
+    $edition         = max(1, min(99, (int)($body['edition'] ?? 1)));
     $page_id         = (int)($body['pageId']         ?? 0);
     $original_sec_id = sanitize_text_field((string)($body['originalSectionId'] ?? ''));
     $section         = isset($body['section']) && is_array($body['section']) ? $body['section'] : null;
 
-    if (!$date || !$page_id || !$section) {
-      return new WP_REST_Response(['error' => 'date, pageId and section are required'], 400);
+    // ── Validation (CQ-4) ──────────────────────────────────────────────────
+    $date_err = $this->validate_date_format($date);
+    if ($date_err) {
+      return new WP_REST_Response(['error' => 'Validation failed', 'fields' => ['date' => $date_err]], 422);
+    }
+    if ($page_id <= 0 || $page_id > 9999) {
+      return new WP_REST_Response(['error' => 'Validation failed', 'fields' => ['pageId' => 'pageId must be a positive integer ≤ 9999']], 422);
+    }
+    if (!$section) {
+      return new WP_REST_Response(['error' => 'Validation failed', 'fields' => ['section' => 'section payload is required and must be an object']], 422);
+    }
+    $sec_errors = $this->validate_section_payload($section);
+    if (!empty($sec_errors)) {
+      return new WP_REST_Response(['error' => 'Validation failed', 'fields' => $sec_errors], 422);
     }
 
     // Enforce server-side lock: only the lock holder may modify sections on this page.
@@ -2106,12 +2934,20 @@ HTML;
   public function delete_section_endpoint(WP_REST_Request $request): WP_REST_Response {
     $body       = $request->get_json_params();
     $date       = sanitize_text_field((string)($body['date']      ?? ''));
-    $edition    = max(1, (int)($body['edition']  ?? 1));
+    $edition    = max(1, min(99, (int)($body['edition']  ?? 1)));
     $page_id    = (int)($body['pageId']   ?? 0);
     $section_id = sanitize_text_field((string)($body['sectionId'] ?? ''));
 
-    if (!$date || !$page_id || !$section_id) {
-      return new WP_REST_Response(['error' => 'date, pageId and sectionId are required'], 400);
+    // ── Validation (CQ-4) ──────────────────────────────────────────────────
+    $date_err = $this->validate_date_format($date);
+    if ($date_err) {
+      return new WP_REST_Response(['error' => 'Validation failed', 'fields' => ['date' => $date_err]], 422);
+    }
+    if ($page_id <= 0 || $page_id > 9999) {
+      return new WP_REST_Response(['error' => 'Validation failed', 'fields' => ['pageId' => 'pageId must be a positive integer ≤ 9999']], 422);
+    }
+    if ($section_id === '' || strlen($section_id) > 200) {
+      return new WP_REST_Response(['error' => 'Validation failed', 'fields' => ['sectionId' => 'sectionId must be a non-empty string ≤ 200 characters']], 422);
     }
 
     // Enforce server-side lock: only the lock holder may delete sections on this page.
@@ -2684,17 +3520,27 @@ HTML;
   }
 
   private function get_secret(): string {
+    // ── FP-2: dedicated JWT secret constant ───────────────────────────────
+    // Prefer DN_JWT_SECRET so rotating the JWT signing key does not affect
+    // WordPress cookie auth (which also uses AUTH_KEY internally).
+    // To use: add  define('DN_JWT_SECRET', 'your-strong-random-secret');
+    // to wp-config.php, ideally before the WordPress salt definitions.
+    if (defined('DN_JWT_SECRET') && DN_JWT_SECRET) {
+      return DN_JWT_SECRET;
+    }
+    // Backward compat: fall back to AUTH_KEY if DN_JWT_SECRET is not defined.
     if (defined('AUTH_KEY') && AUTH_KEY) {
       return AUTH_KEY;
     }
     if (defined('LOGGED_IN_KEY') && LOGGED_IN_KEY) {
       return LOGGED_IN_KEY;
     }
-    // AUTH_KEY / LOGGED_IN_KEY not set — the fallback is weak. This should
-    // not happen on a properly configured WordPress installation.
+    // No key configured — the fallback is weak. Warn the admin.
     if (is_admin()) {
       add_action('admin_notices', function () {
-        echo '<div class="notice notice-warning"><p><strong>Digital Newspaper:</strong> AUTH_KEY is not set in wp-config.php. JWT tokens use a fallback secret. Please define AUTH_KEY for production security.</p></div>';
+        echo '<div class="notice notice-warning"><p><strong>Digital Newspaper:</strong> '
+           . 'No JWT secret is configured. Please define <code>DN_JWT_SECRET</code> in wp-config.php '
+           . '(or at minimum <code>AUTH_KEY</code>) for production security.</p></div>';
       });
     }
     return 'dn_fallback_secret';

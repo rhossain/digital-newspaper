@@ -5,6 +5,7 @@ import { AppComponent } from './app/app.component';
 import { NewspaperComponent } from './app/newspaper.component';
 import { wpApiInterceptor } from './app/interceptors/wp-api.interceptor';
 import { loaderInterceptor } from './app/interceptors/loader.interceptor';
+import { httpCacheInterceptor } from './app/interceptors/http-cache.interceptor';
 
 const routes: Routes = [
   { path: '', component: NewspaperComponent },
@@ -27,7 +28,11 @@ class TrailingSlashUrlSerializer extends DefaultUrlSerializer {
 
 bootstrapApplication(AppComponent, {
   providers: [
-    provideHttpClient(withInterceptors([wpApiInterceptor, loaderInterceptor])),
+    // Interceptor execution order (innermost → outermost on response):
+    //   1. httpCacheInterceptor  — short-circuits on cache hits before any network
+    //   2. wpApiInterceptor      — URL rewrite + credentials + X-Requested-With
+    //   3. loaderInterceptor     — shows/hides global loading overlay for writes
+    provideHttpClient(withInterceptors([httpCacheInterceptor, wpApiInterceptor, loaderInterceptor])),
     provideRouter(routes),
     { provide: UrlSerializer, useClass: TrailingSlashUrlSerializer },
   ]

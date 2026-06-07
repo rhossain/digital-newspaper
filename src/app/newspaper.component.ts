@@ -156,6 +156,9 @@ export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
       // Always sync global settings from the latest data
       this.refreshSettings();
       if (this.initialLoadComplete) {
+        // Re-sync the date picker list — a targeted reload may have added a
+        // newly-published edition date that wasn't in the initial load.
+        this.availableDates = this.dataService.getAvailableDates();
         this.loadCurrentEdition();
         this.cdr.detectChanges();
       }
@@ -165,15 +168,19 @@ export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.loadNewspaperData();
 
     // ── Remote-change detection ──────────────────────────────────────────────
-    // Poll the server's lightweight /data/version endpoint every 60 s.
-    // When a new version is detected (another user added/edited content), reload
-    // the data transparently so readers always see the latest edition without
-    // having to refresh the browser tab.
-    this.dataService.startVersionPoll(60_000);
+    // Poll the server's lightweight /data/version endpoint every 5 minutes.
+    // 5 min is sufficient for a read-only viewer — the version endpoint is
+    // very cheap but polling faster than 5 min on a public site wastes server
+    // resources. Admin sessions use 30 s (set in admin.component.ts).
+    this.dataService.startVersionPoll(300_000);
     const versionSub = this.dataService.remoteDataChanged$.subscribe(() => {
       // Only reload if the user is not viewing a modal (section detail / image)
       if (!this.showContentModal && !this.showImageModal) {
-        this.dataService.loadData().subscribe();
+        // Targeted reload: fetch only the currently-displayed date's edition plus
+        // the dates index. This is much cheaper than the full /data blob and
+        // handles both "today's content changed" and "new date published" cases.
+        // Falls back to loadData() automatically if the granular endpoints fail.
+        this.dataService.reloadCurrentDateOnly(this.selectedDate).subscribe();
         // dataService.data$ subscriber above handles UI refresh automatically
       }
     });

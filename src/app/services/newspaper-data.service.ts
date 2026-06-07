@@ -4,6 +4,10 @@ import { Observable, BehaviorSubject, Subject, Subscription, timer, forkJoin, in
 import { tap, map, catchError, timeout, retry, switchMap, debounceTime, distinctUntilChanged } from 'rxjs/operators';
 import { AuthService } from './auth.service';
 import { WP_BASE_URL } from '../config';
+import { clearHttpCache, evictEditionCache } from '../interceptors/http-cache.interceptor';
+import { SettingsService } from './settings.service';
+import { DateIndexService } from './date-index.service';
+import { EditionCacheService } from './edition-cache.service';
 
 export interface NewsSection {
   id: string;
@@ -284,7 +288,13 @@ export class NewspaperDataService {
   private readonly mediaApiUrl = `${WP_BASE_URL}/wp-json/wp/v2/media`;
   private dataRecoveredFromMediaLibrary = false;
 
-  constructor(private http: HttpClient, private auth: AuthService) {
+  constructor(
+    private http: HttpClient,
+    private auth: AuthService,
+    private settingsService: SettingsService,
+    private dateIndexService: DateIndexService,
+    private editionCacheService: EditionCacheService,
+  ) {
     const cachedSettings = NewspaperDataService._readCachedSettings();
     this.dataSubject = new BehaviorSubject<NewspaperData>({
       settings: cachedSettings || {
@@ -373,6 +383,65 @@ export class NewspaperDataService {
       catchError((err) => this.loadEmergencyDraftAfterApiFailure(err)),
       tap((data: NewspaperData) => {
         this.dataSubject.next(data);
+
+        // ── Seed the new caching services for free ─────────────────────────
+        // We already paid for the full /data load; propagating the result to
+        // the new services means their first read is a synchronous memory hit
+        // rather than a second HTTP round-trip to the new granular endpoints.
+
+        if (data.settings) {
+          this.settingsService.apply(data.settings);
+        }
+        if (data.editions?.length) {
+          this.dateIndexService.syncFromEditions(data.editions);
+          this.editionCacheService.seedFromLoadedData(data.editions);
+        }
+      })
+    );
+  }
+
+  /**
+   * Targeted reload for the viewer — refreshes only one date's editions and
+   * the available-dates index, rather than fetching the full /data blob.
+   *
+   * Called by the version-poll subscriber when a remote change is detected.
+   * Using the granular /data/editions/:date and /data/dates endpoints means
+   * the HTTP cache interceptor can still serve a 304 if nothing relevant changed,
+   * making the "check" essentially free most of the time.
+   *
+   * Falls back to the full loadData() if either granular fetch fails, so
+   * existing behaviour is preserved in degraded environments.
+   *
+   * @param date  The currently-displayed date (YYYY-MM-DD) whose edition to refresh.
+   */
+  reloadCurrentDateOnly(date: string): Observable<void> {
+    // Evict both cache layers for this date so the next fetch is fresh.
+    this.evictDateCache(date);
+
+    return forkJoin({
+      editions: this.editionCacheService.getEditionsForDate(date),
+      // Refreshes the DateIndexService signal and returns the updated list.
+      // This also handles the case where a new edition date was just published.
+      dates:    this.dateIndexService.fetch(),
+    }).pipe(
+      tap(({ editions }) => {
+        const current = this.dataSubject.value;
+        // Preserve all dates except the one we just refreshed.
+        const otherEditions = current.editions.filter(e => e.date !== date);
+        const merged = [...otherEditions, ...editions].sort((a, b) => {
+          const d = b.date.localeCompare(a.date);
+          return d !== 0 ? d : ((a.edition ?? 1) - (b.edition ?? 1));
+        });
+        this.dataSubject.next({ ...current, editions: merged });
+      }),
+      map(() => void 0),
+      catchError(err => {
+        // Granular endpoints unavailable — fall back to the full reload.
+        console.warn(
+          '[NewspaperDataService] reloadCurrentDateOnly failed, falling back to loadData(). Reason:',
+          err?.message ?? err
+        );
+        return this.loadData().pipe(map(() => void 0));
       })
     );
   }
@@ -835,11 +904,27 @@ export class NewspaperDataService {
     }
   }
 
+  /**
+   * After any atomic write, evict the cache entry for the affected date so
+   * the next fetch of /data/editions/:date returns the server's updated data.
+   * Also clears /data/dates in case page counts changed.
+   */
+  private evictDateCache(date: string): void {
+    // Evict from the HTTP-level interceptor cache (handles ETag slots + /data/dates)
+    evictEditionCache(date);
+    // Also evict from the EditionCacheService in-memory Map so the next
+    // getEditionsForDate(date) call re-fetches from the network.
+    this.editionCacheService.evict(date);
+  }
+
   /** Atomically upsert a single page on the server (PUT /data/page). */
   savePageAtomically(page: NewspaperPage, date: string, edition: number): Observable<any> {
     const headers = this.auth.getAuthHeaders();
     return this.http.put<any>(this.pageAtomicUrl, { date, edition, page }, { headers }).pipe(
-      tap(res => this.patchDataVersion(res))
+      tap(res => {
+        this.patchDataVersion(res);
+        this.evictDateCache(date);
+      })
     );
   }
 
@@ -847,7 +932,10 @@ export class NewspaperDataService {
   deletePageAtomically(pageId: number, date: string, edition: number): Observable<any> {
     const headers = this.auth.getAuthHeaders();
     return this.http.delete<any>(this.pageAtomicUrl, { headers, body: { date, edition, pageId } }).pipe(
-      tap(res => this.patchDataVersion(res))
+      tap(res => {
+        this.patchDataVersion(res);
+        this.evictDateCache(date);
+      })
     );
   }
 
@@ -862,7 +950,10 @@ export class NewspaperDataService {
     const headers = this.auth.getAuthHeaders();
     return this.http.put<any>(this.sectionAtomicUrl,
       { date, edition, pageId, originalSectionId, section }, { headers }
-    ).pipe(tap(res => this.patchDataVersion(res)));
+    ).pipe(tap(res => {
+      this.patchDataVersion(res);
+      this.evictDateCache(date);
+    }));
   }
 
   /** Atomically delete a single section on the server (DELETE /data/section). */
@@ -870,7 +961,10 @@ export class NewspaperDataService {
     const headers = this.auth.getAuthHeaders();
     return this.http.delete<any>(this.sectionAtomicUrl,
       { headers, body: { date, edition, pageId, sectionId } }
-    ).pipe(tap(res => this.patchDataVersion(res)));
+    ).pipe(tap(res => {
+      this.patchDataVersion(res);
+      this.evictDateCache(date);
+    }));
   }
 
   saveData(data: NewspaperData, options: SaveDataOptions = {}): Observable<any> {
@@ -886,6 +980,7 @@ export class NewspaperDataService {
     // Persist settings to localStorage for cross-window availability
     if (data.settings) {
       this.cacheSettings(data.settings);
+      this.settingsService.apply(data.settings);
     }
 
     // Save to backend API.
@@ -909,6 +1004,12 @@ export class NewspaperDataService {
           const current = this.dataSubject.value;
           this.dataSubject.next({ ...current, dataVersion: response.newDataVersion });
         }
+        // Invalidate the HTTP cache so the next read fetches fresh data from
+        // the server.  A full save may affect multiple dates, so clear all entries.
+        clearHttpCache();
+        // Also clear the EditionCacheService in-memory store — a full save may
+        // have modified any date, so we cannot evict selectively.
+        this.editionCacheService.clearMemory();
       }),
       catchError((err) => {
         // On any save failure, silently fetch the server's current dataVersion
@@ -1198,6 +1299,9 @@ export class NewspaperDataService {
     });
     // Persist to localStorage so new windows pick it up immediately
     this.cacheSettings(settings);
+    // Keep SettingsService in sync (it reads the same localStorage key,
+    // but updating the signal directly avoids a localStorage round-trip).
+    this.settingsService.apply(settings);
   }
 
   /**
