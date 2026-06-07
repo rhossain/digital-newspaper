@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- duplicates.xml — 3 posts whose derived IDs match sections already in the data store.
+     To use this fixture: first import happy-path.xml to populate the data, then import this file.
+     Expected results:
+       - "Front Page Lead Story" (same title + content) → duplicate-exact → default: Skip
+       - "Sports Headlines" (same key, different content) → duplicate-key → default: Overwrite
+       - "New Story No Conflict" → new → Import as New  -->
+<newspaper>
+  <!-- Exact duplicate of a post in happy-path.xml (same date/edition/page/title/content) -->
+  <post>
+    <title>Front Page Lead Story</title>
+    <content><![CDATA[<p>This is the lead story for today's front page. It covers breaking news from the capital.</p>]]></content>
+    <date>2026-06-01</date>
+    <edition>1</edition>
+    <page>1</page>
+  </post>
+
+  <!-- Key duplicate (same date/edition/page/title slug) but updated content -->
+  <post>
+    <title>Sports Headlines</title>
+    <content><![CDATA[<p>UPDATED: Local football team wins national championship. Full match report with exclusive interviews now available.</p>]]></content>
+    <date>2026-06-01</date>
+    <edition>1</edition>
+    <page>2</page>
+  </post>
+
+  <!-- Genuinely new post — no conflict -->
+  <post>
+    <title>New Story No Conflict</title>
+    <content><![CDATA[<p>This is a brand new story with no matching entry in the existing data.</p>]]></content>
+    <date>2026-06-01</date>
+    <edition>1</edition>
+    <page>1</page>
+  </post>
+</newspaper>

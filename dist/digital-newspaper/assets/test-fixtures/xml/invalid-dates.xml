@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- invalid-dates.xml — Tests date validation.
+     Expected results:
+       - Row 1: "not-a-date" → error (invalid format)
+       - Row 2: "06/04/2026" → error (wrong format, must be YYYY-MM-DD)
+       - Row 3: "2026-13-01" → error (month 13 does not exist)
+       - Row 4: "2026-02-30" → error (Feb 30 does not exist)
+       - Row 5: "2026-06-04" → valid, should parse successfully
+       - All invalid rows should appear in the error list in Step 1 of the wizard. -->
+<newspaper>
+  <post>
+    <title>Post With Text Date</title>
+    <content><![CDATA[<p>This post has a date that is just plain text, not a date at all.</p>]]></content>
+    <date>not-a-date</date>
+    <edition>1</edition>
+    <page>1</page>
+  </post>
+
+  <post>
+    <title>Post With Wrong Format Date</title>
+    <content><![CDATA[<p>This post has the date in DD/MM/YYYY format instead of YYYY-MM-DD.</p>]]></content>
+    <date>04/06/2026</date>
+    <edition>1</edition>
+    <page>1</page>
+  </post>
+
+  <post>
+    <title>Post With Invalid Month</title>
+    <content><![CDATA[<p>Month 13 does not exist — this date is structurally formatted correctly but semantically invalid.</p>]]></content>
+    <date>2026-13-01</date>
+    <edition>1</edition>
+    <page>1</page>
+  </post>
+
+  <post>
+    <title>Post With Feb 30</title>
+    <content><![CDATA[<p>February 30 does not exist in any year.</p>]]></content>
+    <date>2026-02-30</date>
+    <edition>1</edition>
+    <page>1</page>
+  </post>
+
+  <!-- This one is valid and should parse successfully -->
+  <post>
+    <title>Post With Valid Date</title>
+    <content><![CDATA[<p>This post has a correct YYYY-MM-DD date and should parse without errors.</p>]]></content>
+    <date>2026-06-04</date>
+    <edition>1</edition>
+    <page>1</page>
+  </post>
+</newspaper>

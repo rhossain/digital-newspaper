@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- new-pages.xml — Posts targeting page numbers that do not exist in any edition yet.
+     Importing this file should create skeleton pages (imageStatus: 'pending') for pages 7, 8, 9. -->
+<newspaper>
+  <post>
+    <title>Story for Page Seven</title>
+    <content><![CDATA[<p>This post targets page 7 which does not exist yet and will require a skeleton page to be created.</p>]]></content>
+    <date>2026-06-03</date>
+    <edition>1</edition>
+    <page>7</page>
+  </post>
+  <post>
+    <title>Another Story for Page Seven</title>
+    <content><![CDATA[<p>A second post also targeting the non-existent page 7.</p>]]></content>
+    <date>2026-06-03</date>
+    <edition>1</edition>
+    <page>7</page>
+  </post>
+  <post>
+    <title>Story for Page Eight</title>
+    <content><![CDATA[<p>This post targets page 8, another page that does not yet exist.</p>]]></content>
+    <date>2026-06-03</date>
+    <edition>1</edition>
+    <page>8</page>
+  </post>
+  <post>
+    <title>Story for Page Nine</title>
+    <content><![CDATA[<p>This post targets page 9. After import, three skeleton pages (7, 8, 9) should appear with the "Needs image" badge.</p>]]></content>
+    <date>2026-06-03</date>
+    <edition>1</edition>
+    <page>9</page>
+  </post>
+</newspaper>
