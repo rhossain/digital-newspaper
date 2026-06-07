@@ -53,6 +53,8 @@ export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
   isMobileView = false;
   mobileHeaderMenuOpen = false;
   pendingMobileModal = false;
+  /** Which panel is active in the mobile image modal: 'image' or 'text'. */
+  mobileModalView: 'image' | 'text' = 'image';
   private resizeListener?: () => void;
   private resizeDebounceTimer?: ReturnType<typeof setTimeout>;
 
@@ -794,6 +796,7 @@ export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
         this.modalImage = null;
         this.modalImageTitle = this.selectedSection.title;
         this.modalLinkedSections = allSections.filter(s => s.id !== this.selectedSection!.id);
+        this.mobileModalView = 'image';
         this.showImageModal = true;
       }
     }
@@ -885,6 +888,7 @@ export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
       
       // Rest of the sections
       this.modalLinkedSections = allSections.slice(1);
+      this.mobileModalView = 'image';
       this.showImageModal = true;
     }
   }
@@ -894,6 +898,7 @@ export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.modalImage = null;
     this.modalImageTitle = '';
     this.modalLinkedSections = [];
+    this.mobileModalView = 'image';
   }
 
   private getPrintDocument(contentHtml: string, styles: string = ''): string {
