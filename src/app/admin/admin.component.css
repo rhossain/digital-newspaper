@@ -865,6 +865,28 @@ small {
   margin-bottom: 0;
 }
 
+/* Page ID dropdown */
+select.page-id-select {
+  appearance: auto;
+  cursor: pointer;
+}
+
+select.page-id-select:disabled {
+  cursor: not-allowed;
+}
+
+select.page-id-select option:disabled {
+  color: var(--color-text-light, #aaa);
+}
+
+.page-id-hint {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.75rem;
+  color: var(--color-text-light, #999);
+  line-height: 1.4;
+}
+
 .form-group-sm label {
   font-size: 0.75rem;
   margin-bottom: 0.25rem;
@@ -1326,6 +1348,46 @@ small {
   display: flex;
   flex-direction: column;
   animation: slideUp 0.3s ease;
+}
+
+/* Compact modal for simple single-field dialogs */
+.modal.modal-sm {
+  max-width: 420px;
+}
+
+/* Add New Date — inline error message */
+.new-date-error {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 5px;
+  font-size: 0.8rem;
+  color: #e53935;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+/* Add New Date — warning box when date already exists */
+.new-date-warning-box {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: #fff8e1;
+  border: 1.5px solid #f9a825;
+  color: #6d4c00;
+  font-size: 0.8375rem;
+  line-height: 1.5;
+  animation: fadeIn 0.2s ease;
+}
+
+.new-date-warning-box svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: #f9a825;
+  stroke: #f9a825;
 }
 
 @keyframes slideUp {

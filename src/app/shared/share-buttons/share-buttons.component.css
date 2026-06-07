@@ -151,3 +151,18 @@
   color: var(--color-primary, #1a73e8);
   border-color: var(--color-primary, #1a73e8);
 }
+
+@media (max-width: 1024px) {
+  .action-btn-print {
+    display: none;
+  }
+
+  .action-btn-download .action-btn-text {
+    display: none;
+  }
+
+  /* Hide divider too when only download remains and print is hidden */
+  .action-divider:has(+ .action-btn-print:last-child) {
+    display: none;
+  }
+}

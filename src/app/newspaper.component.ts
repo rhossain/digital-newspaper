@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy, ChangeDetectorRef, ElementRef, ViewChild, Inject } from '@angular/core';
+import { Component, OnInit, OnDestroy, AfterViewChecked, ChangeDetectorRef, ElementRef, ViewChild, Inject } from '@angular/core';
 import { CommonModule, Location, DOCUMENT } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute } from '@angular/router';
@@ -19,13 +19,18 @@ import { Subscription } from 'rxjs';
   templateUrl: './newspaper.component.html',
   styleUrls: ['./newspaper.component.css']
 })
-export class NewspaperComponent implements OnInit, OnDestroy {
+export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
   @ViewChild('mainImage') mainImageRef?: ElementRef<HTMLImageElement>;
+  @ViewChild('paginationBar') private paginationBarRef?: ElementRef<HTMLElement>;
+  private paginationContainerWidth = 0;
+  private paginationObserver?: ResizeObserver;
   pages: NewspaperPage[] = [];
   currentPage: NewspaperPage | null = null;
   selectedSection: NewsSection | null = null;
   imageLoaded = false;
   assetLogoError = false;
+  showSlowConnectionWarning = false;
+  private slowConnectionTimer?: ReturnType<typeof setTimeout>;
   croppedSectionImage: string | null = null;
   showContentModal = false;
   showImageModal = false;
@@ -184,9 +189,31 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   ngOnDestroy() {
     this.subscriptions.forEach(sub => sub.unsubscribe());
     this.dataService.stopVersionPoll();
+    this.clearSlowConnectionTimer();
+    this.paginationObserver?.disconnect();
     clearTimeout(this.resizeDebounceTimer);
     if (this.resizeListener) {
       window.removeEventListener('resize', this.resizeListener);
+    }
+  }
+
+  ngAfterViewChecked(): void {
+    const el = this.paginationBarRef?.nativeElement;
+    if (el && !this.paginationObserver) {
+      // Element just became visible — start observing its width.
+      this.paginationObserver = new ResizeObserver(entries => {
+        const w = Math.floor(entries[0]?.contentRect.width ?? 0);
+        if (w !== this.paginationContainerWidth) {
+          this.paginationContainerWidth = w;
+          this.cdr.detectChanges();
+        }
+      });
+      this.paginationObserver.observe(el);
+    } else if (!el && this.paginationObserver) {
+      // Element removed from DOM (*ngIf) — clean up.
+      this.paginationObserver.disconnect();
+      this.paginationObserver = undefined;
+      this.paginationContainerWidth = 0;
     }
   }
 
@@ -523,6 +550,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   selectPage(page: NewspaperPage, targetSectionId?: string) {
     this.currentPage = page;
     this.imageLoaded = false;
+    this.startSlowConnectionTimer();
 
     // If the image is already cached, the load event may not fire
     setTimeout(() => {
@@ -593,6 +621,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   }
 
   onImageLoad() {
+    this.clearSlowConnectionTimer();
     this.imageLoaded = true;
     
     // Store reference to the loaded image for cropping
@@ -609,7 +638,75 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   }
 
   onImageError() {
+    this.clearSlowConnectionTimer();
     this.imageLoaded = true;
+  }
+
+  /** Reload the entire page when the user requests it from the slow-connection notice. */
+  refreshPage(): void {
+    this.document.defaultView?.location.reload();
+  }
+
+  /**
+   * Starts an 8-second timer; if the image is still not loaded when it fires,
+   * shows the slow-connection notice.
+   */
+  private startSlowConnectionTimer(): void {
+    this.clearSlowConnectionTimer();
+    this.slowConnectionTimer = setTimeout(() => {
+      if (!this.imageLoaded) {
+        this.showSlowConnectionWarning = true;
+        this.cdr.detectChanges();
+      }
+    }, 8000);
+  }
+
+  private clearSlowConnectionTimer(): void {
+    if (this.slowConnectionTimer !== undefined) {
+      clearTimeout(this.slowConnectionTimer);
+      this.slowConnectionTimer = undefined;
+    }
+    this.showSlowConnectionWarning = false;
+  }
+
+  /**
+   * Returns the page-number items to render in the pagination bar.
+   * Numbers are 1-based indices into this.pages[]. null represents an ellipsis.
+   *
+   * If the measured container width is large enough to fit all page buttons on
+   * one line they are all shown. Otherwise a smart window of 7 items with
+   * ellipsis keeps everything on a single line.
+   */
+  getPaginationPages(): (number | null)[] {
+    const total = this.pages.length;
+
+    // Determine whether all page buttons fit in the available space.
+    // Each page button width: min-width 32px; numbers ≥10 render wider (~44px).
+    // 2 nav arrows (32px each) + page buttons + gaps (4px × (total+1 slots)).
+    const allFit = (): boolean => {
+      if (this.paginationContainerWidth <= 0) return total <= 7; // pre-measurement fallback
+      const needed = 64
+        + this.pages.reduce((s, p) => s + (p.id >= 10 ? 44 : 32), 0)
+        + (total + 1) * 4;
+      return needed <= this.paginationContainerWidth;
+    };
+
+    if (allFit()) {
+      return Array.from({ length: total }, (_, i) => i + 1);
+    }
+
+    // Windowed pagination: always exactly 7 visible slots so the bar stays single-line.
+    const current = this.pages.indexOf(this.currentPage!) + 1;
+    if (current <= 4) {
+      // Near start: 1 2 3 4 5 … last
+      return [1, 2, 3, 4, 5, null, total];
+    }
+    if (current >= total - 3) {
+      // Near end: 1 … last-4 last-3 last-2 last-1 last
+      return [1, null, total - 4, total - 3, total - 2, total - 1, total];
+    }
+    // Middle: 1 … prev current next … last
+    return [1, null, current - 1, current, current + 1, null, total];
   }
 
   selectSection(section: NewsSection) {

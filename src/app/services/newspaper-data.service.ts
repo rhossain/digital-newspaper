@@ -502,7 +502,7 @@ export class NewspaperDataService {
           ...section,
           imageUrl: typeof section.imageUrl === 'string' ? section.imageUrl : undefined,
         })) : [],
-      })) : [];
+      })).sort((a, b) => a.id - b.id) : [];
     });
     return result;
   }
@@ -997,7 +997,9 @@ export class NewspaperDataService {
     const newEditions = currentData.editions.map(edition => {
       if (this.editionMatches(edition, targetDate, editionNumber)) {
         foundEdition = true;
-        return { ...edition, pages: [...edition.pages, {...page, sections: [...page.sections]}] };
+        const sorted = [...edition.pages, {...page, sections: [...page.sections]}]
+          .sort((a, b) => a.id - b.id);
+        return { ...edition, pages: sorted };
       }
       return edition;
     });

@@ -997,22 +997,94 @@ export class AdminComponent implements OnInit, OnDestroy {
     return name;
   }
 
+  // ── Add New Date dialog state ──────────────────────────────────────────
+  showNewDateDialog = false;
+  newDateInput = '';
+  newDateError = '';
+  newDateWarning = '';
+
+  /** Opens the Add New Date modal, pre-filling today's date. */
   createNewDate() {
-    const newDate = prompt('Enter date (YYYY-MM-DD):', this.todayDate);
-    if (newDate && /^\d{4}-\d{2}-\d{2}$/.test(newDate)) {
-      this.selectedDate = newDate;
-      this.dataService.getOrCreateEdition(newDate);
-      this.markUnsavedChanges();
-      if (!this.availableDates.includes(newDate)) {
-        this.availableDates.unshift(newDate);
-        this.availableDates.sort().reverse();
+    this.newDateInput = this.todayDate;
+    this.newDateError = '';
+    this.newDateWarning = '';
+    this.showNewDateDialog = true;
+    // Run live validation immediately so the state reflects today's date.
+    this.onNewDateInputChange(this.newDateInput);
+  }
+
+  /** Validates the typed date and updates error/warning messages reactively. */
+  onNewDateInputChange(value: string): void {
+    this.newDateInput = value;
+    this.newDateError = '';
+    this.newDateWarning = '';
+
+    if (!value) {
+      this.newDateError = 'Date is required.';
+      return;
+    }
+
+    // Format check (browsers with native date picker always emit YYYY-MM-DD;
+    // this guard covers manual input in browsers without native support).
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      this.newDateError = 'Invalid format. Please use YYYY-MM-DD (e.g. 2025-06-15).';
+      return;
+    }
+
+    // Calendar validity check (rejects e.g. 2024-02-30, 2023-13-01).
+    const [y, m, d] = value.split('-').map(Number);
+    const parsed = new Date(y, m - 1, d);
+    if (
+      parsed.getFullYear() !== y ||
+      parsed.getMonth() !== m - 1 ||
+      parsed.getDate() !== d
+    ) {
+      this.newDateError = 'This is not a valid calendar date. Please check the month and day.';
+      return;
+    }
+
+    // Duplicate / existing-pages check.
+    if (this.availableDates.includes(value)) {
+      const editions = this.dataService.getEditionsByDate(value);
+      const totalPages = editions.reduce((sum, ed) => sum + (ed.pages?.length ?? 0), 0);
+      if (totalPages > 0) {
+        this.newDateWarning =
+          `This date already exists and has ${totalPages} page${totalPages === 1 ? '' : 's'} across ` +
+          `${editions.length} edition${editions.length === 1 ? '' : 's'}. ` +
+          `You can still open it to add more content.`;
+      } else {
+        this.newDateWarning = 'This date was previously created but has no pages yet.';
       }
-      this.onDateChange();
-      this.autoSaveForVintage();
-    } else if (newDate) {
-      alert('Invalid date format. Please use YYYY-MM-DD');
     }
   }
+
+  /** Confirms the dialog: creates/navigates to the date and closes the modal. */
+  confirmNewDate(): void {
+    // Re-run validation as a safety net.
+    this.onNewDateInputChange(this.newDateInput);
+    if (this.newDateError || !this.newDateInput) return;
+
+    const newDate = this.newDateInput;
+    this.selectedDate = newDate;
+    this.dataService.getOrCreateEdition(newDate);
+    this.markUnsavedChanges();
+    if (!this.availableDates.includes(newDate)) {
+      this.availableDates.unshift(newDate);
+      this.availableDates.sort().reverse();
+    }
+    this.onDateChange();
+    this.autoSaveForVintage();
+    this.cancelNewDateDialog();
+  }
+
+  /** Closes the Add New Date modal without making any changes. */
+  cancelNewDateDialog(): void {
+    this.showNewDateDialog = false;
+    this.newDateInput = '';
+    this.newDateError = '';
+    this.newDateWarning = '';
+  }
+  // ── End Add New Date dialog ─────────────────────────────────────────────
 
   formatDisplayDate(dateStr: string): string {
     return this.dataService.formatDisplayDate(dateStr);
@@ -1054,8 +1126,11 @@ export class AdminComponent implements OnInit, OnDestroy {
 
   newPage() {
     this.isEditingPage = true;
+    // Pick the first unused ID in the 1-15 range; fall back to 1 if all are taken.
+    const usedIds = new Set(this.pages.map(p => p.id));
+    const firstAvailable = Array.from({ length: 15 }, (_, i) => i + 1).find(id => !usedIds.has(id)) ?? 1;
     this.pageForm = {
-      id: this.dataService.getNextPageId(this.selectedDate, this.selectedEditionNumber),
+      id: firstAvailable,
       thumbnail: '',
       fullImage: '',
       fullImageHiRes: '',
@@ -1110,6 +1185,12 @@ export class AdminComponent implements OnInit, OnDestroy {
       hasErrors = true;
     }
     if (hasErrors) return;
+
+    // Safety guard: prevent accidentally overwriting an existing page when creating a new one.
+    if (!this.isEditingExistingPage() && this.pages.some(p => p.id === this.pageForm.id)) {
+      this.toaster.error('Page ID ' + this.pageForm.id + ' is already in use. Please select a different ID.');
+      return;
+    }
 
     if (this.pageForm.id && this.pageForm.fullImage) {
       const page = { ...this.pageForm } as NewspaperPage;
@@ -3121,6 +3202,24 @@ export class AdminComponent implements OnInit, OnDestroy {
 
   isEditingDisabled(): boolean {
     return !!this.pages.find(p => p.id === this.pageForm.id);
+  }
+
+  /**
+   * Returns options for the Page ID dropdown (1–15).
+   * Options already used by other pages on the same date/edition are flagged disabled.
+   * When editing an existing page the current page's own ID is excluded from the
+   * "used" set so it doesn't appear as taken in the (disabled) select.
+   */
+  get pageIdOptions(): Array<{ id: number; disabled: boolean }> {
+    const edition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);
+    const usedIds = new Set((edition?.pages ?? []).map(p => p.id));
+    if (this.isEditingExistingPage() && this.pageForm.id) {
+      usedIds.delete(this.pageForm.id);
+    }
+    return Array.from({ length: 15 }, (_, i) => ({
+      id: i + 1,
+      disabled: usedIds.has(i + 1)
+    }));
   }
 
   async onFullImageFileSelected(event: Event): Promise<void> {

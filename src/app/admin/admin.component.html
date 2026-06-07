@@ -462,6 +462,51 @@
         <button class="pending-images-banner-link" (click)="activeTab = 'pages'">Set now →</button>
       </div>
 
+      <!-- Add New Date Dialog -->
+      <div class="modal-overlay" *ngIf="showNewDateDialog" (click)="cancelNewDateDialog()">
+        <div class="modal modal-sm" (click)="$event.stopPropagation()">
+          <div class="modal-header">
+            <h2>Add New Date</h2>
+            <button class="btn-close" (click)="cancelNewDateDialog()" aria-label="Close">&times;</button>
+          </div>
+          <div class="modal-body">
+            <div class="form-group">
+              <label for="newDateInput">Date <span style="color:#e53935">*</span></label>
+              <input
+                id="newDateInput"
+                type="date"
+                class="form-control"
+                [class.input-error]="!!newDateError"
+                [ngModel]="newDateInput"
+                (ngModelChange)="onNewDateInputChange($event)"
+                min="2000-01-01"
+                max="2099-12-31"
+                autocomplete="off"
+              />
+              <small class="new-date-error" *ngIf="newDateError">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+                {{ newDateError }}
+              </small>
+            </div>
+            <!-- Warning: date already exists / has pages -->
+            <div class="new-date-warning-box" *ngIf="newDateWarning && !newDateError" role="alert">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+              <span>{{ newDateWarning }}</span>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" (click)="cancelNewDateDialog()">Cancel</button>
+            <button
+              class="btn btn-primary"
+              (click)="confirmNewDate()"
+              [disabled]="!!newDateError || !newDateInput"
+            >
+              {{ availableDates.includes(newDateInput) ? 'Open Date' : 'Create Date' }}
+            </button>
+          </div>
+        </div>
+      </div>
+
       <!-- Page Editor Modal -->
       <div class="modal-overlay" *ngIf="isEditingPage">
         <div class="modal">
@@ -472,7 +517,20 @@
           <div class="modal-body">
             <div class="form-group">
               <label>Page ID</label>
-              <input type="number" [(ngModel)]="pageForm.id" [disabled]="isEditingDisabled()" class="form-control" />
+              <select
+                class="form-control page-id-select"
+                [(ngModel)]="pageForm.id"
+                [disabled]="isEditingDisabled()"
+              >
+                <option
+                  *ngFor="let opt of pageIdOptions"
+                  [ngValue]="opt.id"
+                  [disabled]="opt.disabled"
+                >{{ opt.id }}{{ opt.disabled ? ' — already used' : '' }}</option>
+              </select>
+              <small *ngIf="!isEditingDisabled()" class="page-id-hint">
+                IDs 1–15 are available. Greyed options are already used for this date &amp; edition.
+              </small>
             </div>
             <div class="form-group">
               <label>Full Image <span style="color:#e53935">*</span></label>
