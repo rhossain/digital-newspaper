@@ -499,7 +499,11 @@ export class AdminComponent implements OnInit, OnDestroy {
   loadData() {
     this.dataService.loadData().subscribe({
       next: () => {
-        this.availableDates = this.dataService.getAvailableDates();
+        // getAllEditionDates() includes editions with no pages yet (e.g. a
+        // freshly created date with no pages added).  getAvailableDates() only
+        // returns dates that have at least one page, so a brand-new empty date
+        // would disappear from the dropdown on every reload.
+        this.availableDates = this.dataService.getAllEditionDates();
         if (!this.availableDates.includes(this.selectedDate)) {
           this.availableDates.unshift(this.selectedDate);
         }
@@ -528,7 +532,7 @@ export class AdminComponent implements OnInit, OnDestroy {
         // Not mid-edit — reload silently then refresh UI
         this.dataService.loadData().subscribe({
           next: () => {
-            this.availableDates = this.dataService.getAvailableDates();
+            this.availableDates = this.dataService.getAllEditionDates();
             this.loadCurrentEdition();
             this.cdr.detectChanges();
             this.toaster.success('Content updated by another user — view refreshed.');
@@ -2815,7 +2819,7 @@ export class AdminComponent implements OnInit, OnDestroy {
         // "today" edition that would otherwise be auto-created.
         this.dataService.loadData().subscribe({
           next: () => {
-            this.availableDates = this.dataService.getAvailableDates();
+            this.availableDates = this.dataService.getAllEditionDates();
             if (this.availableDates.length > 0) {
               this.selectedDate = this.availableDates[0]; // most recent imported date
             } else if (!this.availableDates.includes(this.selectedDate)) {
@@ -2853,7 +2857,7 @@ export class AdminComponent implements OnInit, OnDestroy {
         );
         this.dataService.loadData().subscribe({
           next: () => {
-            this.availableDates = this.dataService.getAvailableDates();
+            this.availableDates = this.dataService.getAllEditionDates();
             if (this.availableDates.length > 0) {
               this.selectedDate = this.availableDates[0];
             }

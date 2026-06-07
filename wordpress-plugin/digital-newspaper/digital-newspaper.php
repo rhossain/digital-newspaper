@@ -614,6 +614,7 @@ class Digital_Newspaper_API {
     }
 
     $postIds = $this->sync_section_posts_from_data($data);
+
     return ['postIds' => $postIds, 'newDataVersion' => $data['dataVersion']];
   }
 
@@ -634,19 +635,69 @@ class Digital_Newspaper_API {
       return;
     }
 
+    // ── Pre-compute summary fields ──────────────────────────────────────────
+    // Stored inline with the compressed blob so the list-backups endpoint
+    // never needs to decompress or load the full newspaper data payload.
+    $dates = [];
+    foreach (($current['editions'] ?? []) as $edition) {
+      if (is_array($edition) && !empty($edition['date'])) {
+        $dates[] = (string) $edition['date'];
+      }
+    }
+    $dates = array_values(array_unique($dates));
+    rsort($dates);
+
+    $entry = [
+      'createdAt'    => gmdate('c'),
+      'savedBy'      => $saved_by ?: 'system',
+      'editionCount' => is_array($current['editions'] ?? null) ? count($current['editions']) : 0,
+      'pageCount'    => $this->count_pages($current),
+      'sectionCount' => $this->count_sections($current),
+      'latestDates'  => array_slice($dates, 0, 10),
+    ];
+    unset($dates);
+
+    // ── Compress the data payload ───────────────────────────────────────────
+    // gzcompress achieves ~10:1 compression on JSON.  Storing 20 compressed
+    // snapshots uses roughly the same RAM as ONE uncompressed snapshot did
+    // before — the primary fix for the PHP OOM error on large newspapers.
+    // (768 MB limit × 20 uncompressed copies of a 35 MB dataset = exhausted.)
+    $json = wp_json_encode($current);
+    if (function_exists('gzcompress') && $json !== false) {
+      $gz_raw = gzcompress($json, 6);
+      unset($json); // free the ~35 MB JSON string before base64-encoding
+      $entry['data_gz'] = base64_encode($gz_raw);
+      unset($gz_raw);
+    } else {
+      unset($json);
+      // Fallback: zlib not available, OR json_encode failed (rare edge-case).
+      // Store uncompressed so the backup is never silently empty.
+      $entry['data'] = $current;
+    }
+
+    // Free the large uncompressed array; gc_collect_cycles() ensures PHP
+    // reclaims it before we allocate memory for the backups array.
+    unset($current);
+    gc_collect_cycles();
+
     $backups = get_option(self::OPTION_BACKUPS, []);
     if (!is_array($backups)) {
       $backups = [];
     }
 
-    array_unshift($backups, [
-      'createdAt' => gmdate('c'),
-      'savedBy'   => $saved_by ?: 'system',
-      'data'      => $current,
-    ]);
+    // Trim to 19 BEFORE inserting so the array never holds 21 entries at once.
+    if (count($backups) >= 20) {
+      array_pop($backups);
+    }
+    array_unshift($backups, $entry);
+    unset($entry);
 
-    $backups = array_slice($backups, 0, 20);
     update_option(self::OPTION_BACKUPS, $backups, false);
+
+    // Free the backup array before returning to save_data() which still
+    // needs RAM for the section-post sync.
+    unset($backups);
+    gc_collect_cycles();
   }
 
   private function count_pages(array $data): int {
@@ -672,6 +723,21 @@ class Digital_Newspaper_API {
   }
 
   private function backup_summary(array $backup, int $index): array {
+    // New compressed format: summary fields are pre-computed and stored inline
+    // alongside the data_gz blob.  Return them directly — no decompression
+    // needed, keeping the list-backups endpoint fast and memory-efficient.
+    if (isset($backup['data_gz'])) {
+      return [
+        'index'        => $index,
+        'createdAt'    => (string) ($backup['createdAt'] ?? ''),
+        'editionCount' => (int)    ($backup['editionCount'] ?? 0),
+        'pageCount'    => (int)    ($backup['pageCount']    ?? 0),
+        'sectionCount' => (int)    ($backup['sectionCount'] ?? 0),
+        'latestDates'  => is_array($backup['latestDates'] ?? null) ? $backup['latestDates'] : [],
+      ];
+    }
+
+    // Legacy uncompressed format: derive counts from the data array.
     $data = isset($backup['data']) && is_array($backup['data']) ? $backup['data'] : [];
     $dates = [];
     foreach (($data['editions'] ?? []) as $edition) {
@@ -2220,9 +2286,8 @@ HTML;
     WP_REST_Request $request
   ): WP_REST_Response {
     $this->add_public_security_headers();
-    // Explicitly forbid any CDN / LiteSpeed / proxy from caching this
-    // endpoint. Stale cached responses were causing the Angular app to show
-    // old data even after new editions had been uploaded.
+    // Forbid any CDN or proxy from caching this endpoint — stale responses
+    // would cause the Angular app to show old data after new editions are saved.
     header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
     header('Pragma: no-cache');
     header('Expires: 0');
@@ -2270,16 +2335,41 @@ HTML;
     $index = isset($params['index']) ? (int) $params['index'] : -1;
     $backups = $this->get_data_backups();
 
-    if ($index < 0 || !isset($backups[$index]) || !is_array($backups[$index]) || !is_array($backups[$index]['data'] ?? null)) {
+    $backup_entry = $backups[$index] ?? null;
+    if ($index < 0 || !is_array($backup_entry)) {
       return new WP_REST_Response(['error' => 'Backup not found'], 404);
+    }
+
+    // Support both the new compressed format (data_gz) and the legacy format (data).
+    $restore_data = null;
+    if (!empty($backup_entry['data_gz']) && function_exists('gzuncompress')) {
+      $raw = base64_decode((string) $backup_entry['data_gz'], true);
+      if ($raw !== false) {
+        $uncompressed = @gzuncompress($raw);
+        if ($uncompressed !== false) {
+          $restore_data = json_decode($uncompressed, true);
+        }
+      }
+    } elseif (is_array($backup_entry['data'] ?? null)) {
+      $restore_data = $backup_entry['data'];
+    }
+
+    if (!is_array($restore_data)) {
+      return new WP_REST_Response(['error' => 'Backup data is unavailable or corrupted'], 500);
     }
 
     $restore_user = wp_get_current_user();
     $restore_by   = ($restore_user && $restore_user->ID)
       ? ($restore_user->display_name ?: $restore_user->user_login)
       : 'unknown';
-    $summary = $this->backup_summary($backups[$index], $index);
-    $this->save_data($backups[$index]['data'], 'restore:' . $restore_by);  // version auto-stamped
+    $summary = $this->backup_summary($backup_entry, $index);
+
+    // Free all backup data before save_data() — save_data() reloads backups
+    // internally for the snapshot and we want maximum free RAM for that.
+    unset($backups, $backup_entry);
+    gc_collect_cycles();
+
+    $this->save_data($restore_data, 'restore:' . $restore_by);  // version auto-stamped
     $this->log_auth_user_action('restore_backup', 'Restored backup #' . $index, ['backupIndex' => (string) $index, 'backupCreatedAt' => $summary['createdAt'] ?? '']);
 
     return rest_ensure_response([
@@ -2423,6 +2513,21 @@ HTML;
   public function post_data_endpoint(
     WP_REST_Request $request
   ): WP_REST_Response {
+    // Raise the PHP memory ceiling for this request.  The backup snapshot
+    // loads all prior compressed snapshots and the section-sync iterates
+    // every WordPress post, both of which are RAM-heavy for large newspapers.
+    // The @ suppresses the warning on hosts that cap ini_set(); the gzip
+    // compression below dramatically reduces actual peak usage regardless.
+    @ini_set('memory_limit', '1536M');
+
+    // Extend the PHP execution time limit.  On shared hosting the default is
+    // often 30 s — far too short for a large newspaper with many editions.
+    // The backup snapshot alone (read + gzip + write) can take 10-20 s, and
+    // sync_section_posts_from_data() does O(editions × pages × sections) DB
+    // writes on top.  300 s (5 min) is a safe ceiling; @ suppresses the
+    // warning if the host has locked max_execution_time via php.ini.
+    @set_time_limit(300);
+
     $payload = $request->get_json_params();
     if (!is_array($payload)) {
       return new WP_REST_Response(['error' => 'Invalid payload'], 400);
@@ -2478,6 +2583,11 @@ HTML;
         ], 409);
       }
     }
+
+    // $current is only needed for the guards above; free it now so that RAM
+    // is available for the snapshot + section-sync operations in save_data().
+    unset($current);
+    gc_collect_cycles();
 
     // Identify the saving user for audit / snapshot
     $current_user = wp_get_current_user();
