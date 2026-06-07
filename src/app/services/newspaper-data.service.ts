@@ -750,6 +750,20 @@ export class NewspaperDataService {
     return [...new Set(datesWithPages)].sort().reverse();
   }
 
+  /**
+   * Returns every edition date that exists in the data, including newly-created
+   * editions that have no pages yet. Use this in the admin date-picker so that
+   * a fresh empty date doesn't disappear from the list on the next reload.
+   *
+   * Unlike getAvailableDates(), this method does NOT filter by page count.
+   * It is intentionally separate so the public/reader view can still call
+   * getAvailableDates() and only see dates that have actual content.
+   */
+  getAllEditionDates(): string[] {
+    const data = this.getData();
+    return [...new Set(data.editions.map(e => e.date))].sort().reverse();
+  }
+
   // Create or get edition for a date (and optional edition number)
   getOrCreateEdition(date: string, editionNumber: number = 1): NewspaperEdition {
     const existing = this.getEditionByDateAndNumber(date, editionNumber);
