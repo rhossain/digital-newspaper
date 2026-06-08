@@ -3300,9 +3300,14 @@ export class AdminComponent implements OnInit, OnDestroy {
         this.uploadMediaFile(originalFile, hiResFileName)
       ]);
 
+      const prevFullImage = this.pageForm.fullImage;
       this.pageForm.fullImage = displayUrl;
       this.pageForm.fullImageHiRes = hiResUrl;
-      this.previewLoading = true;
+      // Only show the loading skeleton if the src URL actually changed.
+      // When overwriting an image WordPress may return the same URL, in which
+      // case the <img> src won't change and the load event never fires, which
+      // would leave the skeleton visible indefinitely.
+      this.previewLoading = (displayUrl !== prevFullImage);
 
       // Auto-generate a 200px thumbnail from the original if none is set yet.
       if (!this.pageForm.thumbnail) {
@@ -3350,10 +3355,12 @@ export class AdminComponent implements OnInit, OnDestroy {
 
   onFullImagePreviewLoad() {
     this.previewLoading = false;
+    this.cdr.detectChanges();
   }
 
   onFullImagePreviewError() {
     this.previewLoading = false;
+    this.cdr.detectChanges();
   }
 
   async onThumbnailFileSelected(event: Event): Promise<void> {
