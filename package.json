@@ -6,6 +6,8 @@
     "start": "ng serve",
     "dev": "ng serve",
     "build": "ng build",
+    "build:staging": "ng build --configuration staging",
+    "serve:staging": "ng serve --configuration staging",
     "watch": "ng build --watch --configuration development",
     "deploy": "node deploy.js",
     "webhook": "node webhook-server.js"

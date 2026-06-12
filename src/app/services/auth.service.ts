@@ -1,7 +1,7 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable, of, throwError } from 'rxjs';
-import { tap, map, switchMap } from 'rxjs';
+import { tap, map, switchMap, retry } from 'rxjs';
 import { WP_BASE_URL } from '../config';
 
 interface LoginResponse {
@@ -47,6 +47,11 @@ export class AuthService {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
       withCredentials: true,
     }).pipe(
+      // Retry once on network-level failures (status 0: CORS preflight
+      // race, brief connectivity blip).  Do NOT retry on HTTP error
+      // responses (401, 403, etc.) — those mean the credentials were
+      // rejected and retrying would just trigger rate limiting faster.
+      retry({ count: 1, delay: 800, resetOnSuccess: true }),
       map((response) => {
         if (!response?.token) {
           // Detect host-level security block (Imunify360, ModSecurity, etc.).

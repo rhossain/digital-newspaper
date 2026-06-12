@@ -134,13 +134,35 @@ export class EditionCacheService {
   }
 
   /**
-   * Evict a specific date from the in-memory cache.
-   * Called after an atomic page/section save for that date.
-   * localStorage / IDB are NOT cleared — past dates are immutable; today's
-   * date is never persisted to either storage so there is nothing to clear.
+   * Evict a specific date from ALL cache layers (memory + localStorage + IDB).
+   *
+   * Called after an atomic page/section save for that date so the next read
+   * re-fetches from the network.
+   *
+   * CRITICAL DATA-SYNC FIX:
+   *   The previous implementation cleared only the in-memory map, on the
+   *   assumption that past dates are "immutable".  That assumption is FALSE
+   *   in this app: admins routinely edit past editions, and today's edition
+   *   becomes "past" tomorrow.  Without clearing layers 2a (localStorage)
+   *   and 2b (IndexedDB) here, the very next read after a save would hit the
+   *   stale persisted copy and silently return the OLD editions — making
+   *   the newly-added page appear to have never been saved after a reload
+   *   or date re-visit.  This was the root cause of the recurring
+   *   "new page isn't saving / not syncing with backend" complaint.
    */
   evict(date: string): void {
     this._memCache.delete(date);
+    // Layer 2a: localStorage — synchronous, safe to call even if the key
+    // doesn't exist (no-op).  Errors (private-browsing mode, quota issues)
+    // are silently swallowed so they never break the save flow.
+    try {
+      localStorage.removeItem(this._lsKey(date));
+    } catch {
+      // ignore — eviction is best-effort
+    }
+    // Layer 2b: IndexedDB — async, fire-and-forget.  IdbCacheService.delete()
+    // already swallows its own errors internally.
+    void this.idbCache.delete(date);
   }
 
   /**
@@ -225,8 +247,18 @@ export class EditionCacheService {
     }
   }
 
-  /** Persist editions to localStorage (sync) AND IndexedDB (async, fire-and-forget). */
+  /**
+   * Persist editions to localStorage (sync) AND IndexedDB (async, fire-and-forget).
+   *
+   * Only past dates are persisted: today's editions are still being edited
+   * by admins, so caching them on disk would mean a refresh could surface a
+   * version that's seconds-to-minutes out of date relative to the server.
+   * (This matches _persistToLocalStorage's own guard, which was already in
+   * place — IDB now applies the same rule for consistency.)
+   */
   private _persistAll(date: string, editions: NewspaperEdition[]): void {
+    if (!this._isPastDate(date)) return;
+    if (!editions.length) return;
     this._persistToLocalStorage(date, editions);
     // IDB write is async and non-blocking; errors are handled inside IdbCacheService.
     void this.idbCache.set(date, editions);

@@ -453,7 +453,13 @@ export class AdminComponent implements OnInit, OnDestroy {
         const isParseError = err.error instanceof SyntaxError || (err.status === 200 && err.name === 'HttpErrorResponse');
         const msg: string = err?.message ?? '';
         if (err.status === 0) {
-          this.authError = 'Cannot reach WordPress. Verify the WordPress site is online and CORS "Allowed Origins" includes this app\'s URL.';
+          // Status 0 means the browser got no HTTP response — caused by a
+          // brief network drop, a CORS preflight rejection, or the server
+          // being momentarily unreachable.  The auth service already retried
+          // once, so if we're here the problem persisted.
+          this.authError = 'Could not reach the server. Please check your internet connection and try again. '  
+            + 'If the problem persists, ask the site administrator to verify: '  
+            + '(1) WordPress is online, (2) CORS \'Allowed Origins\' in the Digital Newspaper plugin settings includes this site\'s URL.';
         } else if (err.status === 401 || err.status === 400) {
           this.authError = 'Invalid username or password. Please try again.';
         } else if (err.status === 403) {
@@ -527,7 +533,11 @@ export class AdminComponent implements OnInit, OnDestroy {
   private startVersionPoll(): void {
     this.dataService.stopVersionPoll();
     this.dataService.startVersionPoll(30_000);
-    this.dataService.remoteDataChanged$.pipe(takeUntil(this.destroy$)).subscribe(() => {
+    this.dataService.remoteDataChanged$.pipe(takeUntil(this.destroy$)).subscribe((newVersion: number) => {
+      // Immediately adopt the emitted version so the next poll tick (which
+      // fires 30 s later) sees local == server and does NOT fire again while
+      // loadData() is still in flight.
+      this.dataService.patchDataVersionPublic(newVersion);
       if (!this.heldLockResource && !this.isEditingPage && !this.isEditingSection) {
         // Not mid-edit — reload silently then refresh UI
         this.dataService.loadData().subscribe({
@@ -2798,6 +2808,46 @@ export class AdminComponent implements OnInit, OnDestroy {
 
   confirmExport() {
     const opts: ExportOptions = { ...this.exportOptions, currentDate: this.selectedDate };
+
+    // COMPLETENESS FIX: For full or editions-only exports, use the server-side
+    // /data/export-full endpoint.  It reads directly from authoritative per-date
+    // options (dn_edition_YYYY-MM-DD) so EVERY date is included — not just the
+    // 1-2 dates hydrated into browser memory at load time.  Atomic saves
+    // (PUT /data/page, PUT /data/section) write ONLY to per-date options and
+    // never update the in-memory Angular state or the legacy dn_data blob, so
+    // client-side export would silently miss any edits made via those endpoints.
+    //
+    // Settings-only, current-date, and date-range exports continue to use the
+    // in-memory path because the data needed is already loaded.
+    if (opts.exportType !== 'settings-only' && opts.exportScope === 'full') {
+      this.loader.show('Downloading full backup from server…');
+      this.dataService.downloadExportFull().subscribe({
+        next: ({ filename }) => {
+          this.loader.hide();
+          this.toaster.success(`Full backup downloaded: ${filename}`);
+          this.backupHistory = this.dataService.getBackupHistory();
+          this.showExportModal = false;
+          this.activityLog.logClientEvent('export_download', { filename, source: 'server-granular' });
+        },
+        error: (err: any) => {
+          this.loader.hide();
+          console.error('Server export-full failed:', err);
+          // Fall back to in-memory export with a warning about potential incompleteness.
+          this.toaster.warning(
+            'Server export unavailable — falling back to browser-cached data. '
+            + 'This may miss editions not loaded into memory. Error: '
+            + (err?.message || 'Unknown')
+          );
+          const { filename } = this.dataService.downloadExport(opts);
+          this.backupHistory = this.dataService.getBackupHistory();
+          this.showExportModal = false;
+          this.activityLog.logClientEvent('export_download', { filename, source: 'client-fallback' });
+        },
+      });
+      return;
+    }
+
+    // Settings-only / current-date / date-range: in-memory path is sufficient.
     const { filename } = this.dataService.downloadExport(opts);
     this.toaster.success(`Exported: ${filename}`);
     this.backupHistory = this.dataService.getBackupHistory();
@@ -2825,7 +2875,12 @@ export class AdminComponent implements OnInit, OnDestroy {
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
-        const raw = e.target?.result as string;
+        // BANGLA SAFETY: explicitly request UTF-8 decoding (same encoding the
+        // server used when writing the file).  Also strip the UTF-8 BOM
+        // (\uFEFF) — some editors/OS tools prepend it when saving UTF-8 files,
+        // which causes JSON.parse() to throw "Unexpected token \uFEFF" even
+        // though the rest of the file is valid JSON.
+        const raw = ((e.target?.result as string) ?? '').replace(/^\uFEFF/, '');
         const parsed = JSON.parse(raw);
         const validation = this.dataService.validateImportPayload(parsed);
         const preview = validation.valid ? this.dataService.buildImportPreview(parsed) : null;
@@ -2855,7 +2910,10 @@ export class AdminComponent implements OnInit, OnDestroy {
       this.loader.hide();
       this.toaster.error('Failed to read the backup file.');
     };
-    reader.readAsText(file);
+    // BANGLA SAFETY: explicit UTF-8 encoding prevents the browser from
+    // guessing a single-byte charset for files without a BOM, which would
+    // corrupt multi-byte Bangla codepoints before JSON.parse() even runs.
+    reader.readAsText(file, 'utf-8');
   }
 
   closeImportModal() {
@@ -2876,7 +2934,16 @@ export class AdminComponent implements OnInit, OnDestroy {
     this.toaster.info('Auto-backup downloaded. Starting import…');
 
     const mergedData = this.dataService.applyImport(this.importParsed, this.importOptions);
-    this.dataService.saveData(mergedData).subscribe({
+
+    // SAFETY: always pass forceEmptyOverwrite=true for user-initiated imports.
+    // The server's shrinking-overwrite guard exists to protect against
+    // ACCIDENTAL data truncation (e.g. a buggy save that sends fewer editions
+    // than are on the server).  An explicit import where the user has already
+    // seen the preview and clicked "Confirm Import" is intentional — blocking
+    // it with a 409 is the wrong behaviour and gives a confusing error.
+    // The pre-import auto-backup above ensures the user can recover if they
+    // chose the wrong file.
+    this.dataService.saveData(mergedData, { forceEmptyOverwrite: true }).subscribe({
       next: () => {
         this.isImporting = false;
         this.loader.hide();
@@ -2905,11 +2972,15 @@ export class AdminComponent implements OnInit, OnDestroy {
           error: (err) => console.error('Error reloading after import:', err)
         });
       },
-      error: (err) => {
+      error: (err: any) => {
         this.isImporting = false;
         this.loader.hide();
         console.error('Import failed:', err);
-        this.toaster.error('Failed to import: ' + (err.message || 'Unknown error'));
+        // Extract the most useful error message: prefer the server's 'error'
+        // or 'message' field (from the REST response body) over the generic
+        // Angular HttpErrorResponse message.
+        const serverMsg = err?.error?.error || err?.error?.message || err?.message || 'Unknown error';
+        this.toaster.error('Import failed: ' + serverMsg);
       }
     });
   }
@@ -3128,8 +3199,32 @@ export class AdminComponent implements OnInit, OnDestroy {
     // overwrite newly-saved data from another user.
     if (this.adminTheme !== 'vintage') return;
     if (!this.hasUnsavedChanges) return;
-    if (this.loader.isSaving) return;   // guard defined below
-    this.saveAllData();
+    if (this.loader.isSaving) return;
+
+    // Use the targeted editions-for-date atomic endpoint instead of a full
+    // POST /data save.  The full save sends only the 1-2 dates held in
+    // memory (granular loading only hydrates recent dates) and is blocked by
+    // the server's shrinking-overwrite guard on any site with >5 historical
+    // dates.  The atomic endpoint writes ONLY the current date's edition
+    // array — no blob write, no shrinking-overwrite check.
+    this.dataService.saveEditionsForDateAtomically(this.selectedDate).subscribe({
+      next: () => {
+        this.markSaved();
+      },
+      error: (err: any) => {
+        // Atomic endpoint unavailable (old server without the new route) —
+        // fall back to the full save so older deployments keep working.
+        const status = err?.status;
+        if (status === 404 || status === 405) {
+          this.saveAllData();
+          return;
+        }
+        // Any other error: mark unsaved so the user knows to retry.
+        this.markUnsavedChanges();
+        const msg = err?.error?.message || err?.message || `HTTP ${status}`;
+        this.toaster.warning(`Auto-save failed: ${msg}. Changes are in memory — click Save All to retry.`);
+      }
+    });
   }
 
   menuGoToDates(): void {
@@ -3563,13 +3658,11 @@ export class AdminComponent implements OnInit, OnDestroy {
     this.activityLog.track('settings_save');
     const completeSettings = this.commitSettingsFormToData();
 
-    // Get the updated data after settings change
-    const currentData = this.dataService.getData();
     console.log('Saving settings:', completeSettings);
-    console.log('Complete data structure:', currentData);
-    
-    // Save to backend
-    this.dataService.saveData(currentData).subscribe({
+
+    // Use the dedicated PATCH /data/settings endpoint so the editions data is
+    // never included in the payload — prevents the shrinking-overwrite 409.
+    this.dataService.saveSettingsOnly(completeSettings).subscribe({
       next: () => {
         console.log('Settings saved successfully');
         this.markSaved();

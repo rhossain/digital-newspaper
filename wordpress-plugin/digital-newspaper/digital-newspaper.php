@@ -1081,7 +1081,21 @@ class Digital_Newspaper_API {
       }
     } else {
       foreach ($editions_by_date as $date => $editions) {
-        update_option($this->edition_option_key($date), $editions, false);
+        $ok = update_option($this->edition_option_key($date), $editions, false);
+        if (!$ok) {
+          // Verify write landed (same logic as the scoped path above).
+          global $wpdb;
+          $verify = get_option($this->edition_option_key($date), null);
+          $verify_ok = is_array($verify) && !empty($verify)
+            && $this->edition_array_signature($verify) === $this->edition_array_signature($editions);
+          if (!$verify_ok) {
+            $db_err = trim((string) ($wpdb->last_error ?? ''));
+            error_log(
+              '[DigitalNewspaper] write_per_date_storage: update_option failed for date '
+              . $date . ($db_err !== '' ? ' (DB: ' . $db_err . ')' : ' (value mismatch after verify read)')
+            );
+          }
+        }
       }
     }
 
@@ -1358,13 +1372,32 @@ class Digital_Newspaper_API {
       $editionCnt = count($dates);
     }
 
+    // Count how many per-date options actually exist (granular storage).
+    // A snapshot of dn_data is only a backup of the BLOB; editions saved
+    // AFTER the last full POST /data save (via atomic PUT /data/page or
+    // PUT /data/section) live ONLY in dn_edition_* options and are NOT in
+    // the blob.  We record this count so the Angular restore UI can warn
+    // the user if the blob snapshot predates recent atomic edits.
+    $granular_dates      = $this->extract_dates_from_per_date_options();
+    $granular_date_count = count($granular_dates);
+    $blob_date_count     = count($dates);
+    // Flag: are there granular dates not covered by this blob snapshot?
+    $granular_has_extra  = $granular_date_count > $blob_date_count;
+    unset($granular_dates);
+
     $entry = [
-      'createdAt'    => gmdate('c'),
-      'savedBy'      => $saved_by ?: 'system',
-      'editionCount' => $editionCnt,
-      'pageCount'    => -1,   // Not computed — avoids deserializing the blob
-      'sectionCount' => -1,   // Not computed — avoids deserializing the blob
-      'latestDates'  => array_slice($dates, 0, 10),
+      'createdAt'          => gmdate('c'),
+      'savedBy'            => $saved_by ?: 'system',
+      'editionCount'       => $editionCnt,
+      'pageCount'          => -1,   // Not computed — avoids deserializing the blob
+      'sectionCount'       => -1,   // Not computed — avoids deserializing the blob
+      'latestDates'        => array_slice($dates, 0, 10),
+      // Coverage metadata: lets the restore UI warn if this blob snapshot
+      // may be missing editions that only exist in per-date options.
+      'blobDateCount'      => $blob_date_count,
+      'granularDateCount'  => $granular_date_count,
+      'granularHasExtra'   => $granular_has_extra,
+      'snapshotSource'     => 'dn_data_blob',
     ];
     unset($dates, $index);
 
@@ -1372,8 +1405,17 @@ class Digital_Newspaper_API {
     if (function_exists('gzcompress')) {
       $gz_raw = gzcompress($raw_serial, 6);
       unset($raw_serial);
-      $entry['data_gz_serial'] = base64_encode($gz_raw);
-      unset($gz_raw);
+      if ($gz_raw !== false) {
+        $entry['data_gz_serial'] = base64_encode($gz_raw);
+        unset($gz_raw);
+      } else {
+        // gzcompress() failed (corrupted input, zlib error). Fall back to
+        // storing the raw PHP-serialized string so the backup is still
+        // restorable, just uncompressed.
+        error_log('[DigitalNewspaper] snapshot_current_data_before_save: gzcompress() failed — storing uncompressed backup instead.');
+        $entry['data_serial'] = $raw_serial;
+        unset($raw_serial);
+      }
     } else {
       // zlib not available: store the serialized string directly.
       // It's a string, not an array — the restore code handles this.
@@ -1395,7 +1437,14 @@ class Digital_Newspaper_API {
     array_unshift($backups, $entry);
     unset($entry);
 
-    update_option(self::OPTION_BACKUPS, $backups, false);
+    $backup_written = update_option(self::OPTION_BACKUPS, $backups, false);
+    if (!$backup_written) {
+      // update_option returns false when (a) the value is byte-identical to
+      // the stored copy (shouldn't happen here since we prepended a new entry)
+      // or (b) a DB/serialization error prevented the write.  Log so the admin
+      // can investigate without the save operation blocking.
+      error_log('[DigitalNewspaper] snapshot_current_data_before_save: update_option(dn_data_backups) returned false — backup rotation may not have been saved. Check DB disk space and max_allowed_packet.');
+    }
 
     // Free the backup array before returning to save_data() which still
     // needs RAM for the section-post sync.
@@ -1711,10 +1760,18 @@ class Digital_Newspaper_API {
 
     // GET /data/settings — global settings only (logo, theme, social links).
     // Cached for 1 hour; settings change rarely.
+    // PATCH /data/settings — update only the settings object without touching editions.
     register_rest_route('digital-newspaper/v1', '/data/settings', [
-      'methods'             => 'GET',
-      'callback'            => [$this, 'get_settings_endpoint'],
-      'permission_callback' => '__return_true',
+      [
+        'methods'             => 'GET',
+        'callback'            => [$this, 'get_settings_endpoint'],
+        'permission_callback' => '__return_true',
+      ],
+      [
+        'methods'             => 'PATCH',
+        'callback'            => [$this, 'patch_settings_endpoint'],
+        'permission_callback' => [$this, 'auth_required'],
+      ],
     ]);
 
     // GET /data/dates — sorted list of available edition dates.
@@ -1793,6 +1850,35 @@ class Digital_Newspaper_API {
         'methods' => 'POST',
         'callback' => [$this, 'rebuild_data_from_sections_endpoint'],
         'permission_callback' => [$this, 'admin_required']
+      ]
+    ]);
+
+    // ── Atomic edition-structure save for a single date ────────────────────
+    // Saves ALL editions for one specific date without touching any other date.
+    // Used by the vintage admin theme's auto-save after structural changes
+    // (new edition, edition label rename, new date, edition deletion).
+    // Bypasses the shrinking-overwrite guard (which blocks full-blob saves when
+    // the in-memory state only has 1-2 dates) because we write only to the
+    // targeted dn_edition_{date} option — never to the full dn_data blob.
+    register_rest_route('digital-newspaper/v1', '/data/editions-for-date', [
+      [
+        'methods'             => 'PUT',
+        'callback'            => [$this, 'put_editions_for_date_endpoint'],
+        'permission_callback' => [$this, 'admin_required'],
+      ]
+    ]);
+
+    // ── Full server-side export ────────────────────────────────────────────
+    // Reads DIRECTLY from authoritative granular storage (dn_settings +
+    // dn_data_index + dn_edition_{date} options) rather than the in-memory
+    // Angular state or the potentially-stale dn_data blob.  This is the only
+    // reliable way to export ALL editions including those saved via atomic
+    // endpoints that never write to the dn_data blob.
+    register_rest_route('digital-newspaper/v1', '/data/export-full', [
+      [
+        'methods'             => 'GET',
+        'callback'            => [$this, 'export_full_endpoint'],
+        'permission_callback' => [$this, 'admin_required'],
       ]
     ]);
 
@@ -2806,6 +2892,78 @@ HTML;
   }
 
   /**
+   * PATCH /digital-newspaper/v1/data/settings
+   *
+   * Updates only the global settings object (logo, social links, language, etc.)
+   * without touching the editions data.  This avoids triggering the
+   * shrinking-overwrite guard that fires when the admin saves settings while
+   * only a subset of editions are loaded in the browser.
+   *
+   * Request body: { "settings": { ...GlobalSettings } }
+   * Response:     { "success": true, "newDataVersion": float, "settings": {...} }
+   */
+  public function patch_settings_endpoint(WP_REST_Request $request): WP_REST_Response {
+    @ini_set('memory_limit', '512M');
+    @set_time_limit(60);
+
+    $body = $request->get_json_params();
+    if (!is_array($body) || !isset($body['settings']) || !is_array($body['settings'])) {
+      return new WP_REST_Response(['error' => 'Request body must be JSON with a "settings" key.'], 400);
+    }
+
+    // Sanitize: only keep known scalar/array keys; strip anything unexpected.
+    $incoming = $body['settings'];
+    $allowed_keys = [
+      'defaultDateMode', 'language', 'editor',
+      'logo', 'address', 'socialLinks',
+      'theme', 'primaryColor', 'accentColor',
+      'paperName', 'paperNameBengali', 'tagline', 'taglineBengali',
+      'phone', 'email', 'website', 'established',
+      'metaTitle', 'metaDescription', 'favicon',
+      'headerAdBanner', 'footerAdBanner',
+      'subscriptionEnabled', 'subscriptionPrice',
+      'contactEmail', 'contactPhone',
+    ];
+    $settings = array_intersect_key($incoming, array_flip($allowed_keys));
+
+    // Stamp a new version so the client can detect the update.
+    $new_version = (float) microtime(true);
+
+    // ── Write 1: granular dn_settings option (primary read path) ──────────
+    update_option(self::OPTION_SETTINGS, $settings, false);
+
+    // ── Write 2: bump dataVersion in dn_data_index ────────────────────────
+    $index = get_option(self::OPTION_INDEX);
+    if (is_array($index)) {
+      $index['dataVersion'] = $new_version;
+      update_option(self::OPTION_INDEX, $index, false);
+    }
+
+    // ── Write 3: patch settings key inside the dn_data blob (back-compat) ─
+    // Read the blob, update only the settings key, write back.
+    // This keeps the monolith blob usable as a fallback without triggering
+    // the shrinking-overwrite guard (we never touch the editions array).
+    $blob = get_option(self::OPTION_KEY);
+    if (is_array($blob)) {
+      $blob['settings']    = $settings;
+      $blob['dataVersion'] = $new_version;
+      update_option(self::OPTION_KEY, $blob, false);
+      unset($blob);
+    }
+
+    // Activity log
+    $this->log_auth_user_action('patch_settings', 'Saved global settings', [
+      'newDataVersion' => (string) $new_version,
+    ]);
+
+    return rest_ensure_response([
+      'success'        => true,
+      'newDataVersion' => $new_version,
+      'settings'       => $this->normalize_domain_urls($settings),
+    ]);
+  }
+
+  /**
    * GET /digital-newspaper/v1/data/dates
    *
    * Returns the sorted list of edition dates that have at least one page,
@@ -3195,6 +3353,137 @@ HTML;
     ]);
   }
 
+  /**
+   * GET /digital-newspaper/v1/data/export-full
+   *
+   * Assembles a complete, authoritative export of ALL newspaper data by reading
+   * directly from the granular per-date storage (dn_settings + dn_data_index +
+   * dn_edition_{YYYY-MM-DD} options).  This is the ONLY way to guarantee the
+   * export is up-to-date when atomic saves (PUT /data/page, PUT /data/section)
+   * have been used — those endpoints update per-date options but intentionally
+   * skip the legacy dn_data blob for performance, so the blob can be stale.
+   *
+   * BANGLA SAFETY: wp_json_encode() is called with JSON_UNESCAPED_UNICODE so
+   * every Bangla codepoint (U+0980–U+09FF) is written as its literal UTF-8
+   * byte sequence ("বাংলা") rather than as \uXXXX escape sequences.  This
+   * guarantees round-trip correctness through any JSON parser regardless of
+   * whether the consuming system understands Unicode escapes.
+   *
+   * The Angular client's downloadExportFull() method calls this endpoint and
+   * writes the response bytes to a .json file via a UTF-8 Blob, preserving
+   * the encoding end-to-end.
+   *
+   * @return WP_REST_Response  { meta, settings, editions, dataVersion }
+   */
+  public function export_full_endpoint(WP_REST_Request $request): WP_REST_Response {
+    // Raise limits: reading every per-date option can be heavy on large archives.
+    @ini_set('memory_limit', '512M');
+    @set_time_limit(120);
+
+    // ── 1. Settings ────────────────────────────────────────────────────────
+    $settings = get_option(self::OPTION_SETTINGS);
+    if (!is_array($settings) || empty($settings)) {
+      // Fall back to the blob's settings (may exist on un-migrated installs).
+      $blob     = get_option(self::OPTION_KEY);
+      $settings = (is_array($blob) && isset($blob['settings'])) ? $blob['settings'] : self::default_data()['settings'];
+      unset($blob);
+    }
+
+    // ── 2. Date list ───────────────────────────────────────────────────────
+    // Primary source: dn_data_index (always up-to-date after any save).
+    $index       = get_option(self::OPTION_INDEX);
+    $dates       = is_array($index) && is_array($index['dates'] ?? null) ? (array) $index['dates'] : [];
+    $dataVersion = is_array($index) && isset($index['dataVersion']) ? (float) $index['dataVersion'] : 0.0;
+    unset($index);
+
+    // Fallback 1: scan actual dn_edition_* option keys in MySQL — catches dates
+    // that are in per-date options but were NOT recorded in dn_data_index (e.g.
+    // after a partial/interrupted migration).
+    $optionDates = $this->extract_dates_from_per_date_options();
+    if (!empty($optionDates)) {
+      $dates = array_values(array_unique(array_merge($dates, $optionDates)));
+    }
+    unset($optionDates);
+
+    // Fallback 2: if still empty, try the legacy dn_data blob dates.
+    if (empty($dates)) {
+      $blob = get_option(self::OPTION_KEY);
+      if (is_array($blob) && is_array($blob['editions'] ?? null)) {
+        foreach ($blob['editions'] as $ed) {
+          $d = (string) ($ed['date'] ?? '');
+          if ($d !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $d)) {
+            $dates[] = $d;
+          }
+        }
+        $dates       = array_values(array_unique($dates));
+        $dataVersion = (float) ($blob['dataVersion'] ?? microtime(true));
+        unset($blob);
+      }
+    }
+
+    rsort($dates); // newest first (matches Angular expectations)
+
+    // ── 3. Load all editions from per-date options ─────────────────────────
+    // BANGLA: The serialized PHP strings in each option contain literal UTF-8
+    // bytes.  WordPress's unserialize() restores them faithfully.  There is no
+    // encoding conversion at this stage — the bytes that were saved come back
+    // unchanged.
+    $all_editions = [];
+    foreach ($dates as $date) {
+      if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) $date)) {
+        continue;
+      }
+      $editions_for_date = get_option($this->edition_option_key($date), null);
+      if (is_array($editions_for_date) && !empty($editions_for_date)) {
+        foreach ($editions_for_date as $ed) {
+          if (is_array($ed)) {
+            $all_editions[] = $ed;
+          }
+        }
+      }
+      unset($editions_for_date);
+      // Prevent memory buildup on very large archives.
+      if (count($all_editions) > 0 && count($all_editions) % 30 === 0) {
+        gc_collect_cycles();
+      }
+    }
+
+    // Sort: newest date first, edition number ascending within a date.
+    usort($all_editions, static function (array $a, array $b): int {
+      $d = strcmp((string) ($b['date'] ?? ''), (string) ($a['date'] ?? ''));
+      return $d !== 0 ? $d : ((int) ($a['edition'] ?? 1)) <=> ((int) ($b['edition'] ?? 1));
+    });
+
+    // ── 4. Assemble export envelope ────────────────────────────────────────
+    // The 'exportSource' field in meta lets the Angular importer know this
+    // came from the authoritative server store (not cached browser memory),
+    // so it can skip the "are you sure?" URL-mismatch warning for same-server
+    // exports.
+    $export = [
+      'meta'        => [
+        'exportedAt'    => gmdate('c'),
+        'schemaVersion' => 2,
+        'sourceUrl'     => home_url(),
+        'exportScope'   => 'full',
+        'exportType'    => 'full',
+        'editionCount'  => count($all_editions),
+        'dateCount'     => count($dates),
+        'exportSource'  => 'server-granular',
+      ],
+      'settings'    => $settings,
+      'editions'    => $all_editions,
+      'dataVersion' => $dataVersion,
+    ];
+
+    // ── 5. Return response ─────────────────────────────────────────────────
+    // WordPress will encode the PHP array via wp_json_encode() with
+    // JSON_UNESCAPED_UNICODE, so Bangla text appears as literal UTF-8 in the
+    // HTTP response body.  The Angular client reads this with response type
+    // 'text', writes it to a Blob([], { type: 'application/json;charset=utf-8' })
+    // and triggers a download — preserving the encoding end-to-end.
+    return rest_ensure_response($export);
+  }
+
   public function list_data_backups_endpoint(WP_REST_Request $request): WP_REST_Response {
     $backups = $this->get_data_backups();
     $items = [];
@@ -3228,13 +3517,17 @@ HTML;
         $serial = @gzuncompress($gz);
         unset($gz);
         if ($serial !== false) {
-          $restore_data = @unserialize($serial); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions
+          // SECURITY: 'allowed_classes' => false prevents PHP Object Injection.
+          // Backup data contains only plain arrays/scalars — no custom classes
+          // are ever serialized into dn_data, so this restriction is safe and
+          // eliminates the object-injection attack surface entirely.
+          $restore_data = @unserialize($serial, ['allowed_classes' => false]); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions
           unset($serial);
           if (!is_array($restore_data)) $restore_data = null;
         }
       }
     } elseif (!empty($backup_entry['data_serial'])) {
-      $restore_data = @unserialize((string) $backup_entry['data_serial']); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions
+      $restore_data = @unserialize((string) $backup_entry['data_serial'], ['allowed_classes' => false]); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions
       if (!is_array($restore_data)) $restore_data = null;
     } elseif (!empty($backup_entry['data_gz']) && function_exists('gzuncompress')) {
       $raw = base64_decode((string) $backup_entry['data_gz'], true);
@@ -3252,6 +3545,26 @@ HTML;
       return new WP_REST_Response(['error' => 'Backup data is unavailable or corrupted'], 500);
     }
 
+    // ── Structural integrity check ─────────────────────────────────────────
+    // Validate minimum required structure before overwriting live data.
+    // An empty editions array or a missing settings key would silently wipe
+    // the newspaper if accepted without this guard.
+    $editions_count = is_array($restore_data['editions'] ?? null)
+      ? count($restore_data['editions'])
+      : -1;
+    if ($editions_count < 0) {
+      return new WP_REST_Response([
+        'error'   => 'Backup data has invalid structure (missing editions array) — restore aborted.',
+        'detail'  => 'The backup exists but does not contain a valid editions array. It may be corrupted.',
+      ], 422);
+    }
+    // Warn but allow zero-edition restores only when the backup itself was
+    // empty (fresh-install snapshots). The admin must confirm intentionally
+    // through the UI by noting the editionCount shown in the backup list.
+    if ($editions_count === 0) {
+      error_log('[DigitalNewspaper] restore_data_backup_endpoint: restoring a backup with 0 editions (index=' . $index . ', createdAt=' . ($backup_entry['createdAt'] ?? 'unknown') . ')');
+    }
+
     $restore_user = wp_get_current_user();
     $restore_by   = ($restore_user && $restore_user->ID)
       ? ($restore_user->display_name ?: $restore_user->user_login)
@@ -3263,13 +3576,141 @@ HTML;
     unset($backups, $backup_entry);
     gc_collect_cycles();
 
-    $this->save_data($restore_data, 'restore:' . $restore_by);  // version auto-stamped
+    try {
+      $this->save_data($restore_data, 'restore:' . $restore_by);  // version auto-stamped
+    } catch (\Throwable $e) {
+      error_log('[DigitalNewspaper] restore_data_backup_endpoint save_data failed: ' . $e->getMessage() . ' in ' . $e->getFile() . ':' . $e->getLine());
+      return new WP_REST_Response([
+        'error'   => 'Restore failed during save: ' . $e->getMessage(),
+        'file'    => basename($e->getFile()),
+        'line'    => $e->getLine(),
+        'peakMem' => function_exists('memory_get_peak_usage') ? memory_get_peak_usage(true) : null,
+      ], 500);
+    }
+    unset($restore_data);
+
     $this->log_auth_user_action('restore_backup', 'Restored backup #' . $index, ['backupIndex' => (string) $index, 'backupCreatedAt' => $summary['createdAt'] ?? '']);
 
     return rest_ensure_response([
       'success'  => true,
       'restored' => $summary,
     ]);
+  }
+
+  /**
+   * PUT /digital-newspaper/v1/data/editions-for-date
+   *
+   * Atomically saves ALL editions for a SINGLE date without touching any other
+   * date's data or writing to the legacy dn_data blob.
+   *
+   * Purpose: the vintage admin theme performs structural changes (new edition,
+   * edition label rename, date creation, edition deletion) and needs to persist
+   * them immediately.  The standard full-blob POST /data endpoint is blocked by
+   * the shrinking-overwrite guard when the in-memory Angular state only contains
+   * 1-2 recently-loaded dates but the server archive has many more.  This
+   * targeted endpoint bypasses that guard entirely because it only updates the
+   * single affected date's dn_edition_{date} option.
+   *
+   * Body: { date: string, editions: NewspaperEdition[] }
+   */
+  public function put_editions_for_date_endpoint(WP_REST_Request $request): WP_REST_Response {
+    @ini_set('memory_limit', '256M');
+    @set_time_limit(60);
+    $this->install_fatal_response_handler('PUT /data/editions-for-date');
+
+    try {
+      $body     = $request->get_json_params();
+      $date     = sanitize_text_field((string) ($body['date'] ?? ''));
+      $editions = $body['editions'] ?? null;
+
+      // Validate date
+      $date_err = $this->validate_date_format($date);
+      if ($date_err) {
+        return new WP_REST_Response(['error' => 'Validation failed', 'fields' => ['date' => $date_err]], 422);
+      }
+
+      // Validate editions array
+      if (!is_array($editions)) {
+        return new WP_REST_Response(['error' => 'Validation failed', 'fields' => ['editions' => 'editions must be an array']], 422);
+      }
+
+      // Sanitize and normalise: keep only editions that belong to this date.
+      $clean_editions = [];
+      foreach ($editions as $ed) {
+        if (!is_array($ed)) continue;
+        $ed_date = (string) ($ed['date'] ?? '');
+        if ($ed_date !== $date) continue; // guard against cross-date contamination
+        $clean_editions[] = $ed;
+      }
+
+      // Restore page content from server storage.
+      // The Angular client intentionally omits 'pages' from the payload because
+      // pages/sections are managed by their own atomic PUT endpoints and are
+      // already up-to-date in dn_edition_{date}.  We load the authoritative
+      // server copy and merge it back so no page data is lost on save.
+      $existing_raw      = get_option('dn_edition_' . $date, []);
+      // dn_edition_{date} is stored as a plain indexed array of edition objects
+      // (not wrapped in ['editions' => [...]]) — matches write_per_date_storage()
+      // and get_data_scoped_to_date(). The old ['editions'] key lookup always
+      // returned null, so pages were silently discarded on every autoSave call.
+      $existing_editions = is_array($existing_raw) ? array_values($existing_raw) : [];
+
+      $existing_pages_by_edition = [];
+      foreach ($existing_editions as $ex_ed) {
+        if (!is_array($ex_ed)) continue;
+        $ed_num = isset($ex_ed['edition']) ? (int) $ex_ed['edition'] : 1;
+        $existing_pages_by_edition[$ed_num] = $ex_ed['pages'] ?? [];
+      }
+
+      $merged = [];
+      foreach ($clean_editions as $ed) {
+        $ed_num        = isset($ed['edition']) ? (int) $ed['edition'] : 1;
+        // If the client sent pages (older client compatibility), keep them.
+        // Otherwise restore from server storage; brand-new editions get [].
+        if (!isset($ed['pages']) || !is_array($ed['pages'])) {
+          $ed['pages'] = $existing_pages_by_edition[$ed_num] ?? [];
+        }
+        $merged[] = $ed;
+      }
+      $clean_editions = $merged;
+
+      // Build a minimal NewspaperData envelope that save_data() expects.
+      $settings = get_option(self::OPTION_SETTINGS, self::default_data()['settings']);
+      if (!is_array($settings)) {
+        $settings = self::default_data()['settings'];
+      }
+      $index        = get_option(self::OPTION_INDEX);
+      $dataVersion  = (is_array($index) && isset($index['dataVersion']))
+        ? (float) $index['dataVersion']
+        : (float) microtime(true);
+
+      $data = [
+        'dataVersion' => $dataVersion,
+        'settings'    => $settings,
+        'editions'    => $clean_editions,
+      ];
+
+      // $only_date = $date:  write ONLY dn_edition_{date} and update the index.
+      //   - Skips the dn_data blob write (no memory spike, no blob growth).
+      //   - Bypasses the shrinking-overwrite guard (Guard 3 only applies to POST /data).
+      //   - Uses the same write-verify logic as put_page_endpoint.
+      // throttle_snapshot = true: edition structure saves should share backup slots.
+      // sync_posts = false: no section content changed.
+      $result = $this->save_data($data, $this->current_user_display(), 0.0, true, false, $date);
+
+      $this->log_auth_user_action('editions_save', 'Saved editions for date (atomic)', [
+        'date'         => $date,
+        'editionCount' => (string) count($clean_editions),
+      ]);
+
+      return rest_ensure_response(['success' => true, 'newDataVersion' => $result['newDataVersion']]);
+    } catch (\Throwable $e) {
+      error_log('[DigitalNewspaper] put_editions_for_date_endpoint fatal: ' . $e->getMessage() . ' in ' . $e->getFile() . ':' . $e->getLine());
+      return new WP_REST_Response([
+        'error'   => 'internal_error',
+        'message' => $e->getMessage(),
+      ], 500);
+    }
   }
 
   public function rebuild_data_from_sections_endpoint(WP_REST_Request $request): WP_REST_Response {
@@ -3353,7 +3794,26 @@ HTML;
 
           // autoload=false — these can grow large and must NOT be loaded
           // on every WP request.
-          update_option($this->edition_option_key($date), $editions, false);
+          $ok = update_option($this->edition_option_key($date), $editions, false);
+          if (!$ok) {
+            // Verify whether the write actually landed (same pattern as write_per_date_storage).
+            // update_option() returns false for two reasons:
+            //   (a) DB write failed  — real data-loss risk, must not record in $writtenDates
+            //   (b) Value unchanged  — benign on a rebuild (shouldn't happen, but safe to allow)
+            $verify     = get_option($this->edition_option_key($date), null);
+            $verify_ok  = is_array($verify) && !empty($verify)
+              && $this->edition_array_signature($verify) === $this->edition_array_signature($editions);
+            if (!$verify_ok) {
+              global $wpdb;
+              $db_err = trim((string) ($wpdb->last_error ?? ''));
+              $perDateErrors[$date] = 'update_option failed'
+                . ($db_err !== '' ? ' (DB: ' . $db_err . ')' : ' (verify read does not match)');
+              error_log('[DigitalNewspaper] rebuild per-date write failed for ' . $date . ': ' . $perDateErrors[$date]);
+              unset($editions, $verify);
+              continue; // Do NOT add to $writtenDates — write did not land.
+            }
+            unset($verify);
+          }
           $writtenDates[] = $date;
 
           // Free per-date memory before the next iteration.
@@ -4171,7 +4631,13 @@ HTML;
       return new WP_REST_Response(['error' => 'Invalid payload'], 400);
     }
 
-    $force = $request->get_param('force') === '1' || $request->get_param('force') === 'true';
+    // SECURITY: normalise ?force to a strict boolean. Only the exact strings
+    // '1' and 'true' (case-insensitive) activate force mode. Anything else —
+    // '1.0', 'TRUE', 'yes', 'on', etc. — is rejected as false.  This prevents
+    // accidental or malicious bypass of the shrinking-overwrite / empty-dataset
+    // guards by passing unexpected truthy values.
+    $force_raw = strtolower(trim((string) $request->get_param('force')));
+    $force     = $force_raw === '1' || $force_raw === 'true';
 
     // ── Guard 1: refuse to overwrite pages with an empty dataset ────────────
     // MEM-OPT: Instead of loading the full dn_data blob into PHP memory just
@@ -4770,7 +5236,13 @@ HTML;
       return $this->locked_response($resource);
     }
 
-    $data = $this->get_data();
+    // DATA-LOSS FIX: use the scoped per-date read (dn_edition_{date}) instead
+    // of the full dn_data blob.  The blob is only refreshed on full POST /data
+    // saves; atomic PUT /data/section and PUT /data/page writes bypass it
+    // entirely.  Reading the stale blob here and writing it back via
+    // only_date=$date would silently overwrite any section/page changes made
+    // since the last full save.
+    $data = $this->get_data_scoped_to_date($date);
 
     foreach ($data['editions'] as &$ed) {
       if ((string)($ed['date'] ?? '') === $date && (int)($ed['edition'] ?? 1) === $edition) {
@@ -4787,7 +5259,18 @@ HTML;
     // rewrite on every page mutation.  sync_posts left at default (true)
     // because deleting a page may orphan dn_section posts that the full sync
     // will trash.
-    $result = $this->save_data($data, $this->current_user_display(), 0.0, true, true, $date);
+    try {
+      $result = $this->save_data($data, $this->current_user_display(), 0.0, true, true, $date);
+    } catch (\Throwable $e) {
+      error_log('[DigitalNewspaper] delete_page_endpoint save_data failed: ' . $e->getMessage() . ' in ' . $e->getFile() . ':' . $e->getLine());
+      return new WP_REST_Response([
+        'error'   => 'internal_error',
+        'message' => $e->getMessage(),
+        'file'    => basename($e->getFile()),
+        'line'    => $e->getLine(),
+        'peakMem' => function_exists('memory_get_peak_usage') ? memory_get_peak_usage(true) : null,
+      ], 500);
+    }
 
     $this->log_auth_user_action('page_delete', 'Deleted page (atomic)', [
       'date'    => $date,
@@ -4984,7 +5467,12 @@ HTML;
       return $this->locked_response($resource);
     }
 
-    $data = $this->get_data();
+    // DATA-LOSS FIX: use the scoped per-date read (dn_edition_{date}) instead
+    // of the full dn_data blob.  Atomic saves (PUT /data/page, PUT /data/section)
+    // write ONLY to the per-date option and never update the blob; reading the
+    // blob here then writing it back via only_date=$date would overwrite those
+    // changes with stale data.
+    $data = $this->get_data_scoped_to_date($date);
 
     foreach ($data['editions'] as &$ed) {
       if ((string)($ed['date'] ?? '') === $date && (int)($ed['edition'] ?? 1) === $edition) {
@@ -5004,7 +5492,18 @@ HTML;
 
     // Snapshot throttled for atomic section deletes to preserve backup history.
     // only_date = $date: write only the affected date's per-date option (PERF).
-    $result = $this->save_data($data, $this->current_user_display(), 0.0, true, true, $date);
+    try {
+      $result = $this->save_data($data, $this->current_user_display(), 0.0, true, true, $date);
+    } catch (\Throwable $e) {
+      error_log('[DigitalNewspaper] delete_section_endpoint save_data failed: ' . $e->getMessage() . ' in ' . $e->getFile() . ':' . $e->getLine());
+      return new WP_REST_Response([
+        'error'   => 'internal_error',
+        'message' => $e->getMessage(),
+        'file'    => basename($e->getFile()),
+        'line'    => $e->getLine(),
+        'peakMem' => function_exists('memory_get_peak_usage') ? memory_get_peak_usage(true) : null,
+      ], 500);
+    }
 
     $this->log_auth_user_action('section_delete', 'Deleted section (atomic)', [
       'date'      => $date,
@@ -5411,10 +5910,25 @@ HTML;
     if ($origin) {
       $allowed = $this->get_allowed_origins();
       if ($allowed && in_array($origin, $allowed, true)) {
+        // Remove any CORS headers that WordPress core or other plugins may
+        // have already queued.  WordPress's own rest_send_cors_headers() can
+        // set "Access-Control-Allow-Origin: *".  A wildcard origin is
+        // incompatible with withCredentials=true (browsers reject the
+        // response), so we must replace it with our specific-origin header
+        // before the response is flushed.
+        header_remove('Access-Control-Allow-Origin');
+        header_remove('Access-Control-Allow-Methods');
+        header_remove('Access-Control-Allow-Headers');
+        header_remove('Access-Control-Allow-Credentials');
+
         header('Access-Control-Allow-Origin: ' . $origin);
         header('Vary: Origin');
         header('Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS');
-        header('Access-Control-Allow-Headers: Authorization, X-Authorization, Content-Type');
+        // X-Requested-With is added by the Angular interceptor on every
+        // request; it must appear here (in addition to the OPTIONS preflight
+        // handler) so browsers that check the actual-response headers do not
+        // block the request.
+        header('Access-Control-Allow-Headers: Authorization, X-Authorization, Content-Type, X-Requested-With');
         if (get_option(self::OPTION_ALLOW_CREDENTIALS, true)) {
           header('Access-Control-Allow-Credentials: true');
         }
@@ -5444,17 +5958,33 @@ HTML;
   }
 
   private function get_allowed_origins(): array {
+    // Derive the origin (scheme + host) from WordPress's own home URL.
+    // This makes the allowed-origins list correct regardless of which domain
+    // the WordPress installation is on — no hardcoded hostnames needed.
+    // When the Angular app is served from the same domain as WordPress, all
+    // requests are same-origin and CORS headers are irrelevant anyway; this
+    // auto-entry is primarily a safety net for cross-origin dev/staging setups.
+    $parsed    = wp_parse_url(home_url());
+    $scheme    = $parsed['scheme'] ?? 'https';
+    $host      = $parsed['host']   ?? '';
+    $wp_origin = $scheme . '://' . $host;
+
     $defaults = [
-      'https://epaper.dailysangram.com',
-      'https://www.epaper.dailysangram.com',
+      $wp_origin,
       'http://localhost:4200',
       'http://127.0.0.1:4200',
     ];
 
+    // Add www variant if home URL is a bare domain (not already www.*).
+    if ($host && strncmp($host, 'www.', 4) !== 0) {
+      $defaults[] = $scheme . '://www.' . $host;
+    }
+
     $raw = (string) get_option(self::OPTION_ORIGINS, '');
     if (!$raw) {
-      return $defaults;
+      return array_values(array_unique($defaults));
     }
+    // Merge in anything the admin has manually added in the settings page.
     $configured = array_values(array_filter(array_map('trim', explode(',', $raw))));
     return array_values(array_unique(array_merge($defaults, $configured)));
   }
@@ -5875,12 +6405,17 @@ HTML;
     }
 
     // Rate-limit: max 120 batches per user per 60 s to prevent log flooding.
+    // RACE-CONDITION FIX: increment FIRST, then check.  The old read-then-set
+    // pattern let two concurrent requests both read `$rate = 119`, both pass
+    // the < 120 check, and both proceed — doubling the allowed throughput.
+    // Incrementing before checking makes the limit strict: the count can only
+    // be high enough to reject if a genuine excess of requests occurred.
     $rate_key = 'dn_log_rate_' . $user->ID;
-    $rate     = (int) get_transient($rate_key);
-    if ($rate >= 120) {
+    $rate     = (int) get_transient($rate_key) + 1;
+    set_transient($rate_key, $rate, 60);
+    if ($rate > 120) {
       return new WP_REST_Response(['error' => 'Rate limit exceeded'], 429);
     }
-    set_transient($rate_key, $rate + 1, 60);
 
     $roles       = (array) $user->roles;
     $role        = !empty($roles) ? $roles[0] : 'subscriber';

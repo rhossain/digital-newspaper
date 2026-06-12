@@ -496,13 +496,21 @@ export class NewspaperDataService {
    * Throws on any error so `loadData()` can fall back to the legacy path.
    */
   private loadDataFromGranular(): Observable<NewspaperData> {
-    // Step 1: settings + dates index in parallel
+    // Step 1: settings + dates index + current server version in parallel.
+    // The version endpoint is tiny (~30 B) and must be fetched here so the
+    // local dataVersion is NEVER reset to 0.  Resetting to 0 causes the
+    // version poll to immediately fire remoteDataChanged$ on the very next
+    // tick (because serverVersion > 0 is always true), producing the false
+    // "Content updated by another user" toast on every reload.
     return forkJoin({
       settings: this.settingsService.fetch(),
       dates:    this.dateIndexService.fetch(),
+      version:  this.http
+        .get<{ dataVersion: number }>(this.versionUrl)
+        .pipe(catchError(() => of({ dataVersion: 0 }))),
     }).pipe(
       // Step 2: load editions for the dates needed for initial display
-      switchMap(({ settings, dates }) => {
+      switchMap(({ settings, dates, version }) => {
         const today      = this.getTodayDate();
         const latestDate = dates[0] ?? today;
 
@@ -530,7 +538,7 @@ export class NewspaperDataService {
             if (editions.length === 0) {
               throw new Error('Granular edition options are empty — falling back to legacy blob');
             }
-            return { settings, editions, dataVersion: 0 };
+            return { settings, editions, dataVersion: version.dataVersion ?? 0 };
           })
         );
       }),
@@ -1110,6 +1118,15 @@ export class NewspaperDataService {
     }
   }
 
+  /** Publicly patch the local dataVersion (used by the admin component to
+   *  pre-adopt a version emitted by remoteDataChanged$ before loadData()
+   *  completes, preventing a spurious second poll-triggered reload). */
+  patchDataVersionPublic(version: number): void {
+    if (version && version > (this.dataSubject.value.dataVersion ?? 0)) {
+      this.dataSubject.next({ ...this.dataSubject.value, dataVersion: version });
+    }
+  }
+
   /**
    * After any atomic write, evict the cache entry for the affected date so
    * the next fetch of /data/editions/:date returns the server's updated data.
@@ -1199,6 +1216,42 @@ export class NewspaperDataService {
     );
   }
 
+  /**
+   * Atomically save ALL editions for a single date (PUT /data/editions-for-date).
+   *
+   * Used by the vintage theme's auto-save after structural changes such as
+   * creating a new edition, renaming edition labels, creating a new date, or
+   * deleting an edition.
+   *
+   * Unlike the full POST /data save, this endpoint:
+   *   - Only writes the targeted dn_edition_{date} option and the index.
+   *   - Never writes the dn_data blob (no memory spike, no blob growth).
+   *   - Is NOT subject to the shrinking-overwrite guard that blocks full saves
+   *     when the in-memory Angular state only contains 1-2 dates.
+   */
+  saveEditionsForDateAtomically(date: string): Observable<any> {
+    const headers = this.auth.getAuthHeaders();
+    const url = `${this.wpBaseUrl}/wp-json/digital-newspaper/v1/data/editions-for-date`;
+    // Send only edition structural metadata (date, edition number, labels).
+    // Pages are already managed by savePageAtomically / saveSectionAtomically;
+    // sending them here would (a) bloat the payload and (b) risk overwriting
+    // server-side page changes made after this client last synced.
+    // The PHP endpoint restores pages from dn_edition_{date} before saving.
+    const editions = this.dataSubject.value.editions
+      .filter(e => e.date === date)
+      .map(({ pages: _pages, ...meta }) => meta);
+    return this.http.put<any>(url, { date, editions }, { headers }).pipe(
+      timeout(this.atomicSaveTimeoutMs),
+      tap({
+        next: (res) => {
+          this.patchDataVersion(res);
+          this.evictDateCache(date);
+        },
+        error: () => { this.evictDateCache(date); },
+      })
+    );
+  }
+
   saveData(data: NewspaperData, options: SaveDataOptions = {}): Observable<any> {
     if (this.dataRecoveredFromMediaLibrary && !options.allowRecoveredData) {
       return throwError(() => new Error(
@@ -1265,7 +1318,34 @@ export class NewspaperDataService {
   }
 
   /**
-   * Applies the sectionPostIds map returned by the PHP plugin after a save,
+   * Saves only the global settings object via PATCH /data/settings, without
+   * sending any editions data.  This avoids the shrinking-overwrite guard that
+   * fires when the admin edits settings while only a subset of editions are
+   * loaded in the browser.
+   */
+  saveSettingsOnly(settings: GlobalSettings): Observable<any> {
+    this.cacheSettings(settings);
+    this.settingsService.apply(settings);
+
+    const headers = this.auth.getAuthHeaders();
+    const settingsUrl = `${this.apiUrl}/settings`;
+
+    return this.http.patch<{ success: boolean; newDataVersion: number; settings: GlobalSettings }>(
+      settingsUrl,
+      { settings },
+      { headers }
+    ).pipe(
+      tap((response) => {
+        if (response?.newDataVersion) {
+          const current = this.dataSubject.value;
+          this.dataSubject.next({ ...current, dataVersion: response.newDataVersion, settings });
+        }
+        clearHttpCache();
+      })
+    );
+  }
+
+  /**
    * patching wpPostId onto every matching NewsSection in the in-memory data.
    * The map key format is "{date}:{editionNumber}:{pageId}:{sectionId}".
    */
@@ -1618,13 +1698,77 @@ export class NewspaperDataService {
   }
 
   private triggerFileDownload(json: string, filename: string): void {
-    const blob = new Blob([json], { type: 'application/json' });
+    // BANGLA SAFETY: charset=utf-8 is explicit so the browser and any
+    // downstream tool that opens the file knows to interpret the bytes as
+    // UTF-8.  Without it, some OS file-open dialogs default to the system
+    // locale (often Windows-1252) and misread multi-byte Bangla codepoints.
+    const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
     const url = window.URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
     link.download = filename;
     link.click();
     window.URL.revokeObjectURL(url);
+  }
+
+  /**
+   * Download a COMPLETE, authoritative backup by fetching directly from the
+   * server's /data/export-full endpoint.
+   *
+   * Unlike downloadExport() which serialises in-memory Angular state (only
+   * 1-2 dates hydrated at load time), this method pulls from the PHP plugin's
+   * granular per-date options (dn_edition_YYYY-MM-DD), which are the single
+   * source of truth for ALL dates including those never loaded into the browser.
+   *
+   * BANGLA SAFETY: the server responds with Content-Type: application/json;
+   * charset=UTF-8 and JSON_UNESCAPED_UNICODE, so Bangla characters arrive as
+   * literal UTF-8 bytes.  We write them to a Blob with explicit charset=utf-8
+   * and trigger the file download — no encoding conversion at any step.
+   *
+   * @returns Observable that emits { filename, sizeKb } on success.
+   */
+  downloadExportFull(): Observable<{ filename: string; sizeKb: number }> {
+    const headers = this.auth.getAuthHeaders();
+    const exportUrl = `${this.wpBaseUrl}/wp-json/digital-newspaper/v1/data/export-full`;
+
+    // Request as text so we forward the exact UTF-8 byte stream the server
+    // produced — no JSON.parse() / JSON.stringify() round-trip that could
+    // escape Bangla characters as \uXXXX sequences.
+    return this.http.get(exportUrl, { headers, responseType: 'text' }).pipe(
+      timeout(120000), // 2 min: large archives can be slow to assemble server-side
+      map((raw: string) => {
+        // Validate the response is parseable JSON before writing the file.
+        let parsed: any;
+        try {
+          parsed = JSON.parse(raw);
+        } catch {
+          throw new Error('Server export-full returned non-JSON response. Check server logs.');
+        }
+        if (!parsed || typeof parsed !== 'object') {
+          throw new Error('Server export-full returned an invalid structure.');
+        }
+        const editionCount: number = Array.isArray(parsed.editions) ? parsed.editions.length : 0;
+        const today = this.getTodayDate();
+        const filename = `newspaper-backup-full-${today}.json`;
+
+        // Write the RAW bytes from the server — not re-serialised — so
+        // Bangla characters stay as their original UTF-8 codepoints.
+        this.triggerFileDownload(raw, filename);
+
+        const sizeKb = Math.round((raw.length / 1024) * 10) / 10;
+        this.addBackupHistoryEntry({
+          id: Date.now().toString(),
+          exportedAt: parsed.meta?.exportedAt ?? new Date().toISOString(),
+          filename,
+          exportScope: 'full',
+          exportType: 'full',
+          editionCount,
+          sizeKb,
+          sourceUrl: parsed.meta?.sourceUrl ?? this.wpBaseUrl,
+        });
+        return { filename, sizeKb };
+      })
+    );
   }
 
   buildExportPayload(options: ExportOptions): { payload: ExportPayload; filename: string } {
