@@ -513,6 +513,20 @@ export class AdminComponent implements OnInit, OnDestroy {
         if (!this.availableDates.includes(this.selectedDate)) {
           this.availableDates.unshift(this.selectedDate);
         }
+
+        // After a refresh the admin resets to today's date (set in ngOnInit).
+        // If today has no pages yet, auto-switch to the most recent date that
+        // does so the user doesn't see an empty grid and think data was lost.
+        const todayEditions = this.dataService.getEditionsByDate(this.selectedDate);
+        const todayHasPages = todayEditions.some(e => e.pages && e.pages.length > 0);
+        if (!todayHasPages) {
+          const latestWithContent = this.dataService.getAvailableDates()[0];
+          if (latestWithContent && latestWithContent !== this.selectedDate) {
+            this.selectedDate = latestWithContent;
+            this.dataService.setCurrentDate(latestWithContent);
+          }
+        }
+
         this.loadCurrentEdition();
         this.loadSettings();
         this.markSaved();
@@ -1258,6 +1272,22 @@ export class AdminComponent implements OnInit, OnDestroy {
       const savedDate = this.selectedDate;
       const savedEditionNumber = this.selectedEditionNumber;
       this.dataService.savePageAtomically(page, savedDate, savedEditionNumber).subscribe({
+        next: () => {
+          // Reload from server on success so the grid always reflects what
+          // was actually persisted — guards against stale ETag / cache issues.
+          this.dataService.reloadDate(savedDate).subscribe({
+            next: () => {
+              this.loadCurrentEdition();
+              // Re-sync selectedPage so that if the user is viewing this page's
+              // sections, selectedPage.sections reflects the server-confirmed state.
+              if (this.selectedPage) {
+                const refreshed = this.pages.find(p => p.id === this.selectedPage!.id);
+                if (refreshed) this.selectedPage = refreshed;
+              }
+              this.cdr.detectChanges();
+            },
+          });
+        },
         error: (err: any) => {
           // Re-fetch from server: the save likely succeeded but the response was
           // lost (e.g. sync step timed out after update_option committed).
@@ -1541,6 +1571,24 @@ export class AdminComponent implements OnInit, OnDestroy {
           );
         })
       ).subscribe({
+        next: () => {
+          // Reload from server on success so the sections grid always reflects
+          // what was actually persisted — guards against stale cache issues.
+          this.dataService.reloadDate(saveDate).subscribe({
+            next: () => {
+              this.loadCurrentEdition();
+              // Re-sync selectedPage to the freshly-loaded page object so that
+              // selectedPage.sections reflects the saved state.  loadCurrentEdition()
+              // replaces this.pages with new objects; without this, the template
+              // still reads sections from the old (stale) reference.
+              if (this.selectedPage) {
+                const refreshed = this.pages.find(p => p.id === this.selectedPage!.id);
+                if (refreshed) this.selectedPage = refreshed;
+              }
+              this.cdr.detectChanges();
+            },
+          });
+        },
         error: () => {
           this.toaster.warning('Section sync response failed. The section may have been saved — reload to confirm, or try saving again.');
           this.markUnsavedChanges();
@@ -3117,6 +3165,10 @@ export class AdminComponent implements OnInit, OnDestroy {
   }
 
   vintageBackToPages(): void {
+    // Auto-save any in-progress section edit before leaving the page.
+    if (this.isEditingSection && this.sectionForm.id && this.sectionForm.title) {
+      this.saveSection(false);
+    }
     // Release the lock for the page we're leaving before going back to the
     // pages grid. Without this, the lock lingers and the next DELETE (from
     // cancelPageEdit) fires while autoSaveForVintage is about to run,
@@ -3130,6 +3182,9 @@ export class AdminComponent implements OnInit, OnDestroy {
   }
 
   vintageBackToSections(): void {
+    if (this.isEditingSection && this.sectionForm.id && this.sectionForm.title) {
+      this.saveSection(false);
+    }
     this.vintageSelectedSection = null;
     this.vintageView = 'sections';
     this.isEditingSection = false;
@@ -3145,6 +3200,20 @@ export class AdminComponent implements OnInit, OnDestroy {
   menuGoToPages(): void {
     this.activeMainTab = 'content';
     this.activeTab = 'pages';
+    // Auto-save in-progress edits BEFORE clearing state (vintage theme).
+    // The vintage breadcrumbs are hidden during editing, so the header menu
+    // is the only exit path — state must be read here, before being cleared.
+    if (this.adminTheme === 'vintage') {
+      if (this.isEditingSection && this.sectionForm.id && this.sectionForm.title) {
+        this.saveSection(false);
+      } else if (
+        this.isEditingPage &&
+        this.pageForm.fullImage &&
+        (this.pageForm.pageLabels?.['en']?.trim() || this.pageForm.pageLabels?.['bn']?.trim())
+      ) {
+        this.savePage(); // savePage() calls cancelPageEdit() → sets isEditingPage = false
+      }
+    }
     this.isEditingPage = false;
     this.isEditingSection = false;
     if (this.adminTheme === 'vintage') {
