@@ -243,7 +243,8 @@
 
 .dates-dropdown {
   min-width: 120px;
-  padding: 4px 8px;
+  height: 32px;
+  padding: 6px 8px;
   border-radius: 6px;
   border: 1px solid var(--color-border-ui);
   background: var(--color-bg-muted);
@@ -1161,6 +1162,31 @@
   height: 100%;
   display: flex;
   flex-direction: column;
+}
+
+.close-button {
+  position: absolute;
+  top: 22px;
+  right: 20px;
+  background-color: var(--color-danger);
+  color: var(--color-white);
+  border: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  font-size: 24px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s ease;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+  z-index: 1;
+}
+
+.close-button:hover {
+  background-color: var(--color-danger-dark);
+  transform: scale(1.1);
 }
 
 .section-image-container {

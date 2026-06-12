@@ -98,17 +98,23 @@ export class DateIndexService {
    * Called by NewspaperDataService after loadData() succeeds so that
    * DateIndexService stays in sync without an extra network request.
    *
-   * @param editions  All loaded editions (each has a `date` field).
+   * IMPORTANT: this UNIONs with the existing list — it never shrinks the
+   * available dates.  loadDataFromGranular() only hydrates editions for
+   * latestDate + today, so passing those 1-2 dates here used to clobber
+   * the full list returned by fetch() — silently hiding every older date
+   * from the admin date picker.
+   *
+   * @param editions  Loaded editions (each has a `date` field).
    */
   syncFromEditions(editions: { date: string }[]): void {
     if (!editions?.length) return;
-    const dates = [...new Set(editions.map(e => e.date))]
-      .filter(Boolean)
+    const incoming = editions.map(e => e.date).filter(Boolean);
+    const merged = [...new Set([...this._availableDates(), ...incoming])]
       .sort()
       .reverse();
-    this._availableDates.set(dates);
-    if (dates.length > 0 && !this._latestDate()) {
-      this._latestDate.set(dates[0]);
+    this._availableDates.set(merged);
+    if (merged.length > 0 && !this._latestDate()) {
+      this._latestDate.set(merged[0]);
     }
   }
 }

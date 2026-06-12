@@ -106,8 +106,20 @@ cat > .htaccess <<EOF
   RewriteEngine On
   RewriteBase /
   RewriteRule ^index\\.html$ - [L]
+  # Compatibility redirects: if anyone hits root-level WP paths, forward to /wp.
+  RewriteRule ^wp-admin/?$ /wp/wp-admin/ [R=302,L,NC]
+  RewriteRule ^wp-login\\.php$ /wp/wp-login.php [R=302,L,NC]
+  RewriteRule ^xmlrpc\\.php$ /wp/xmlrpc.php [R=302,L,NC]
+  # Never route WordPress/admin/auth URLs through the Angular SPA.
+  RewriteRule ^wp(?:/|$) - [L,NC]
+  RewriteRule ^wp-admin(?:/|$) - [L,NC]
+  RewriteRule ^wp-login\\.php$ - [L,NC]
+  RewriteRule ^xmlrpc\\.php$ - [L,NC]
   RewriteCond %{REQUEST_FILENAME} !-f
   RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteCond %{REQUEST_URI} !^/(wp|wp-admin)(?:/|$) [NC]
+  RewriteCond %{REQUEST_URI} !^/wp-login\\.php$ [NC]
+  RewriteCond %{REQUEST_URI} !^/xmlrpc\\.php$ [NC]
   RewriteRule . /index.html [L]
 </IfModule>
 EOF

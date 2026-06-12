@@ -369,57 +369,112 @@ export class NewspaperDataService {
     this.currentDateSubject.next(date);
   }
 
+  /**
+   * Lazy hydration for a date whose editions aren't yet in the in-memory
+   * `data.editions` array.
+   *
+   * Background: `loadDataFromGranular()` only hydrates editions for
+   * `latestDate` + today for speed.  When the admin switches to an older
+   * date via the date picker, the in-memory array doesn't contain its
+   * editions, so `getEditionsByDate()` returns []. This helper fetches the
+   * missing date via the granular `/data/editions/:date` endpoint (which
+   * goes through `EditionCacheService`'s 4-layer cache) and merges the
+   * result into `dataSubject` so all the synchronous `getEditionsByDate`/
+   * `getEditionByDateAndNumber` reads "just work".
+   *
+   * Safe to call repeatedly — returns immediately if the date already has
+   * editions in memory.  Emits and completes without modifying state on
+   * any HTTP error so the caller can degrade gracefully.
+   */
+  /**
+   * Force-evict a date from in-memory state and re-fetch from the server.
+   * Use after an atomic save error: the server may have committed the write
+   * before the HTTP response failed, so the in-memory view could be stale.
+   * evictDateCache() must have been called first (removes HTTP + service caches).
+   */
+  reloadDate(date: string): Observable<void> {
+    if (!date) return of(void 0);
+    // Drop the date from the data subject so hydrateDateIfMissing will re-fetch.
+    const current = this.dataSubject.value;
+    this.dataSubject.next({
+      ...current,
+      editions: current.editions.filter(e => e.date !== date),
+    });
+    return this.hydrateDateIfMissing(date);
+  }
+
+  hydrateDateIfMissing(date: string): Observable<void> {
+    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return of(void 0);
+    }
+    const current = this.dataSubject.value;
+    const alreadyHas = current.editions.some(e => e.date === date);
+    if (alreadyHas) {
+      return of(void 0);
+    }
+    return this.editionCacheService.getEditionsForDate(date).pipe(
+      tap(editions => {
+        if (!Array.isArray(editions) || editions.length === 0) {
+          return;
+        }
+        const next = this.dataSubject.value;
+        // Defensive: re-filter in case another hydration raced.
+        const otherEditions = next.editions.filter(e => e.date !== date);
+        const merged = [...otherEditions, ...editions].sort((a, b) => {
+          const d = b.date.localeCompare(a.date);
+          return d !== 0 ? d : ((a.edition ?? 1) - (b.edition ?? 1));
+        });
+        this.dataSubject.next({ ...next, editions: merged });
+      }),
+      map(() => void 0),
+      catchError(err => {
+        console.warn('[NewspaperDataService] hydrateDateIfMissing failed for', date, err?.message ?? err);
+        return of(void 0);
+      })
+    );
+  }
+
   getCurrentDate(): string {
     return this.currentDateSubject.value;
   }
 
-  // Data loading with backwards compatibility (no caching)
+  /**
+   * Primary data load — tries the fast granular endpoints first, then falls
+   * back to the legacy monolithic blob endpoint.
+   *
+   * ── Why granular-first? ──────────────────────────────────────────────────
+   * The legacy /data endpoint returns the ENTIRE dataset as one serialized
+   * blob.  On a newspaper with 1+ years of editions that blob can exceed
+   * 30–50 MB, causing PHP to exceed max_execution_time before returning a
+   * response.  The granular endpoints are O(1) per option read and each
+   * response is a few KB.
+   *
+   * ── Strategy ────────────────────────────────────────────────────────────
+   * 1. Try `loadDataFromGranular()`:
+   *      - GET /data/settings  (settings + dataVersion)
+   *      - GET /data/dates     (list of all available dates)
+   *      - GET /data/editions/{latestDate}  (today's / most-recent edition)
+   *    Total payload: ~5–50 KB regardless of dataset size.
+   *
+   * 2. If ANY granular call fails (endpoint not found, timeout, WAF block),
+   *    fall back to the legacy /data blob.  This preserves backward
+   *    compatibility with servers that have an older plugin version.
+   *
+   * 3. If the legacy call also fails after 2 retries, serve the bundled
+   *    empty asset so the UI shows a clear empty state rather than a crash.
+   */
   loadData(): Observable<NewspaperData> {
-    // Cache-buster query param prevents CDN / LiteSpeed / browser from serving
-    // a stale cached version of the API response without triggering a CORS
-    // preflight (custom request headers like Cache-Control would require the
-    // server to add them to Access-Control-Allow-Headers).
-    const cacheBuster = `?_t=${Date.now()}`;
-    return this.http.get<unknown>(
-      this.apiUrl + cacheBuster
-    ).pipe(
-      // 20 s — WordPress on shared hosting can take 5-15 s on a cold boot.
-      // The previous 5 s limit was too aggressive and caused silent fallback
-      // to the stale local newspaper-data.json file.
-      timeout(20000),
-      // Retry the live API before giving up. A slow cold-start (timeout) or a
-      // transient network/5xx error should not immediately surface the local
-      // fallback — that was causing months-old bundled data to be displayed as
-      // if it were current. 2 retries with a short backoff (≈1.5 s, 3 s).
-      retry({
-        count: 2,
-        delay: (_err, retryCount) => timer(retryCount * 1500),
-      }),
-      catchError((err) => {
-        // The live API is genuinely unreachable after retries. Fall back to the
-        // bundled asset, which is now an EMPTY-but-valid dataset (no stale news,
-        // no base64 images). The UI shows an empty state rather than presenting
-        // months-old content as today's edition.
+    return this.loadDataFromGranular().pipe(
+      catchError((granularErr) => {
         console.warn(
-          '[NewspaperDataService] Live API unreachable after retries — '
-          + 'serving empty fallback dataset. Reason:', err?.message ?? err
+          '[NewspaperDataService] Granular endpoints failed — falling back to legacy /data blob. Reason:',
+          granularErr?.message ?? granularErr
         );
-        return this.http.get<unknown>(this.assetsUrl);
-      }),
-      map((data): NewspaperData => this.normalizeData(this.assertValidNewspaperResponse(data))),
-      switchMap((data) => {
-        this.dataRecoveredFromMediaLibrary = false;
-        return this.hasAnyPages(data) ? of(data) : this.loadDataFromMediaLibrary(data);
+        return this.loadDataFromLegacyBlob();
       }),
       catchError((err) => this.loadEmergencyDraftAfterApiFailure(err)),
       tap((data: NewspaperData) => {
         this.dataSubject.next(data);
-
-        // ── Seed the new caching services for free ─────────────────────────
-        // We already paid for the full /data load; propagating the result to
-        // the new services means their first read is a synchronous memory hit
-        // rather than a second HTTP round-trip to the new granular endpoints.
-
         if (data.settings) {
           this.settingsService.apply(data.settings);
         }
@@ -427,6 +482,91 @@ export class NewspaperDataService {
           this.dateIndexService.syncFromEditions(data.editions);
           this.editionCacheService.seedFromLoadedData(data.editions);
         }
+      })
+    );
+  }
+
+  /**
+   * Fast granular load via the per-resource cacheable endpoints.
+   *
+   * Fetches settings + dates in parallel, then fetches editions for the
+   * most-recent date (and today, if it differs).  Total request count: 3–4
+   * tiny requests instead of one huge blob.
+   *
+   * Throws on any error so `loadData()` can fall back to the legacy path.
+   */
+  private loadDataFromGranular(): Observable<NewspaperData> {
+    // Step 1: settings + dates index in parallel
+    return forkJoin({
+      settings: this.settingsService.fetch(),
+      dates:    this.dateIndexService.fetch(),
+    }).pipe(
+      // Step 2: load editions for the dates needed for initial display
+      switchMap(({ settings, dates }) => {
+        const today      = this.getTodayDate();
+        const latestDate = dates[0] ?? today;
+
+        // Load the most-recent date and today in parallel (often the same date).
+        const datesToLoad = [...new Set([latestDate, today])].filter(Boolean);
+
+        if (datesToLoad.length === 0) {
+          // Granular /data/dates returned an empty list — migration is
+          // incomplete or the granular options are not yet populated.
+          // Throw so loadData()'s catchError falls back to the legacy blob.
+          throw new Error('Granular dates list is empty — falling back to legacy blob');
+        }
+
+        return forkJoin(
+          datesToLoad.reduce((acc, date) => {
+            acc[date] = this.editionCacheService.getEditionsForDate(date);
+            return acc;
+          }, {} as Record<string, Observable<NewspaperEdition[]>>)
+        ).pipe(
+          map((editionsByDate): NewspaperData => {
+            const editions: NewspaperEdition[] = Object.values(editionsByDate).flat();
+            // If all edition options came back empty the granular options were
+            // not yet written (partial migration: index exists but dn_edition_*
+            // options don't).  Throw so catchError falls back to the legacy blob.
+            if (editions.length === 0) {
+              throw new Error('Granular edition options are empty — falling back to legacy blob');
+            }
+            return { settings, editions, dataVersion: 0 };
+          })
+        );
+      }),
+      // 15 s total — tighter than the 20 s legacy timeout so we can still
+      // attempt the legacy fallback within a reasonable overall wait time.
+      timeout(15000),
+      switchMap((data) => {
+        this.dataRecoveredFromMediaLibrary = false;
+        return this.hasAnyPages(data) ? of(data) : this.loadDataFromMediaLibrary(data);
+      })
+    );
+  }
+
+  /**
+   * Legacy monolithic blob load — backward-compatible with older plugin versions.
+   * Used as a fallback when the granular endpoints are unavailable.
+   */
+  private loadDataFromLegacyBlob(): Observable<NewspaperData> {
+    const cacheBuster = `?_t=${Date.now()}`;
+    return this.http.get<unknown>(this.apiUrl + cacheBuster).pipe(
+      timeout(20000),
+      retry({
+        count: 2,
+        delay: (_err, retryCount) => timer(retryCount * 1500),
+      }),
+      catchError((err) => {
+        console.warn(
+          '[NewspaperDataService] Legacy /data blob also unreachable — serving empty fallback. Reason:',
+          err?.message ?? err
+        );
+        return this.http.get<unknown>(this.assetsUrl);
+      }),
+      map((data): NewspaperData => this.normalizeData(this.assertValidNewspaperResponse(data))),
+      switchMap((data) => {
+        this.dataRecoveredFromMediaLibrary = false;
+        return this.hasAnyPages(data) ? of(data) : this.loadDataFromMediaLibrary(data);
       })
     );
   }
@@ -852,7 +992,13 @@ export class NewspaperDataService {
     const datesWithPages = data.editions
       .filter(e => e.pages && e.pages.length > 0)
       .map(e => e.date);
-    return [...new Set(datesWithPages)].sort().reverse();
+    // Union with DateIndexService so callers see EVERY date the server knows
+    // about, not just the ones whose editions happen to be loaded in memory.
+    // loadDataFromGranular() only hydrates editions for latestDate + today
+    // for speed — without this union, getAvailableDates() would only return
+    // those 1-2 dates and the date picker would hide every older edition.
+    const indexed = this.dateIndexService.get();
+    return [...new Set([...datesWithPages, ...indexed])].sort().reverse();
   }
 
   /**
@@ -866,7 +1012,11 @@ export class NewspaperDataService {
    */
   getAllEditionDates(): string[] {
     const data = this.getData();
-    return [...new Set(data.editions.map(e => e.date))].sort().reverse();
+    // Union with DateIndexService so the admin date picker sees EVERY date,
+    // not just the latestDate + today that loadDataFromGranular() hydrates.
+    // See getAvailableDates() above for the full reasoning.
+    const indexed = this.dateIndexService.get();
+    return [...new Set([...data.editions.map(e => e.date), ...indexed])].sort().reverse();
   }
 
   // Create or get edition for a date (and optional edition number)
@@ -948,6 +1098,12 @@ export class NewspaperDataService {
   private readonly pageAtomicUrl    = `${this.wpBaseUrl}/wp-json/digital-newspaper/v1/data/page`;
   private readonly sectionAtomicUrl = `${this.wpBaseUrl}/wp-json/digital-newspaper/v1/data/section`;
 
+  // Client-side timeout for atomic mutations. Set above the typical gateway
+  // timeout (~30 s on cPanel / Hostinger) so the server has a chance to return
+  // 504 before we abort locally; but bounded so a hung connection eventually
+  // fires the error handler instead of leaving the UI in a half-saved state.
+  private readonly atomicSaveTimeoutMs = 45000;
+
   private patchDataVersion(res: any): void {
     if (res?.newDataVersion) {
       this.dataSubject.next({ ...this.dataSubject.value, dataVersion: res.newDataVersion });
@@ -971,9 +1127,19 @@ export class NewspaperDataService {
   savePageAtomically(page: NewspaperPage, date: string, edition: number): Observable<any> {
     const headers = this.auth.getAuthHeaders();
     return this.http.put<any>(this.pageAtomicUrl, { date, edition, page }, { headers }).pipe(
-      tap(res => {
-        this.patchDataVersion(res);
-        this.evictDateCache(date);
+      timeout(this.atomicSaveTimeoutMs),
+      tap({
+        next: (res) => {
+          this.patchDataVersion(res);
+          this.evictDateCache(date);
+        },
+        error: () => {
+          // Evict cache even on error: the server may have committed the write
+          // before the response failed (e.g. sync timeout kills the response
+          // after update_option succeeds). Without this eviction the frontend
+          // keeps serving stale cached data that doesn't include the new page.
+          this.evictDateCache(date);
+        },
       })
     );
   }
@@ -982,9 +1148,13 @@ export class NewspaperDataService {
   deletePageAtomically(pageId: number, date: string, edition: number): Observable<any> {
     const headers = this.auth.getAuthHeaders();
     return this.http.delete<any>(this.pageAtomicUrl, { headers, body: { date, edition, pageId } }).pipe(
-      tap(res => {
-        this.patchDataVersion(res);
-        this.evictDateCache(date);
+      timeout(this.atomicSaveTimeoutMs),
+      tap({
+        next: (res) => {
+          this.patchDataVersion(res);
+          this.evictDateCache(date);
+        },
+        error: () => { this.evictDateCache(date); },
       })
     );
   }
@@ -1000,10 +1170,16 @@ export class NewspaperDataService {
     const headers = this.auth.getAuthHeaders();
     return this.http.put<any>(this.sectionAtomicUrl,
       { date, edition, pageId, originalSectionId, section }, { headers }
-    ).pipe(tap(res => {
-      this.patchDataVersion(res);
-      this.evictDateCache(date);
-    }));
+    ).pipe(
+      timeout(this.atomicSaveTimeoutMs),
+      tap({
+        next: (res) => {
+          this.patchDataVersion(res);
+          this.evictDateCache(date);
+        },
+        error: () => { this.evictDateCache(date); },
+      })
+    );
   }
 
   /** Atomically delete a single section on the server (DELETE /data/section). */
@@ -1011,10 +1187,16 @@ export class NewspaperDataService {
     const headers = this.auth.getAuthHeaders();
     return this.http.delete<any>(this.sectionAtomicUrl,
       { headers, body: { date, edition, pageId, sectionId } }
-    ).pipe(tap(res => {
-      this.patchDataVersion(res);
-      this.evictDateCache(date);
-    }));
+    ).pipe(
+      timeout(this.atomicSaveTimeoutMs),
+      tap({
+        next: (res) => {
+          this.patchDataVersion(res);
+          this.evictDateCache(date);
+        },
+        error: () => { this.evictDateCache(date); },
+      })
+    );
   }
 
   saveData(data: NewspaperData, options: SaveDataOptions = {}): Observable<any> {

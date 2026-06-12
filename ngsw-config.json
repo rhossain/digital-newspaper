@@ -1,6 +1,16 @@
 {
   "$schema": "./node_modules/@angular/service-worker/config/schema.json",
   "index": "/index.html",
+  "navigationUrls": [
+    "/**",
+    "!/**/*.*",
+    "!/**/__*",
+    "!/wp/**",
+    "!/wp-admin/**",
+    "!/wp-login.php",
+    "!/xmlrpc.php",
+    "!/wp-json/**"
+  ],
   "assetGroups": [
     {
       "name": "app-shell",

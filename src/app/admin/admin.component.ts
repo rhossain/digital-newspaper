@@ -353,7 +353,7 @@ export class AdminComponent implements OnInit, OnDestroy {
     this.dataService.deleteSectionAtomically(previewPageId, sec.id, this.selectedDate, this.selectedEditionNumber).subscribe({
       error: () => {
         this.markUnsavedChanges();
-        this.toaster.warning('Section deletion could not sync to server — click Save All to retry.');
+        this.toaster.warning('Section deletion could not sync to server. Please try deleting again.');
       }
     });
   }
@@ -866,7 +866,23 @@ export class AdminComponent implements OnInit, OnDestroy {
   loadCurrentEdition() {
     this.isLoadingEdition = true;
     this.dataService.setCurrentDate(this.selectedDate);
-    
+
+    // LAZY HYDRATION: loadDataFromGranular() only hydrates editions for
+    // latestDate + today.  When the user picks an older date the in-memory
+    // editions array won't include it, so getEditionsByDate() would return
+    // [] and the user would see "no data" even though the server has it
+    // (in dn_edition_{date} options or rebuilt from section posts).
+    //
+    // hydrateDateIfMissing() is a no-op when the date is already loaded,
+    // otherwise it fetches /data/editions/:date through the 4-layer cache
+    // and merges the result into the data subject before we read it.
+    this.dataService.hydrateDateIfMissing(this.selectedDate).subscribe({
+      next: () => this.applyEditionFromMemory(),
+      error: () => this.applyEditionFromMemory(), // already swallowed inside the helper
+    });
+  }
+
+  private applyEditionFromMemory(): void {
     // Populate edition tabs for this date
     this.editionsForDate = this.dataService.getEditionsByDate(this.selectedDate);
 
@@ -1229,10 +1245,55 @@ export class AdminComponent implements OnInit, OnDestroy {
       this.activityLog.track('page_save', { pageId: String(page.id), date: this.selectedDate, edition: String(this.selectedEditionNumber) });
 
       // Atomic server save — only updates THIS page; other users' pages are untouched.
-      this.dataService.savePageAtomically(page, this.selectedDate, this.selectedEditionNumber).subscribe({
-        error: () => {
-          this.markUnsavedChanges(); // flag for Save All fallback
-          this.toaster.warning('Page could not sync to server — click Save All to retry.');
+      const savedDate = this.selectedDate;
+      const savedEditionNumber = this.selectedEditionNumber;
+      this.dataService.savePageAtomically(page, savedDate, savedEditionNumber).subscribe({
+        error: (err: any) => {
+          // Re-fetch from server: the save likely succeeded but the response was
+          // lost (e.g. sync step timed out after update_option committed).
+          // reloadDate() drops the in-memory edition and re-fetches so both the
+          // admin view and the viewer reflect the server's actual stored state.
+          this.dataService.reloadDate(savedDate).subscribe({
+            next: () => this.loadCurrentEdition(),
+          });
+
+          // Surface the actual server error (PHP fatal, validation, etc.) so
+          // we don't mis-attribute every failure to a timeout.  Falls back to
+          // the original message when the error is genuinely a timeout or a
+          // network-level failure with no response body.
+          const body = err?.error;
+          let serverMsg = '';
+          if (body && typeof body === 'object') {
+            // Newer backend returns { error, code, message, file, line, ... }.
+            serverMsg = String(body.message || body.error || '');
+          } else if (typeof body === 'string' && body.trim().length) {
+            // Older backend (or fatals before the shutdown handler is reached)
+            // returns the WordPress critical-error HTML page.  Don't dump raw
+            // HTML into a toast — collapse it to a single readable line.
+            serverMsg = /critical error/i.test(body)
+              ? 'WordPress reported a critical PHP error (likely out-of-memory or timeout). Check ?dn_diag=last-fatal for details.'
+              : body.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+          }
+          // Strip HTML tags from JSON-bodied messages too, just in case the
+          // backend embeds any markup in $e->getMessage().
+          if (/<[a-z][^>]*>/i.test(serverMsg)) {
+            serverMsg = serverMsg.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+          }
+
+          const status = err?.status;
+          if (status === 500 && serverMsg) {
+            this.toaster.error(`Save failed (server error): ${serverMsg}`);
+          } else if (status === 500) {
+            this.toaster.error('Save failed: WordPress PHP fatal (no body). Check ?dn_diag=last-fatal for the captured error.');
+          } else if (status === 422 && serverMsg) {
+            this.toaster.error(`Save rejected: ${serverMsg}`);
+          } else if (status === 0 || err?.name === 'TimeoutError') {
+            this.toaster.warning('Server response timed out — refreshing data from server. Your page should appear shortly.');
+          } else if (status) {
+            this.toaster.error(`Save failed (HTTP ${status}). Refreshing from server.`);
+          } else {
+            this.toaster.warning('Server response timed out — refreshing data from server. Your page should appear shortly.');
+          }
         }
       });
     }
@@ -1258,7 +1319,7 @@ export class AdminComponent implements OnInit, OnDestroy {
       this.dataService.deletePageAtomically(page.id, this.selectedDate, this.selectedEditionNumber).subscribe({
         error: () => {
           this.markUnsavedChanges();
-          this.toaster.warning('Page deletion could not sync to server — click Save All to retry.');
+          this.toaster.warning('Page deletion could not sync to server. Please try deleting again.');
         }
       });
     }
@@ -1471,7 +1532,7 @@ export class AdminComponent implements OnInit, OnDestroy {
         })
       ).subscribe({
         error: () => {
-          this.toaster.warning('Failed to save section to server.');
+          this.toaster.warning('Section sync response failed. The section may have been saved — reload to confirm, or try saving again.');
           this.markUnsavedChanges();
         }
       });
@@ -1968,7 +2029,7 @@ export class AdminComponent implements OnInit, OnDestroy {
     this.dataService.deleteSectionAtomically(delPageId, section.id, delDate, delEdition).subscribe({
       error: () => {
         this.markUnsavedChanges();
-        this.toaster.warning('Section deletion could not sync to server — click Save All to retry.');
+        this.toaster.warning('Section deletion could not sync to server. Please try deleting again.');
       }
     });
   }
@@ -2600,6 +2661,17 @@ export class AdminComponent implements OnInit, OnDestroy {
           if (body.conflictType === 'empty-overwrite') {
             this.toaster.error(
               'Save rejected: your current view has no pages. Reload the admin panel before saving again.'
+            );
+            return;
+          }
+          // shrinking-overwrite guard — client has fewer dates than the server
+          // (common when granular per-date loading only hydrated recent dates).
+          if (body.conflictType === 'shrinking-overwrite') {
+            const missing: number = (body.currentDateCount ?? 0) - (body.incomingDateCount ?? 0);
+            this.toaster.error(
+              `Save rejected: your current view is missing ${missing} historical date(s) that exist on the server. ` +
+              `Use the atomic Save buttons on each page/section instead of Save All. ` +
+              `If you need to force-save, use the Admin → Rebuild from Sections action first.`
             );
             return;
           }

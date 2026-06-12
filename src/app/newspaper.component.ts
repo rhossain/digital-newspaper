@@ -297,11 +297,39 @@ export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   loadCurrentEdition() {
+    // LAZY HYDRATION: loadDataFromGranular() only fetches editions for
+    // latestDate + today.  If the viewer navigates (URL, date picker, prev/
+    // next day) to a date not yet hydrated, getEditionsByDate() returns []
+    // and the user sees a blank page.  hydrateDateIfMissing() is a no-op
+    // when the date is already loaded, otherwise it fetches it through the
+    // 4-layer EditionCache before we run the render path below.
+    this.dataService.hydrateDateIfMissing(this.selectedDate).subscribe({
+      next: () => this.renderCurrentEdition(),
+      error: () => this.renderCurrentEdition(), // already swallowed inside helper
+    });
+  }
+
+  private renderCurrentEdition() {
     // Resolve pending edition slug first so getCurrentEdition() uses the correct number
     if (this.pendingEditionSlug) {
       this.selectedEditionNumber = this.getEditionFromSlug(this.pendingEditionSlug);
       this.pendingEditionSlug = null;
     }
+
+    // A background refresh is any call after the initial load with no pending
+    // URL slugs. For these we want to restore the user's position and avoid
+    // showing skeleton loaders for thumbnails/images whose URLs haven't changed.
+    const isBackgroundRefresh = this.initialLoadComplete &&
+                                !this.pendingPageSlug &&
+                                !this.pendingSectionSlug;
+
+    // Snapshot position before resetting state so we can restore it below.
+    const prevPageId      = this.currentPage?.id ?? null;
+    const prevSectionId   = this.selectedSection?.id ?? null;
+    const prevMainUrl     = this.currentPage
+      ? this.resolveImageUrl((this.currentPage.fullImage ?? '').trim())
+      : null;
+    const prevThumbnailSrcs = { ...this.pageThumbnailSrcs };
 
     // Reset main view so the image element gets recreated when date changes
     this.currentPage = null;
@@ -317,27 +345,68 @@ export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
 
     const edition = this.dataService.getCurrentEdition(this.selectedEditionNumber);
     if (edition) {
-      this.pages = edition.pages;
+      this.pages = [...edition.pages].sort((a, b) => a.id - b.id);
       // Sequential thumbnail loading: resolve one page at a time so the
       // browser only fetches one thumbnail per round-trip instead of
       // hammering all of them simultaneously.
       this.thumbnailsLoading = {};
       this.pageThumbnailSrcs = {};
       this.thumbnailLoadQueue = [];
-      // Mark every page as pending (skeleton shows)
-      this.pages.forEach(page => { this.thumbnailsLoading[page.id] = true; });
-      if (this.pages.length > 0) {
-        // Kick off page 1 immediately; the rest wait in the queue
-        this.thumbnailLoadQueue = this.pages.slice(1);
-        this.seedThumbnail(this.pages[0]);
+
+      if (isBackgroundRefresh) {
+        // For a background refresh, skip skeleton for thumbnails whose URL
+        // hasn't changed — the image is already in the browser cache.
+        const pagesNeedingLoad: NewspaperPage[] = [];
+        this.pages.forEach(page => {
+          const thumb = typeof page.thumbnail === 'string' ? page.thumbnail.trim() : '';
+          const full  = typeof page.fullImage  === 'string' ? page.fullImage.trim()  : '';
+          const newSrc = this.resolveImageUrl(thumb || full);
+          if (newSrc && prevThumbnailSrcs[page.id] === newSrc) {
+            // URL unchanged — restore immediately, no skeleton needed
+            this.pageThumbnailSrcs[page.id] = newSrc;
+            this.thumbnailsLoading[page.id] = false;
+          } else {
+            // New or changed URL — queue for (re)loading
+            this.thumbnailsLoading[page.id] = true;
+            pagesNeedingLoad.push(page);
+          }
+        });
+        if (pagesNeedingLoad.length > 0) {
+          this.thumbnailLoadQueue = pagesNeedingLoad.slice(1);
+          this.seedThumbnail(pagesNeedingLoad[0]);
+        }
+      } else {
+        // Initial / explicit load — queue all pages normally
+        // Mark every page as pending (skeleton shows)
+        this.pages.forEach(page => { this.thumbnailsLoading[page.id] = true; });
+        if (this.pages.length > 0) {
+          // Kick off page 1 immediately; the rest wait in the queue
+          this.thumbnailLoadQueue = this.pages.slice(1);
+          this.seedThumbnail(this.pages[0]);
+        }
       }
+
       if (this.pages.length > 0) {
-        // Resolve target page from pending page slug (default: first page)
+        // Resolve target page:
+        //   1. Honour an explicit pending URL slug (deep link).
+        //   2. On a background refresh, restore the page the user was viewing.
+        //   3. Fall back to the first page.
         let targetPage = this.pages[0];
         if (this.pendingPageSlug) {
           const resolvedPage = this.getPageFromSlug(this.pendingPageSlug);
           if (resolvedPage) targetPage = resolvedPage;
           this.pendingPageSlug = null;
+        } else if (isBackgroundRefresh && prevPageId !== null) {
+          const prevPage = this.pages.find(p => p.id === prevPageId);
+          if (prevPage) targetPage = prevPage;
+        }
+
+        // Pre-mark the main image as loaded when the URL hasn't changed so the
+        // skeleton doesn't flash before selectPage's own setTimeout can confirm it.
+        const preserveMainImage = isBackgroundRefresh && prevMainUrl !== null &&
+          !!prevMainUrl && this.resolveImageUrl((targetPage.fullImage ?? '').trim()) === prevMainUrl;
+        if (preserveMainImage) {
+          this.imageLoaded = true;
         }
 
         if (this.pendingSectionSlug) {
@@ -349,8 +418,13 @@ export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
             this.selectPage(targetPage);
           }
         } else {
-          // No section pending — show page without auto-selecting a section
-          this.selectPage(targetPage);
+          // No section pending — restore the previously-selected section on a
+          // background refresh; otherwise show page without auto-selecting one.
+          this.selectPage(
+            targetPage,
+            isBackgroundRefresh && prevSectionId ? prevSectionId : undefined,
+            preserveMainImage
+          );
         }
       } else {
         this.currentPage = null;
@@ -563,18 +637,20 @@ export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
   //   });
   // }
 
-  selectPage(page: NewspaperPage, targetSectionId?: string) {
+  selectPage(page: NewspaperPage, targetSectionId?: string, preserveImageLoaded = false) {
     this.currentPage = page;
-    this.imageLoaded = false;
-    this.startSlowConnectionTimer();
+    if (!preserveImageLoaded) {
+      this.imageLoaded = false;
+      this.startSlowConnectionTimer();
 
-    // If the image is already cached, the load event may not fire
-    setTimeout(() => {
-      const img = this.mainImageRef?.nativeElement;
-      if (img && img.complete && img.naturalWidth > 0) {
-        this.onImageLoad();
-      }
-    }, 0);
+      // If the image is already cached, the load event may not fire
+      setTimeout(() => {
+        const img = this.mainImageRef?.nativeElement;
+        if (img && img.complete && img.naturalWidth > 0) {
+          this.onImageLoad();
+        }
+      }, 0);
+    }
 
     if (targetSectionId) {
       // Section explicitly requested — find and select it
