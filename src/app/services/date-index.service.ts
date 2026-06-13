@@ -22,7 +22,9 @@ import { WP_BASE_URL } from '../config';
 export class DateIndexService {
 
   private readonly _endpoint =
-    `${WP_BASE_URL}/wp-json/digital-newspaper/v1/data/dates`;
+    // ngsw-bypass keeps this endpoint out of Angular SW dataGroup cache so
+    // a hard refresh right after creating a date sees the latest index.
+    `${WP_BASE_URL}/wp-json/digital-newspaper/v1/data/dates?ngsw-bypass=true`;
 
   // ── State ──────────────────────────────────────────────────────────────────
 
@@ -62,10 +64,18 @@ export class DateIndexService {
    */
   fetch(): Observable<string[]> {
     return this.http
-      .get<{ dates: string[]; latestDate: string }>(this._endpoint)
+      .get<{ dates: string[]; latestDate: string }>(this._endpoint, {
+        // Prevent stale browser-level max-age responses after an admin save
+        // followed by a hard refresh. This still allows the app-level
+        // interceptor cache to serve fast in-session hits.
+        headers: {
+          'Cache-Control': 'no-cache',
+          'Pragma': 'no-cache',
+        },
+      })
       .pipe(
         tap(res => {
-          const dates = Array.isArray(res.dates) ? res.dates : [];
+          const dates = Array.isArray(res.dates) ? [...res.dates].sort().reverse() : [];
           this._availableDates.set(dates);
           if (res.latestDate) {
             this._latestDate.set(res.latestDate);
@@ -74,7 +84,7 @@ export class DateIndexService {
             this._latestDate.set([...dates].sort().reverse()[0]);
           }
         }),
-        map(res => (Array.isArray(res.dates) ? res.dates : [])),
+        map(res => (Array.isArray(res.dates) ? [...res.dates].sort().reverse() : [])),
         catchError(err => {
           console.warn(
             '[DateIndexService] fetch failed — dates list unchanged. Reason:',

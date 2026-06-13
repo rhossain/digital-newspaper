@@ -2914,7 +2914,7 @@ HTML;
     // Sanitize: only keep known scalar/array keys; strip anything unexpected.
     $incoming = $body['settings'];
     $allowed_keys = [
-      'defaultDateMode', 'language', 'editor',
+      'defaultDateMode', 'specificDate', 'language', 'editor', 'editorLabels',
       'logo', 'address', 'socialLinks',
       'theme', 'primaryColor', 'accentColor',
       'paperName', 'paperNameBengali', 'tagline', 'taglineBengali',
@@ -2923,6 +2923,9 @@ HTML;
       'headerAdBanner', 'footerAdBanner',
       'subscriptionEnabled', 'subscriptionPrice',
       'contactEmail', 'contactPhone',
+      'showPagePagination', 'showBetaBadge',
+      'underMaintenance', 'maintenanceMessage',
+      'headScripts', 'othersPageTitle',
     ];
     $settings = array_intersect_key($incoming, array_flip($allowed_keys));
 
@@ -3063,20 +3066,19 @@ HTML;
       return new WP_REST_Response(null, 304);
     }
 
-    // Past dates are immutable after the day closes; cache them for 24 hours.
-    // Today's date may still receive edits — we cannot let the browser hold a
-    // stale copy for any window or the admin will appear to "lose" their saves
-    // on refresh.  Force the browser to revalidate via ETag on every request
-    // (response body is still served from cache if the ETag matches, so this
-    // only costs a small conditional GET round-trip).
-    $today  = gmdate('Y-m-d');
-    if ($date < $today) {
-      header('Cache-Control: public, max-age=86400, s-maxage=86400');
-    } else {
-      // no-cache = "must revalidate every time"; max-age=0 belt-and-braces
-      // for HTTP/1.0 intermediaries.  must-revalidate forbids serving stale.
-      header('Cache-Control: public, max-age=0, no-cache, must-revalidate');
-    }
+    // Always force browser revalidation via ETag for all dates — past AND today.
+    //
+    // Rationale: admins routinely correct past editions (typos, image swaps,
+    // late-breaking updates).  A max-age=86400 browser cache for past dates
+    // silently hides those changes for up to 24 hours because the browser
+    // returns the cached response at the network layer BEFORE Angular's HTTP
+    // interceptor can apply its own cache-eviction logic.  ETag-based
+    // revalidation is just as efficient (a 304 still avoids re-downloading the
+    // full payload) while always reflecting the latest server state.
+    //
+    // no-cache = "must revalidate every time"; max-age=0 belt-and-braces
+    // for HTTP/1.0 intermediaries.  must-revalidate forbids serving stale.
+    header('Cache-Control: public, max-age=0, no-cache, must-revalidate');
     header('ETag: ' . $etag);
     header('Last-Modified: ' . gmdate('D, d M Y H:i:s \G\M\T'));
     header('Vary: Origin');

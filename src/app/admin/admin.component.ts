@@ -224,7 +224,10 @@ export class AdminComponent implements OnInit, OnDestroy {
   onBulkXmlImportCompleted(event: { firstDate: string }): void {
     this.showBulkXmlImport = false;
     this.toaster.success('Bulk import complete!');
-    // Reload data and navigate to the first imported date
+    // Clear all cache layers before reloading so newly imported editions
+    // (which may be past dates already stored in IDB / localStorage) are
+    // fetched fresh from the server instead of returning stale cached data.
+    this.dataService.clearAllCaches();
     this.dataService.loadData().subscribe({
       next: () => {
         if (event.firstDate) {
@@ -351,6 +354,20 @@ export class AdminComponent implements OnInit, OnDestroy {
     this.cdr.detectChanges();
     // Atomic server delete
     this.dataService.deleteSectionAtomically(previewPageId, sec.id, this.selectedDate, this.selectedEditionNumber).subscribe({
+      next: () => {
+        // Reload from server on success; re-sync previewPage to the fresh
+        // page reference so the preview modal reflects confirmed server state.
+        this.dataService.reloadDate(this.selectedDate).subscribe({
+          next: () => {
+            this.loadCurrentEdition();
+            if (this.previewPage) {
+              this.previewPage = this.pages.find((p: any) => p.id === previewPageId) ?? null;
+              if (!this.previewPage) this.closePagePreview();
+              this.cdr.detectChanges();
+            }
+          },
+        });
+      },
       error: () => {
         this.markUnsavedChanges();
         this.toaster.warning('Section deletion could not sync to server. Please try deleting again.');
@@ -921,6 +938,16 @@ export class AdminComponent implements OnInit, OnDestroy {
       }
       this.pages = [];
     }
+
+    // Re-sync selectedPage to the freshly-resolved page objects so that
+    // selectedPage.sections always reflects current state regardless of what
+    // triggered this reload (version poll, save/delete success, date change).
+    // This is the single authoritative place that fixes the stale-reference
+    // issue for ALL callers of loadCurrentEdition().
+    if (this.selectedPage != null) {
+      this.selectedPage = this.pages.find(p => p.id === this.selectedPage!.id) ?? null;
+    }
+
     this.isLoadingEdition = false;
     this.cdr.detectChanges();
   }
@@ -959,13 +986,22 @@ export class AdminComponent implements OnInit, OnDestroy {
     this.dataService.getOrCreateEdition(this.selectedDate, nextEditionNumber);
     this.markUnsavedChanges();
     this.selectedEditionNumber = nextEditionNumber;
-    this.loadCurrentEdition();
-    this.toaster.success(`Edition ${nextEditionNumber} created!`);
+    if (this.adminTheme !== 'vintage') {
+      this.loadCurrentEdition();
+      this.toaster.success(`Edition ${nextEditionNumber} created!`);
+      const newEd = this.editionsForDate.find(e => (e.edition || 1) === nextEditionNumber);
+      if (newEd) this.openEditionLabelEditor(newEd);
+      return;
+    }
 
-    // Open label editor immediately for the new edition
-    const newEd = this.editionsForDate.find(e => (e.edition || 1) === nextEditionNumber);
-    if (newEd) this.openEditionLabelEditor(newEd);
-    this.autoSaveForVintage();
+    this.syncCurrentDateStructure(
+      'Creating edition and syncing...',
+      `Edition ${nextEditionNumber} created!`,
+      () => {
+        const newEd = this.editionsForDate.find(e => (e.edition || 1) === nextEditionNumber);
+        if (newEd) this.openEditionLabelEditor(newEd);
+      }
+    );
   }
 
   openEditionLabelEditor(ed: NewspaperEdition) {
@@ -988,9 +1024,16 @@ export class AdminComponent implements OnInit, OnDestroy {
     this.dataService.updateEditions(editions);
     this.markUnsavedChanges();
     this.editingEditionLabel = null;
-    this.loadCurrentEdition();
-    this.toaster.success('Edition labels saved!');
-    this.autoSaveForVintage();
+    if (this.adminTheme !== 'vintage') {
+      this.loadCurrentEdition();
+      this.toaster.success('Edition labels saved!');
+      return;
+    }
+
+    this.syncCurrentDateStructure(
+      'Saving edition labels and syncing...',
+      'Edition labels saved!'
+    );
   }
 
   /** Display label for the admin UI (always shows EN / BN side-by-side if custom labels are set). */
@@ -1117,9 +1160,103 @@ export class AdminComponent implements OnInit, OnDestroy {
       this.availableDates.unshift(newDate);
       this.availableDates.sort().reverse();
     }
-    this.onDateChange();
-    this.autoSaveForVintage();
+
+    // Optimized date change: for a brand-new empty date, skip the full loadCurrentEdition()
+    // which would trigger hydrateDateIfMissing() and subscription overhead.
+    // The date was just created in memory, so we already have everything we need.
+    this.releaseCurrentLock();
+    this.activityLog.track('date_change', { date: this.selectedDate });
+    this.selectedEditionNumber = 1;
+    
+    // Load the edition data directly from memory without hydration
+    this.editionsForDate = this.dataService.getEditionsByDate(this.selectedDate);
+    const edition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);
+    this.pages = edition?.pages || [];
+    
+    // Reset UI state
+    this.selectedPage = null;
+    this.selectedSection = null;
+    this.isEditingPage = false;
+    this.isEditingSection = false;
+    this.vintageView = 'pages';
+    this.vintageSelectedSection = null;
+
+    this.cdr.detectChanges();
+    this.persistNewDateAndRefresh();
     this.cancelNewDateDialog();
+  }
+
+  /** Persist a just-created date and keep loading state until it is reloaded from server/index. */
+  private persistNewDateAndRefresh(): void {
+    if (this.adminTheme !== 'vintage') {
+      this.isLoadingEdition = false;
+      this.cdr.detectChanges();
+      return;
+    }
+
+    this.syncCurrentDateStructure(
+      'Creating and syncing date...',
+      'Date created and visible now.'
+    );
+  }
+
+  /** Persist current date structural changes and keep loading until UI re-renders from fresh server data. */
+  private syncCurrentDateStructure(
+    pendingMessage: string,
+    successMessage: string,
+    onSynced?: () => void
+  ): void {
+    const date = this.selectedDate;
+    const applySyncedUi = () => {
+      this.availableDates = this.dataService.getAllEditionDates();
+      if (!this.availableDates.includes(date)) {
+        this.availableDates.unshift(date);
+      }
+      this.availableDates = [...new Set(this.availableDates)].sort().reverse();
+
+      this.editionsForDate = this.dataService.getEditionsByDate(this.selectedDate);
+      const edition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);
+      this.pages = edition?.pages || [];
+      this.isLoadingEdition = false;
+      this.markSaved();
+      if (onSynced) onSynced();
+      this.cdr.detectChanges();
+      this.toaster.success(successMessage, 4500);
+    };
+
+    this.isLoadingEdition = true;
+    this.toaster.info(pendingMessage, 7000);
+
+    this.dataService.saveEditionsForDateAtomically(date).pipe(
+      switchMap(() => this.dataService.reloadCurrentDateOnly(date))
+    ).subscribe({
+      next: () => applySyncedUi(),
+      error: (err: any) => {
+        // Backward compatibility: older plugin versions may not expose the atomic endpoint.
+        const status = err?.status;
+        if (status === 404 || status === 405) {
+          this.dataService.saveData(this.dataService.getData()).pipe(
+            switchMap(() => this.dataService.reloadCurrentDateOnly(date))
+          ).subscribe({
+            next: () => applySyncedUi(),
+            error: (fallbackErr: any) => {
+              this.isLoadingEdition = false;
+              this.markUnsavedChanges();
+              const msg = fallbackErr?.error?.message || fallbackErr?.message || 'Unknown error';
+              this.toaster.warning(`Changes saved locally but sync is delayed: ${msg}`, 6000);
+              this.cdr.detectChanges();
+            }
+          });
+          return;
+        }
+
+        this.isLoadingEdition = false;
+        this.markUnsavedChanges();
+        const msg = err?.error?.message || err?.message || `HTTP ${status}`;
+        this.toaster.warning(`Sync failed: ${msg}. Please retry Save All.`, 6000);
+        this.cdr.detectChanges();
+      }
+    });
   }
 
   /** Closes the Add New Date modal without making any changes. */
@@ -1275,15 +1412,11 @@ export class AdminComponent implements OnInit, OnDestroy {
         next: () => {
           // Reload from server on success so the grid always reflects what
           // was actually persisted — guards against stale ETag / cache issues.
+          // applyEditionFromMemory() (called inside loadCurrentEdition) re-syncs
+          // selectedPage centrally, so no manual re-sync is needed here.
           this.dataService.reloadDate(savedDate).subscribe({
             next: () => {
               this.loadCurrentEdition();
-              // Re-sync selectedPage so that if the user is viewing this page's
-              // sections, selectedPage.sections reflects the server-confirmed state.
-              if (this.selectedPage) {
-                const refreshed = this.pages.find(p => p.id === this.selectedPage!.id);
-                if (refreshed) this.selectedPage = refreshed;
-              }
               this.cdr.detectChanges();
             },
           });
@@ -1357,6 +1490,12 @@ export class AdminComponent implements OnInit, OnDestroy {
 
       // Atomic server delete — only removes THIS page.
       this.dataService.deletePageAtomically(page.id, this.selectedDate, this.selectedEditionNumber).subscribe({
+        next: () => {
+          // Reload from server on success to confirm the deletion persisted.
+          this.dataService.reloadDate(this.selectedDate).subscribe({
+            next: () => this.loadCurrentEdition(),
+          });
+        },
         error: () => {
           this.markUnsavedChanges();
           this.toaster.warning('Page deletion could not sync to server. Please try deleting again.');
@@ -1574,17 +1713,11 @@ export class AdminComponent implements OnInit, OnDestroy {
         next: () => {
           // Reload from server on success so the sections grid always reflects
           // what was actually persisted — guards against stale cache issues.
+          // applyEditionFromMemory() (called inside loadCurrentEdition) re-syncs
+          // selectedPage centrally, so no manual re-sync is needed here.
           this.dataService.reloadDate(saveDate).subscribe({
             next: () => {
               this.loadCurrentEdition();
-              // Re-sync selectedPage to the freshly-loaded page object so that
-              // selectedPage.sections reflects the saved state.  loadCurrentEdition()
-              // replaces this.pages with new objects; without this, the template
-              // still reads sections from the old (stale) reference.
-              if (this.selectedPage) {
-                const refreshed = this.pages.find(p => p.id === this.selectedPage!.id);
-                if (refreshed) this.selectedPage = refreshed;
-              }
               this.cdr.detectChanges();
             },
           });
@@ -1626,6 +1759,13 @@ export class AdminComponent implements OnInit, OnDestroy {
 
       // Atomic server delete — only removes THIS section.
       this.dataService.deleteSectionAtomically(delPageId, section.id, delDate, delEdition).subscribe({
+        next: () => {
+          // Reload from server on success to confirm the deletion persisted.
+          // Prevents stale cache from restoring the deleted section on next reload.
+          this.dataService.reloadDate(delDate).subscribe({
+            next: () => this.loadCurrentEdition(),
+          });
+        },
         error: () => {
           this.markUnsavedChanges();
           this.toaster.warning('Section deletion could not sync to server. Please try again.');
@@ -2085,6 +2225,12 @@ export class AdminComponent implements OnInit, OnDestroy {
 
     // Atomic server delete — keeps server in sync without a full-blob overwrite.
     this.dataService.deleteSectionAtomically(delPageId, section.id, delDate, delEdition).subscribe({
+      next: () => {
+        // Reload from server on success to confirm the deletion persisted.
+        this.dataService.reloadDate(delDate).subscribe({
+          next: () => this.loadCurrentEdition(),
+        });
+      },
       error: () => {
         this.markUnsavedChanges();
         this.toaster.warning('Section deletion could not sync to server. Please try deleting again.');
@@ -3255,9 +3401,16 @@ export class AdminComponent implements OnInit, OnDestroy {
     if (this.selectedEditionNumber === targetNum) {
       this.selectedEditionNumber = 1;
     }
-    this.loadCurrentEdition();
-    this.toaster.success(`Edition "${label}" deleted.`);
-    this.autoSaveForVintage();
+    if (this.adminTheme !== 'vintage') {
+      this.loadCurrentEdition();
+      this.toaster.success(`Edition "${label}" deleted.`);
+      return;
+    }
+
+    this.syncCurrentDateStructure(
+      'Deleting edition and syncing...',
+      `Edition "${label}" deleted.`
+    );
   }
 
   private autoSaveForVintage(): void {

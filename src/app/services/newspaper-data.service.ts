@@ -5,7 +5,7 @@ import { Observable, BehaviorSubject, Subject, Subscription, timer, forkJoin, in
 import { tap, map, catchError, timeout, retry, switchMap, debounceTime, distinctUntilChanged } from 'rxjs/operators';
 import { AuthService } from './auth.service';
 import { WP_BASE_URL } from '../config';
-import { clearHttpCache, evictEditionCache } from '../interceptors/http-cache.interceptor';
+import { clearHttpCache, evictEditionCache, markForBrowserCacheBypass } from '../interceptors/http-cache.interceptor';
 import { SettingsService } from './settings.service';
 import { DateIndexService } from './date-index.service';
 import { EditionCacheService } from './edition-cache.service';
@@ -602,8 +602,15 @@ export class NewspaperDataService {
       // Refreshes the DateIndexService signal and returns the updated list.
       // This also handles the case where a new edition date was just published.
       dates:    this.dateIndexService.fetch(),
+      // Re-fetch global settings so that settings changes made by an admin in
+      // another tab/session (logo, maintenance mode, language, etc.) are picked
+      // up immediately when the version poll detects a remote change — without
+      // requiring a full page reload.  The HTTP interceptor cache applies a
+      // 1-hour TTL with ETag validation, so this is a cheap conditional GET
+      // when settings have not changed, and a full fetch only when they have.
+      settings: this.settingsService.fetch(),
     }).pipe(
-      tap(({ editions }) => {
+      tap(({ editions, settings }) => {
         const current = this.dataSubject.value;
         // Preserve all dates except the one we just refreshed.
         const otherEditions = current.editions.filter(e => e.date !== date);
@@ -611,7 +618,10 @@ export class NewspaperDataService {
           const d = b.date.localeCompare(a.date);
           return d !== 0 ? d : ((a.edition ?? 1) - (b.edition ?? 1));
         });
-        this.dataSubject.next({ ...current, editions: merged });
+        // Apply both refreshed editions AND refreshed settings so the viewer
+        // reflects any settings changes (e.g. maintenance mode, logo) without
+        // requiring a full page reload.
+        this.dataSubject.next({ ...current, settings, editions: merged });
       }),
       map(() => void 0),
       catchError(err => {
@@ -1128,6 +1138,22 @@ export class NewspaperDataService {
   }
 
   /**
+   * Invalidate every client-side cache layer in one call.
+   *
+   * Use after bulk operations that may affect any number of dates
+   * (bulk XML import, data restore, full rebuild) so the subsequent
+   * loadData() call always fetches fresh data from the server instead
+   * of returning stale in-memory, localStorage, or IndexedDB entries.
+   *
+   * Does NOT trigger a reload — the caller is responsible for calling
+   * loadData() afterward.
+   */
+  clearAllCaches(): void {
+    clearHttpCache();
+    this.editionCacheService.clearMemory();
+  }
+
+  /**
    * After any atomic write, evict the cache entry for the affected date so
    * the next fetch of /data/editions/:date returns the server's updated data.
    * Also clears /data/dates in case page counts changed.
@@ -1135,6 +1161,11 @@ export class NewspaperDataService {
   private evictDateCache(date: string): void {
     // Evict from the HTTP-level interceptor cache (handles ETag slots + /data/dates)
     evictEditionCache(date);
+    // Mark this date to bypass the browser's native HTTP cache on the very next
+    // request.  The browser may hold a stale response with max-age=86400 from
+    // before the server-side fix; adding Cache-Control: no-cache to the outgoing
+    // request forces revalidation regardless of the cached max-age.
+    markForBrowserCacheBypass(date);
     // Also evict from the EditionCacheService in-memory Map so the next
     // getEditionsForDate(date) call re-fetches from the network.
     this.editionCacheService.evict(date);
@@ -1403,7 +1434,21 @@ export class NewspaperDataService {
 
   restoreServerBackup(index: number): Observable<any> {
     const headers = this.auth.getAuthHeaders();
-    return this.http.post(`${this.apiUrl}/restore`, { index }, { headers });
+    return this.http.post(`${this.apiUrl}/restore`, { index }, { headers }).pipe(
+      tap(() => {
+        // Invalidate all cache layers so the restored data is immediately
+        // visible — both the HTTP interceptor cache and the EditionCacheService
+        // in-memory + IDB stores.  Without this, the admin and viewer would
+        // continue serving pre-restore edition data until the next page reload.
+        clearHttpCache();
+        this.editionCacheService.clearMemory();
+      }),
+      switchMap((result) =>
+        // Re-hydrate the in-memory dataSubject from the server so the admin
+        // UI reflects the restored content without requiring a manual refresh.
+        this.loadData().pipe(map(() => result))
+      )
+    );
   }
 
   rebuildDataFromSectionPosts(): Observable<{ success: boolean; editionCount: number; pageCount: number; sectionCount: number }> {
@@ -1412,6 +1457,15 @@ export class NewspaperDataService {
       `${this.apiUrl}/rebuild-from-sections`,
       {},
       { headers }
+    ).pipe(
+      tap(() => {
+        // Invalidate all cache layers before the caller's loadData() call so
+        // rebuilt editions are fetched fresh from the server.  Without this,
+        // past-date entries already in IDB / localStorage would be returned by
+        // EditionCacheService instead of the freshly rebuilt data.
+        clearHttpCache();
+        this.editionCacheService.clearMemory();
+      })
     );
   }
 
