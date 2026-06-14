@@ -147,7 +147,8 @@ export class AdminComponent implements OnInit, OnDestroy {
     headScripts: '',
     underMaintenance: false,
     maintenanceMessage: '',
-    othersPageTitle: ''
+    othersPageTitle: '',
+    imageFormat: 'webp' as 'webp' | 'all'
   };
   logoInputMode: 'url' | 'file' = 'url';
   logoFile: File | null = null;
@@ -386,6 +387,41 @@ export class AdminComponent implements OnInit, OnDestroy {
     private lockService: LockService,
     private activityLog: ActivityLogService
   ) {}
+
+  // ── Image format helpers ─────────────────────────────────────────────────
+  // Read the active imageFormat setting at the moment of each upload so that
+  // changing the setting mid-session takes effect on the very next upload.
+
+  /**
+   * `accept` attribute value for image file inputs.
+   * Reads from the live settings form (not yet saved) so the restriction
+   * takes effect as soon as the user toggles the radio button.
+   */
+  get imageAccept(): string {
+    return this.settingsForm.imageFormat === 'webp' ? 'image/webp' : 'image/*';
+  }
+
+  /** MIME type to use when encoding new images via Canvas or FileReader. */
+  private get imageMime(): 'image/webp' | 'image/jpeg' {
+    return (this.dataService.getSettings()?.imageFormat || 'webp') === 'webp'
+      ? 'image/webp'
+      : 'image/jpeg';
+  }
+
+  /** File extension (no dot) matching the current image format. */
+  private get imageExt(): string {
+    return this.imageMime === 'image/webp' ? 'webp' : 'jpg';
+  }
+
+  /**
+   * Canvas encoding quality.
+   * WebP uses 0.88 — visually equivalent to JPEG 0.92 thanks to better
+   * codec efficiency, while producing a smaller file.
+   */
+  private get imageQuality(): number {
+    return this.imageMime === 'image/webp' ? 0.88 : 0.92;
+  }
+  // ────────────────────────────────────────────────────────────────────────
 
   ngOnInit() {
     this.todayDate = this.dataService.getTodayDate();
@@ -2373,11 +2409,11 @@ export class AdminComponent implements OnInit, OnDestroy {
             cropHeight
           );
           
-          // Convert to data URL
-          const croppedImageData = canvas.toDataURL('image/jpeg', 0.9);
-          
-          const fileName = this.buildSectionImageFilename('jpg');
-          
+          // Convert to data URL using the admin-configured image format.
+          const croppedImageData = canvas.toDataURL(this.imageMime, this.imageQuality);
+
+          const fileName = this.buildSectionImageFilename(this.imageExt);
+
           // Upload to backend
           this.uploadCroppedImage(croppedImageData, fileName);
           
@@ -2450,7 +2486,7 @@ export class AdminComponent implements OnInit, OnDestroy {
     }
 
     const file = input.files[0];
-    
+
     // Validate file type
     if (!file.type.startsWith('image/')) {
       this.toaster.error('Please select an image file');
@@ -2464,18 +2500,47 @@ export class AdminComponent implements OnInit, OnDestroy {
       return;
     }
 
-    // Read file and upload
-    const reader = new FileReader();
-    reader.onload = () => {
-      const imageData = reader.result as string;
-      const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
-      const fileName = this.buildSectionImageFilename(ext);
+    // Legacy mode — upload the file as-is, preserving its original format.
+    if (this.imageMime === 'image/jpeg') {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const imageData = reader.result as string;
+        const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
+        const fileName = this.buildSectionImageFilename(ext);
+        this.uploadImageFile(imageData, fileName);
+      };
+      reader.onerror = () => this.toaster.error('Failed to read image file');
+      reader.readAsDataURL(file);
+      return;
+    }
+
+    // WebP mode — re-encode via Canvas before uploading.
+    this.loader.show('Converting to WebP…');
+    const objectUrl = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      const canvas = document.createElement('canvas');
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        this.loader.hide();
+        this.toaster.error('Failed to convert image to WebP');
+        return;
+      }
+      ctx.drawImage(img, 0, 0);
+      const imageData = canvas.toDataURL('image/webp', this.imageQuality);
+      const fileName = this.buildSectionImageFilename('webp');
+      this.loader.hide();
       this.uploadImageFile(imageData, fileName);
     };
-    reader.onerror = () => {
-      this.toaster.error('Failed to read image file');
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      this.loader.hide();
+      this.toaster.error('Failed to load image for conversion');
     };
-    reader.readAsDataURL(file);
+    img.src = objectUrl;
   }
 
   uploadImageFile(imageData: string, fileName: string) {
@@ -3674,10 +3739,13 @@ export class AdminComponent implements OnInit, OnDestroy {
 
     try {
       // Resize to 700px for the frontend center-panel display image.
-      const displayFile = await resizeImageToWidth(originalFile, 700, 0.92);
-      const displayFileName = this.buildPageImageFilename('jpg', 'full');
+      // Encode in the format chosen by the admin (WebP by default).
+      const displayFile = await resizeImageToWidth(originalFile, 700, this.imageQuality, this.imageMime);
+      const displayFileName = this.buildPageImageFilename(this.imageExt, 'full');
 
       // Keep the original at full resolution for the section crop tool.
+      // Hi-res is the crop source — preserve its original format to avoid
+      // quality loss from double re-encoding and to keep max detail for crops.
       const hiResExt = originalFile.name.split('.').pop()?.toLowerCase() || 'jpg';
       const hiResFileName = this.buildPageImageFilename(hiResExt, 'hires');
 
@@ -3698,11 +3766,11 @@ export class AdminComponent implements OnInit, OnDestroy {
       // would leave the skeleton visible indefinitely.
       this.previewLoading = (displayUrl !== prevFullImage);
 
-      // Auto-generate a 200px thumbnail from the original if none is set yet.
+      // Auto-generate a thumbnail from the original if none is set yet.
       if (!this.pageForm.thumbnail) {
         this.loader.setMessage('Generating thumbnail…');
-        const thumbFile = await resizeImageToWidth(originalFile, 300, 0.92);
-        const thumbFileName = this.buildPageImageFilename('jpg', 'thumb');
+        const thumbFile = await resizeImageToWidth(originalFile, 300, this.imageQuality, this.imageMime);
+        const thumbFileName = this.buildPageImageFilename(this.imageExt, 'thumb');
         const thumbUrl = await this.uploadMediaFile(thumbFile, thumbFileName);
         this.pageForm.thumbnail = thumbUrl;
       }
@@ -3771,8 +3839,8 @@ export class AdminComponent implements OnInit, OnDestroy {
     this.loader.show('Resizing and uploading thumbnail…');
 
     try {
-      const thumbFile = await resizeImageToWidth(originalFile, 300, 0.92);
-      const fileName = this.buildPageImageFilename('jpg', 'thumb');
+      const thumbFile = await resizeImageToWidth(originalFile, 300, this.imageQuality, this.imageMime);
+      const fileName = this.buildPageImageFilename(this.imageExt, 'thumb');
       const url = await this.uploadMediaFile(thumbFile, fileName);
       this.pageForm.thumbnail = url;
       this.cdr.detectChanges();
@@ -3820,7 +3888,8 @@ export class AdminComponent implements OnInit, OnDestroy {
       headScripts: settings.headScripts ?? '',
       underMaintenance: settings.underMaintenance === true,
       maintenanceMessage: settings.maintenanceMessage ?? '',
-      othersPageTitle: settings.othersPageTitle ?? ''
+      othersPageTitle: settings.othersPageTitle ?? '',
+      imageFormat: (settings.imageFormat || 'webp') as 'webp' | 'all'
     };
     this.hasUnsavedSettingsChanges = false;
   }
@@ -3863,7 +3932,8 @@ export class AdminComponent implements OnInit, OnDestroy {
       headScripts: this.settingsForm.headScripts || '',
       underMaintenance: this.settingsForm.underMaintenance === true,
       maintenanceMessage: this.settingsForm.maintenanceMessage || '',
-      othersPageTitle: this.settingsForm.othersPageTitle || ''
+      othersPageTitle: this.settingsForm.othersPageTitle || '',
+      imageFormat: this.settingsForm.imageFormat || 'webp'
     };
   }
 
@@ -3902,24 +3972,71 @@ export class AdminComponent implements OnInit, OnDestroy {
     const input = event.target as HTMLInputElement;
     if (input.files && input.files[0]) {
       this.logoFile = input.files[0];
-      const ext = this.logoFile.name.split('.').pop()?.toLowerCase() || 'jpg';
-      const fileName = `logo_${Date.now()}.${ext}`;
-      this.loader.show('Uploading logo…');
-      this.activityLog.track('image_upload_logo', { fileName });
-      this.uploadMediaFile(this.logoFile, fileName)
-        .then((url) => {
-          if (this.settingsForm.logo) {
-            this.settingsForm.logo.url = url;
-          }
-          this.onSettingsFormChanged();
-          this.cdr.detectChanges();
-          this.toaster.success('Logo uploaded');
-        })
-        .catch((error) => {
-          console.error('Error uploading logo:', error);
-          this.toaster.error('Failed to upload logo');
-        })
-        .finally(() => this.loader.hide());
+
+      // Legacy mode — upload as-is, preserving original format
+      if (this.imageMime === 'image/jpeg') {
+        const ext = this.logoFile.name.split('.').pop()?.toLowerCase() || 'jpg';
+        const fileName = `logo_${Date.now()}.${ext}`;
+        this.loader.show('Uploading logo…');
+        this.activityLog.track('image_upload_logo', { fileName });
+        this.uploadMediaFile(this.logoFile, fileName)
+          .then((url) => {
+            if (this.settingsForm.logo) {
+              this.settingsForm.logo.url = url;
+            }
+            this.onSettingsFormChanged();
+            this.cdr.detectChanges();
+            this.toaster.success('Logo uploaded');
+          })
+          .catch((error) => {
+            console.error('Error uploading logo:', error);
+            this.toaster.error('Failed to upload logo');
+          })
+          .finally(() => this.loader.hide());
+        return;
+      }
+
+      // WebP mode — re-encode via Canvas (preserves PNG transparency)
+      this.loader.show('Converting logo to WebP…');
+      const objectUrl = URL.createObjectURL(this.logoFile);
+      const img = new Image();
+      img.onload = () => {
+        URL.revokeObjectURL(objectUrl);
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          this.loader.hide();
+          this.toaster.error('Failed to convert logo to WebP');
+          return;
+        }
+        ctx.drawImage(img, 0, 0);
+        const fileName = `logo_${Date.now()}.webp`;
+        const imageData = canvas.toDataURL('image/webp', this.imageQuality);
+        const file = this.dataUrlToFile(imageData, fileName);
+        this.activityLog.track('image_upload_logo', { fileName });
+        this.uploadMediaFile(file, fileName)
+          .then((url) => {
+            if (this.settingsForm.logo) {
+              this.settingsForm.logo.url = url;
+            }
+            this.onSettingsFormChanged();
+            this.cdr.detectChanges();
+            this.toaster.success('Logo uploaded');
+          })
+          .catch((error) => {
+            console.error('Error uploading logo:', error);
+            this.toaster.error('Failed to upload logo');
+          })
+          .finally(() => this.loader.hide());
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(objectUrl);
+        this.loader.hide();
+        this.toaster.error('Failed to load logo for conversion');
+      };
+      img.src = objectUrl;
     }
   }
 

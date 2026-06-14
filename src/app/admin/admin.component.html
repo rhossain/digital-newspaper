@@ -607,7 +607,7 @@
                       <input
                         type="file"
                         (change)="onFullImageFileSelected($event)"
-                        accept="image/*"
+                        [accept]="imageAccept"
                         class="form-control"
                         />
                     }
@@ -669,7 +669,7 @@
                     <input
                       type="file"
                       (change)="onThumbnailFileSelected($event)"
-                      accept="image/*"
+                      [accept]="imageAccept"
                       class="form-control"
                       />
                   }
@@ -909,7 +909,7 @@
             @if (imageSourceOption === 'upload') {
               <div style="display: flex; gap: 8px; align-items: center;">
                 <input type="text" [(ngModel)]="sectionForm.imageUrl" class="form-control" placeholder="Selected image path" readonly style="flex: 1;" />
-                <input type="file" #fileInput accept="image/*" style="display: none;" (change)="onImageFileSelected($event)" />
+                <input type="file" #fileInput [accept]="imageAccept" style="display: none;" (change)="onImageFileSelected($event)" />
                 <button type="button" class="btn btn-primary" (click)="fileInput.click()">
                   📁 Browse
                 </button>
@@ -1519,7 +1519,7 @@
               <input
                 type="file"
                 (change)="onLogoFileSelected($event)"
-                accept="image/*"
+                [accept]="imageAccept"
                 class="form-control"
                 />
             }
@@ -1592,6 +1592,33 @@
             </label>
             <p class="hint-text">When enabled, a numbered pagination bar is shown above the newspaper page in the viewer.</p>
           </div>
+        </div>
+        <!-- Image Format -->
+        <div class="settings-section">
+          <h3>Image Format</h3>
+          <div class="form-group">
+            <label>Encoding format for new uploads &amp; auto-generated images</label>
+            <div class="input-mode-options">
+              <label class="radio-option">
+                <input type="radio" name="imageFormat" value="webp" [(ngModel)]="settingsForm.imageFormat" />
+                <span>WebP <strong>(Recommended)</strong></span>
+              </label>
+              <label class="radio-option">
+                <input type="radio" name="imageFormat" value="all" [(ngModel)]="settingsForm.imageFormat" />
+                <span>All Formats (Legacy)</span>
+              </label>
+            </div>
+          </div>
+          @if (settingsForm.imageFormat === 'webp') {
+            <p class="hint-text">
+              ✅ <strong>WebP mode:</strong> All new page images, thumbnails, section crops, and logo uploads will be encoded as WebP — typically 25–35% smaller than JPEG at the same visual quality. Supported by all current browsers. <strong>Existing images are not affected.</strong>
+            </p>
+          }
+          @if (settingsForm.imageFormat === 'all') {
+            <p class="hint-text" style="color: var(--color-warning-dark, #d97706);">
+              ⚠️ <strong>Legacy mode:</strong> Uploaded files keep their original format (JPEG, PNG, etc.). New images will be larger than necessary. Switch to WebP for better performance.
+            </p>
+          }
         </div>
         <!-- Social Media Links -->
         <div class="settings-section">

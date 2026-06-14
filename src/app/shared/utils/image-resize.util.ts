@@ -1,18 +1,23 @@
 /**
  * Resizes an image File to the given target width (maintaining aspect ratio)
- * using the Canvas API, then returns a new JPEG File at the specified quality.
+ * using the Canvas API, then returns a new File at the specified quality and
+ * output MIME type.
  *
  * If the image's natural width is already ≤ targetWidth the original file is
- * returned unchanged (no upscaling, no re-encoding).
+ * returned unchanged (no upscaling, no re-encoding).  The caller is responsible
+ * for any format conversion needed in that case.
  *
  * @param file        Source image File (any browser-supported format).
  * @param targetWidth Maximum output width in pixels.
- * @param quality     JPEG quality, 0–1. Defaults to 0.92.
+ * @param quality     Encoding quality, 0–1. Defaults to 0.92.
+ * @param outputMime  Output MIME type. Defaults to 'image/webp'.
+ *                    Pass 'image/jpeg' to retain legacy JPEG behaviour.
  */
 export function resizeImageToWidth(
   file: File,
   targetWidth: number,
-  quality = 0.92
+  quality = 0.92,
+  outputMime: 'image/webp' | 'image/jpeg' = 'image/webp'
 ): Promise<File> {
   return new Promise((resolve, reject) => {
     const objectUrl = URL.createObjectURL(file);
@@ -22,6 +27,7 @@ export function resizeImageToWidth(
       URL.revokeObjectURL(objectUrl);
 
       // No upscaling — return original when already within target size.
+      // The caller handles format conversion separately if required.
       if (img.naturalWidth <= targetWidth) {
         resolve(file);
         return;
@@ -42,17 +48,18 @@ export function resizeImageToWidth(
 
       ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
 
+      const ext = outputMime === 'image/webp' ? 'webp' : 'jpg';
+      const baseName = file.name.replace(/\.[^.]+$/, '');
+
       canvas.toBlob(
         (blob) => {
           if (!blob) {
             reject(new Error('Canvas toBlob returned null'));
             return;
           }
-          // Strip the original extension and always name the output .jpg
-          const baseName = file.name.replace(/\.[^.]+$/, '');
-          resolve(new File([blob], `${baseName}.jpg`, { type: 'image/jpeg' }));
+          resolve(new File([blob], `${baseName}.${ext}`, { type: outputMime }));
         },
-        'image/jpeg',
+        outputMime,
         quality
       );
     };

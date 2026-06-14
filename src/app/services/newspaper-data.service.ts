@@ -102,6 +102,12 @@ export interface GlobalSettings {
   headScripts?: string;
   /** Site name appended to individual post/section page titles, e.g. "দৈনিক সংগ্রাম ই-পেপার". */
   othersPageTitle?: string;
+  /**
+   * Controls the encoding format for all new image uploads and auto-generated images.
+   *  'webp' (default) — encode as WebP before upload (smaller files, same quality).
+   *  'all'            — preserve the original file format (current/legacy behaviour).
+   */
+  imageFormat?: 'webp' | 'all';
 }
 
 export interface NewspaperData {

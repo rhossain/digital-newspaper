@@ -170,7 +170,8 @@ class Digital_Newspaper_API {
           'phone'   => '',
           'email'   => '',
           'website' => ''
-        ]
+        ],
+        'imageFormat' => 'webp'
       ],
       'editions' => []
     ];
