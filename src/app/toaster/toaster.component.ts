@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy, ChangeDetectorRef } from '@angular/core';
+import { Component, OnInit, OnDestroy, ChangeDetectorRef, ChangeDetectionStrategy } from '@angular/core';
 
 import { ToasterService, ToastMessage } from '../services/toaster.service';
 import { Subscription } from 'rxjs';
@@ -8,7 +8,8 @@ import { Subscription } from 'rxjs';
   standalone: true,
   imports: [],
   templateUrl: './toaster.component.html',
-  styleUrls: ['./toaster.component.css']
+  styleUrls: ['./toaster.component.css'],
+  changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class ToasterComponent implements OnInit, OnDestroy {
   toasts: ToastMessage[] = [];

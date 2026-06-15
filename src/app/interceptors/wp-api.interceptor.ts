@@ -76,11 +76,12 @@ export const wpApiInterceptor: HttpInterceptorFn = (req, next) => {
   const rewrittenBase = urlPath.replace('/wp-json/', '/?rest_route=/');
   const rewrittenUrl = queryString ? `${rewrittenBase}&${queryString}` : rewrittenBase;
 
-  // Determine whether this is a public, cacheable endpoint.
-  // Public endpoints must NOT send credentials so CDN caching is not blocked.
-  // All other endpoints (admin writes, auth, media, locks) continue to use
-  // withCredentials: true for the Imunify360 cookie bypass.
-  const sendCredentials = !isPublicReadEndpoint(urlPath, req.method);
+  // Always send credentials so the Imunify360 verification cookie is included.
+  // The original logic skipped credentials on public GET endpoints to allow CDN
+  // caching, but Imunify360 on this shared host blocks any request that arrives
+  // without its cookie — so all calls must send credentials.
+  // If a CDN is added in future, revisit: CDNs cannot cache credentialed responses.
+  const sendCredentials = true;
 
   req = req.clone({
     url: rewrittenUrl,

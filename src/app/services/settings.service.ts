@@ -137,6 +137,7 @@ export class SettingsService {
   }
 
   private static _readFromStorage(): GlobalSettings | null {
+    if (typeof localStorage === 'undefined') return null; // SSR — no localStorage
     try {
       const raw = localStorage.getItem(SettingsService.CACHE_KEY);
       if (!raw) return null;
@@ -157,6 +158,7 @@ export class SettingsService {
   }
 
   private static _persist(settings: GlobalSettings): void {
+    if (typeof localStorage === 'undefined') return; // SSR — no localStorage
     try {
       localStorage.setItem(SettingsService.CACHE_KEY, JSON.stringify(settings));
     } catch {

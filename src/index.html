@@ -31,6 +31,10 @@
   <meta name="twitter:image" content="https://epaper.dailysangram.com/assets/logo.png">
 
   <!-- Warm up cross-origin connections used during initial load -->
+  <!-- Preconnect to the external media CDN (favicon + logo images). -->
+  <link rel="preconnect" href="https://static.dailysangram.com">
+  <link rel="dns-prefetch" href="https://static.dailysangram.com">
+  <!-- Google Fonts — still external until PERF-01 (self-hosting) is done. -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <!-- CDN that serves logo/favicon assets -->

@@ -1,4 +1,5 @@
-import { Injectable } from '@angular/core';
+import { Injectable, PLATFORM_ID, inject } from '@angular/core';
+import { isPlatformBrowser } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
 import { Observable, of, throwError } from 'rxjs';
 import { tap, map, switchMap, retry } from 'rxjs';
@@ -34,9 +35,12 @@ interface StoredUser {
   providedIn: 'root'
 })
 export class AuthService {
-  private readonly tokenKey = 'dn_wp_token';
-  private readonly userKey  = 'dn_wp_user';
+  private readonly tokenKey  = 'dn_wp_token';
+  private readonly userKey   = 'dn_wp_user';
   private readonly wpBaseUrl = WP_BASE_URL;
+
+  private readonly platformId = inject(PLATFORM_ID);
+  private get isBrowser(): boolean { return isPlatformBrowser(this.platformId); }
 
   constructor(private http: HttpClient) {}
 
@@ -67,7 +71,7 @@ export class AuthService {
         return response;
       }),
       tap((response) => {
-        if (response?.token) {
+        if (response?.token && this.isBrowser) {
           localStorage.setItem(this.tokenKey, response.token);
           localStorage.setItem(this.userKey, JSON.stringify({
             displayName: response.user?.displayName ?? '',
@@ -89,11 +93,13 @@ export class AuthService {
   }
 
   logout(): void {
+    if (!this.isBrowser) return;
     localStorage.removeItem(this.tokenKey);
     localStorage.removeItem(this.userKey);
   }
 
   private getStoredUser(): StoredUser | null {
+    if (!this.isBrowser) return null;
     const raw = localStorage.getItem(this.userKey);
     if (!raw) return null;
     try { return JSON.parse(raw); } catch { return null; }
@@ -118,6 +124,7 @@ export class AuthService {
   }
 
   getToken(): string | null {
+    if (!this.isBrowser) return null;
     return localStorage.getItem(this.tokenKey);
   }
 
@@ -191,7 +198,7 @@ export class AuthService {
           }
         }
         // Identity confirmed — refresh stored profile (role may have changed).
-        if (user?.displayName !== undefined) {
+        if (user?.displayName !== undefined && this.isBrowser) {
           localStorage.setItem(this.userKey, JSON.stringify({
             displayName: user.displayName ?? '',
             role: user.role ?? 'editor',

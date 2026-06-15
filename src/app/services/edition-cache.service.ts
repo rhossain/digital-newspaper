@@ -1,4 +1,5 @@
-import { Injectable } from '@angular/core';
+import { Injectable, PLATFORM_ID, inject } from '@angular/core';
+import { isPlatformBrowser } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
 import { Observable, of, from } from 'rxjs';
 import { tap, map, catchError, switchMap } from 'rxjs/operators';
@@ -49,6 +50,9 @@ export class EditionCacheService {
     `${WP_BASE_URL}/wp-json/digital-newspaper/v1/data/editions`;
 
   private readonly _memCache = new Map<string, MemCacheEntry>();
+
+  private readonly platformId = inject(PLATFORM_ID);
+  private get isBrowser(): boolean { return isPlatformBrowser(this.platformId); }
 
   constructor(
     private readonly http: HttpClient,
@@ -155,10 +159,12 @@ export class EditionCacheService {
     // Layer 2a: localStorage — synchronous, safe to call even if the key
     // doesn't exist (no-op).  Errors (private-browsing mode, quota issues)
     // are silently swallowed so they never break the save flow.
-    try {
-      localStorage.removeItem(this._lsKey(date));
-    } catch {
-      // ignore — eviction is best-effort
+    if (this.isBrowser) {
+      try {
+        localStorage.removeItem(this._lsKey(date));
+      } catch {
+        // ignore — eviction is best-effort
+      }
     }
     // Layer 2b: IndexedDB — async, fire-and-forget.  IdbCacheService.delete()
     // already swallows its own errors internally.
@@ -237,6 +243,7 @@ export class EditionCacheService {
   }
 
   private _readFromStorage(date: string): NewspaperEdition[] | null {
+    if (!this.isBrowser) return null; // SSR — no localStorage
     try {
       const raw = localStorage.getItem(this._lsKey(date));
       if (!raw) return null;
@@ -265,6 +272,7 @@ export class EditionCacheService {
   }
 
   private _persistToLocalStorage(date: string, editions: NewspaperEdition[]): void {
+    if (!this.isBrowser) return; // SSR — no localStorage
     // Only persist past dates; today's data must always be re-validated.
     if (!this._isPastDate(date)) return;
     if (!editions.length) return;

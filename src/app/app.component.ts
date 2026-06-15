@@ -1,5 +1,5 @@
-import { Component, OnInit, OnDestroy, Inject, isDevMode } from '@angular/core';
-import { DOCUMENT } from '@angular/common';
+import { Component, OnInit, OnDestroy, Inject, isDevMode, PLATFORM_ID, ChangeDetectionStrategy, ChangeDetectorRef } from '@angular/core';
+import { DOCUMENT, isPlatformBrowser } from '@angular/common';
 import { RouterOutlet } from '@angular/router';
 import { SwUpdate, VersionReadyEvent } from '@angular/service-worker';
 import { ToasterComponent } from './toaster/toaster.component';
@@ -20,7 +20,8 @@ import { filter, Subscription } from 'rxjs';
       <app-update-banner (dismissed)="applyUpdate()" />
     }
   `,
-  styles: []
+  styles: [],
+  changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class AppComponent implements OnInit, OnDestroy {
   title = 'digital-newspaper';
@@ -29,25 +30,31 @@ export class AppComponent implements OnInit, OnDestroy {
   updateAvailable = false;
 
   private _swSub?: Subscription;
+  private _dataSub?: Subscription;
 
   constructor(
     private dataService: NewspaperDataService,
     private swUpdate: SwUpdate,
-    @Inject(DOCUMENT) private document: Document
+    @Inject(DOCUMENT) private document: Document,
+    @Inject(PLATFORM_ID) private platformId: object,
+    private cdr: ChangeDetectorRef,
   ) {}
 
   ngOnInit(): void {
-    this.dataService.data$.subscribe(() => {
+    this._dataSub = this.dataService.data$.subscribe(() => {
       this.injectHeadScripts();
     });
 
     // ── Service-worker update notification ──────────────────────────────────
-    // Only subscribe when the SW is enabled (production builds).
-    if (!isDevMode() && this.swUpdate.isEnabled) {
+    // SW is browser-only — skip entirely on the server.
+    if (isPlatformBrowser(this.platformId) && !isDevMode() && this.swUpdate.isEnabled) {
       this._swSub = this.swUpdate.versionUpdates
         .pipe(filter((e): e is VersionReadyEvent => e.type === 'VERSION_READY'))
         .subscribe(() => {
           this.updateAvailable = true;
+          // OnPush: signal Angular to re-check this component since we updated
+          // a property from outside the component's own event handlers.
+          this.cdr.markForCheck();
         });
     }
 
@@ -62,6 +69,7 @@ export class AppComponent implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     this._swSub?.unsubscribe();
+    this._dataSub?.unsubscribe();
   }
 
   /**

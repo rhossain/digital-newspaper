@@ -1,4 +1,4 @@
-import { Component, Output, EventEmitter } from '@angular/core';
+import { Component, Output, EventEmitter, ChangeDetectionStrategy } from '@angular/core';
 
 /**
  * A slim sticky banner shown when a new service-worker version is ready.
@@ -14,6 +14,7 @@ import { Component, Output, EventEmitter } from '@angular/core';
 @Component({
   selector: 'app-update-banner',
   standalone: true,
+  changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="update-banner" role="alert" aria-live="polite">
       <span class="update-banner__text">

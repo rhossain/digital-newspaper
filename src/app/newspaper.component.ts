@@ -1,5 +1,5 @@
-import { Component, OnInit, OnDestroy, AfterViewChecked, ChangeDetectorRef, ElementRef, ViewChild, Inject } from '@angular/core';
-import { Location, DOCUMENT } from '@angular/common';
+import { Component, OnInit, OnDestroy, AfterViewChecked, ChangeDetectorRef, ElementRef, ViewChild, Inject, PLATFORM_ID } from '@angular/core';
+import { Location, DOCUMENT, isPlatformBrowser } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute } from '@angular/router';
 import { Meta, Title } from '@angular/platform-browser';
@@ -107,15 +107,18 @@ export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
     private location: Location,
     private meta: Meta,
     private titleService: Title,
-    @Inject(DOCUMENT) private document: Document
+    @Inject(DOCUMENT) private document: Document,
+    @Inject(PLATFORM_ID) private platformId: object,
   ) {}
+
+  private get isBrowser(): boolean { return isPlatformBrowser(this.platformId); }
 
   /** Expose TranslationService to the template. */
   get ts(): TranslationService { return this.translationService; }
 
   /** URL for the logo anchor. Uses the configured link, falling back to the app's base URL. */
   get logoHref(): string {
-    return this.settings?.logo?.link?.trim() || document.baseURI;
+    return this.settings?.logo?.link?.trim() || this.document.baseURI;
   }
 
   ngOnInit() {
@@ -179,27 +182,33 @@ export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
     // 5 min is sufficient for a read-only viewer — the version endpoint is
     // very cheap but polling faster than 5 min on a public site wastes server
     // resources. Admin sessions use 30 s (set in admin.component.ts).
-    this.dataService.startVersionPoll(300_000);
-    const versionSub = this.dataService.remoteDataChanged$.subscribe(() => {
-      // Only reload if the user is not viewing a modal (section detail / image)
-      if (!this.showContentModal && !this.showImageModal) {
-        // Targeted reload: fetch only the currently-displayed date's edition plus
-        // the dates index. This is much cheaper than the full /data blob and
-        // handles both "today's content changed" and "new date published" cases.
-        // Falls back to loadData() automatically if the granular endpoints fail.
-        this.dataService.reloadCurrentDateOnly(this.selectedDate).subscribe();
-        // dataService.data$ subscriber above handles UI refresh automatically
-      }
-    });
-    this.subscriptions.push(versionSub);
+    // SSR: do not start polling on the server — setInterval has no meaning
+    // in a single-pass server render and the interval would leak.
+    if (this.isBrowser) {
+      this.dataService.startVersionPoll(300_000);
+      const versionSub = this.dataService.remoteDataChanged$.subscribe(() => {
+        // Only reload if the user is not viewing a modal (section detail / image)
+        if (!this.showContentModal && !this.showImageModal) {
+          // Targeted reload: fetch only the currently-displayed date's edition plus
+          // the dates index. This is much cheaper than the full /data blob and
+          // handles both "today's content changed" and "new date published" cases.
+          // Falls back to loadData() automatically if the granular endpoints fail.
+          this.dataService.reloadCurrentDateOnly(this.selectedDate).subscribe();
+          // dataService.data$ subscriber above handles UI refresh automatically
+        }
+      });
+      this.subscriptions.push(versionSub);
+    }
 
-    // Detect mobile/tablet view and keep it updated on resize
-    this.updateIsMobileView();
-    this.resizeListener = () => {
-      clearTimeout(this.resizeDebounceTimer);
-      this.resizeDebounceTimer = setTimeout(() => this.updateIsMobileView(), 150);
-    };
-    window.addEventListener('resize', this.resizeListener);
+    // Detect mobile/tablet view and keep it updated on resize (browser only)
+    if (this.isBrowser) {
+      this.updateIsMobileView();
+      this.resizeListener = () => {
+        clearTimeout(this.resizeDebounceTimer);
+        this.resizeDebounceTimer = setTimeout(() => this.updateIsMobileView(), 150);
+      };
+      window.addEventListener('resize', this.resizeListener);
+    }
   }
 
   ngOnDestroy() {
@@ -208,7 +217,7 @@ export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.clearSlowConnectionTimer();
     this.paginationObserver?.disconnect();
     clearTimeout(this.resizeDebounceTimer);
-    if (this.resizeListener) {
+    if (this.isBrowser && this.resizeListener) {
       window.removeEventListener('resize', this.resizeListener);
     }
   }
@@ -658,8 +667,8 @@ export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
         const targetSection = page.sections.find(s => s.id === targetSectionId);
         this.selectSection(targetSection ?? page.sections[0]);
         setTimeout(() => {
-          const rightPanel = document.querySelector('.right-panel');
-          if (rightPanel) rightPanel.scrollTop = 0;
+          const rightPanel = this.document.querySelector('.right-panel');
+          if (rightPanel) (rightPanel as HTMLElement).scrollTop = 0;
         }, 0);
       } else {
         this.selectedSection = null;
@@ -679,8 +688,8 @@ export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.showContentModal = false;
       this.showImageModal = false;
       setTimeout(() => {
-        const rightPanel = document.querySelector('.right-panel');
-        if (rightPanel) rightPanel.scrollTop = 0;
+        const rightPanel = this.document.querySelector('.right-panel');
+        if (rightPanel) (rightPanel as HTMLElement).scrollTop = 0;
       }, 0);
       this.updateUrl();
       this.updateMetaTags(null);
@@ -717,7 +726,7 @@ export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.imageLoaded = true;
     
     // Store reference to the loaded image for cropping
-    const imgElement = document.querySelector('.main-page-image') as HTMLImageElement;
+    const imgElement = this.document.querySelector('.main-page-image') as HTMLImageElement;
     if (imgElement) {
       this.imageElement = imgElement;
       // If a section is already selected, crop it and reload linked sections
@@ -829,7 +838,7 @@ export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
         const capturedSection = section;
         setTimeout(() => {
           if (this.sectionImageLoading && this.selectedSection === capturedSection) {
-            const imgEl = document.querySelector('.section-full-image') as HTMLImageElement;
+            const imgEl = this.document.querySelector('.section-full-image') as HTMLImageElement;
             if (imgEl && imgEl.complete && imgEl.naturalWidth > 0) {
               this.sectionImageLoading = false;
               this.cdr.detectChanges();
@@ -844,7 +853,7 @@ export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
     }
     
     // Scroll right panel to top when new section is selected
-    const rightPanel = document.querySelector('.right-panel');
+    const rightPanel = this.document.querySelector('.right-panel') as HTMLElement | null;
     if (rightPanel) {
       rightPanel.scrollTop = 0;
     }
@@ -1156,13 +1165,13 @@ export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
 
     if (blob) {
       const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
+      const a = this.document.createElement('a');
       a.href = url;
       const ext = blob.type.split('/')[1]?.replace('jpeg', 'jpg') || 'jpg';
       a.download = `${title || 'image'}.${ext}`;
-      document.body.appendChild(a);
+      this.document.body.appendChild(a);
       a.click();
-      document.body.removeChild(a);
+      this.document.body.removeChild(a);
       URL.revokeObjectURL(url);
     } else {
       window.open(imageUrl, '_blank');
@@ -1333,6 +1342,7 @@ export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private cropLinkedSectionImage(section: NewsSection): void {
+    if (!this.isBrowser) return; // SSR guard: new Image() and canvas are browser-only APIs
     if (!section.pageId || section.imageUrl) return;
 
     const cacheKey = `${section.pageId}:${section.id}`;
@@ -1362,7 +1372,7 @@ export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
 
       if (cropWidth <= 0 || cropHeight <= 0) return;
 
-      const canvas = document.createElement('canvas');
+      const canvas = this.document.createElement('canvas');
       canvas.width = cropWidth;
       canvas.height = cropHeight;
       const ctx = canvas.getContext('2d', { willReadFrequently: false });
@@ -1385,6 +1395,7 @@ export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   private cropSectionImage() {
+    if (!this.isBrowser) return; // SSR guard: new Image() and canvas are browser-only APIs
     if (!this.selectedSection || !this.currentPage) {
       return;
     }
@@ -1445,7 +1456,7 @@ export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
       const cropWidth = Math.round((section.width / 100) * naturalWidth);
       const cropHeight = Math.round((section.height / 100) * naturalHeight);
 
-      const canvas = document.createElement('canvas');
+      const canvas = this.document.createElement('canvas');
       canvas.width = cropWidth;
       canvas.height = cropHeight;
 
@@ -1531,7 +1542,7 @@ export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
   private updateMetaTags(section: NewsSection | null): void {
     const siteName = this.settings?.logo?.alt || 'ইপেপার - দৈনিক সংগ্রাম';
     const othersTitle = this.settings?.othersPageTitle?.trim() || siteName;
-    const pageUrl = window.location.href;
+    const pageUrl = this.document.location.href;
 
     if (section) {
       // Title

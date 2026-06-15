@@ -18,7 +18,7 @@ import {
   XmlImportSummary,
   XmlParseError,
 } from '../../services/newspaper-data.service';
-import { XmlImportService } from '../../services/xml-import.service';
+import { XmlImportService } from '../xml-import.service';
 import { NewspaperDataService } from '../../services/newspaper-data.service';
 
 // ─── Local helpers ───────────────────────────────────────────────────────────

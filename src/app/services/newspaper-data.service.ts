@@ -1,4 +1,5 @@
-import { Injectable, Signal } from '@angular/core';
+import { Injectable, Signal, PLATFORM_ID, inject } from '@angular/core';
+import { isPlatformBrowser } from '@angular/common';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { HttpClient, HttpResponse } from '@angular/common/http';
 import { Observable, BehaviorSubject, Subject, Subscription, timer, forkJoin, interval, of, throwError } from 'rxjs';
@@ -316,6 +317,9 @@ export class NewspaperDataService {
   private readonly apiUrl = `${WP_BASE_URL}/wp-json/digital-newspaper/v1/data`;
   private readonly mediaApiUrl = `${WP_BASE_URL}/wp-json/wp/v2/media`;
   private dataRecoveredFromMediaLibrary = false;
+
+  private readonly platformId = inject(PLATFORM_ID);
+  private get isBrowser(): boolean { return isPlatformBrowser(this.platformId); }
 
   constructor(
     private http: HttpClient,
@@ -677,6 +681,7 @@ export class NewspaperDataService {
   }
 
   private cacheEmergencyDraft(data: NewspaperData): void {
+    if (!this.isBrowser) return; // SSR — no localStorage
     if (this.dataRecoveredFromMediaLibrary) return;
     if (!this.hasAnyPages(data)) return;
     try {
@@ -690,6 +695,7 @@ export class NewspaperDataService {
   }
 
   private readEmergencyDraft(): NewspaperData | null {
+    if (!this.isBrowser) return null; // SSR — no localStorage
     try {
       const raw = localStorage.getItem(NewspaperDataService.EMERGENCY_DRAFT_KEY);
       if (!raw) return null;
@@ -1733,6 +1739,7 @@ export class NewspaperDataService {
 
   // --- localStorage settings cache ---
   private cacheSettings(settings: GlobalSettings): void {
+    if (!this.isBrowser) return; // SSR — no localStorage
     try {
       localStorage.setItem(
         NewspaperDataService.SETTINGS_CACHE_KEY,
@@ -1743,6 +1750,7 @@ export class NewspaperDataService {
 
   /** Static helper so it can be called before the instance is fully constructed. */
   private static _readCachedSettings(): GlobalSettings | null {
+    if (typeof localStorage === 'undefined') return null; // SSR — no localStorage
     try {
       const raw = localStorage.getItem(NewspaperDataService.SETTINGS_CACHE_KEY);
       if (raw) {
@@ -1758,6 +1766,7 @@ export class NewspaperDataService {
   }
 
   private triggerFileDownload(json: string, filename: string): void {
+    if (!this.isBrowser) return; // download only makes sense in the browser
     // BANGLA SAFETY: charset=utf-8 is explicit so the browser and any
     // downstream tool that opens the file knows to interpret the bytes as
     // UTF-8.  Without it, some OS file-open dialogs default to the system
@@ -1907,6 +1916,7 @@ export class NewspaperDataService {
   // ─── Backup History ───────────────────────────────────────────────────────
 
   getBackupHistory(): BackupHistoryEntry[] {
+    if (!this.isBrowser) return []; // SSR — no localStorage
     try {
       const raw = localStorage.getItem(NewspaperDataService.BACKUP_HISTORY_KEY);
       if (raw) return JSON.parse(raw) as BackupHistoryEntry[];
@@ -1926,6 +1936,7 @@ export class NewspaperDataService {
   }
 
   clearBackupHistory(): void {
+    if (!this.isBrowser) return; // SSR — no localStorage
     localStorage.removeItem(NewspaperDataService.BACKUP_HISTORY_KEY);
   }
 
