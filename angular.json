@@ -23,6 +23,7 @@
             "assets": [
               "src/favicon.ico",
               "src/.htaccess",
+              "src/manifest.webmanifest",
               {
                 "glob": "**/*",
                 "input": "src/assets",
@@ -47,10 +48,45 @@
                   "with": "src/environments/environment.prod.ts"
                 }
               ],
+              "serviceWorker": true,
+              "ngswConfigPath": "ngsw-config.json",
+              "optimization": {
+                "scripts": true,
+                "styles": { "minify": true, "inlineCritical": true },
+                "fonts": false
+              },
               "budgets": [
                 {
                   "type": "initial",
-                  "maximumWarning": "650kb",
+                  "maximumWarning": "750kb",
+                  "maximumError": "1mb"
+                },
+                {
+                  "type": "anyComponentStyle",
+                  "maximumWarning": "100kb",
+                  "maximumError": "300kb"
+                }
+              ],
+              "outputHashing": "all"
+            },
+            "staging": {
+              "fileReplacements": [
+                {
+                  "replace": "src/environments/environment.ts",
+                  "with": "src/environments/environment.staging.ts"
+                }
+              ],
+              "serviceWorker": true,
+              "ngswConfigPath": "ngsw-config.json",
+              "optimization": {
+                "scripts": true,
+                "styles": { "minify": true, "inlineCritical": true },
+                "fonts": false
+              },
+              "budgets": [
+                {
+                  "type": "initial",
+                  "maximumWarning": "750kb",
                   "maximumError": "1mb"
                 },
                 {
@@ -75,6 +111,9 @@
         "serve": {
           "builder": "@angular-devkit/build-angular:dev-server",
           "configurations": {
+            "staging": {
+              "buildTarget": "digital-newspaper:build:staging"
+            },
             "production": {
               "buildTarget": "digital-newspaper:build:production"
             },

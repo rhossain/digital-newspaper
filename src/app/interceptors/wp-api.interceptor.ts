@@ -52,7 +52,11 @@ const PUBLIC_READ_PATHS = [
   '/data/version',
 ] as const;
 
-function isPublicReadEndpoint(url: string): boolean {
+function isPublicReadEndpoint(url: string, method: string): boolean {
+  // Only treat as public/no-credentials for GET requests.
+  // PATCH/POST/PUT/DELETE to the same paths (e.g. PATCH /data/settings)
+  // require authentication and must send credentials.
+  if (method !== 'GET') return false;
   return PUBLIC_READ_PATHS.some(path => url.includes(path));
 }
 
@@ -76,7 +80,7 @@ export const wpApiInterceptor: HttpInterceptorFn = (req, next) => {
   // Public endpoints must NOT send credentials so CDN caching is not blocked.
   // All other endpoints (admin writes, auth, media, locks) continue to use
   // withCredentials: true for the Imunify360 cookie bypass.
-  const sendCredentials = !isPublicReadEndpoint(urlPath);
+  const sendCredentials = !isPublicReadEndpoint(urlPath, req.method);
 
   req = req.clone({
     url: rewrittenUrl,

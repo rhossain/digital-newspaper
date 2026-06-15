@@ -155,11 +155,10 @@ log(`✓ Build safely copied outside repository`, colors.green);
 // Use the temp dist for all operations
 const distDir = TEMP_DIST_DIR;
 
-// Create .htaccess
+// Write .htaccess
 const htaccessPath = path.join(distDir, '.htaccess');
-if (!fs.existsSync(htaccessPath)) {
-  log('Creating .htaccess...', colors.blue);
-  const htaccessContent = `# Redirect all routes to index.html for Angular HTML5 pushState routing
+log('Writing .htaccess...', colors.blue);
+const htaccessContent = `# Redirect all routes to index.html for Angular HTML5 pushState routing
 <IfModule mod_rewrite.c>
   RewriteEngine On
   RewriteBase /
@@ -175,9 +174,20 @@ if (!fs.existsSync(htaccessPath)) {
   RewriteRule ^([0-9]{4}-[0-9]{2}-[0-9]{2})/([^/?]+)/?$ /wp/index.php?rest_route=/digital-newspaper/v1/social&date=$1&slug=$2 [NE,L,QSA]
 
   RewriteRule ^index\\.html$ - [L]
+  # Compatibility redirects: if anyone hits root-level WP paths, forward to /wp.
+  RewriteRule ^wp-admin/?$ /wp/wp-admin/ [R=302,L,NC]
+  RewriteRule ^wp-login\\.php$ /wp/wp-login.php [R=302,L,NC]
+  RewriteRule ^xmlrpc\\.php$ /wp/xmlrpc.php [R=302,L,NC]
+  # Never route WordPress/admin/auth URLs through the Angular SPA.
+  RewriteRule ^wp(?:/|$) - [L,NC]
+  RewriteRule ^wp-admin(?:/|$) - [L,NC]
+  RewriteRule ^wp-login\\.php$ - [L,NC]
+  RewriteRule ^xmlrpc\\.php$ - [L,NC]
   RewriteCond %{REQUEST_FILENAME} !-f
   RewriteCond %{REQUEST_FILENAME} !-d
-  RewriteCond %{REQUEST_URI} !^/wp/ [NC]
+  RewriteCond %{REQUEST_URI} !^/(wp|wp-admin)(?:/|$) [NC]
+  RewriteCond %{REQUEST_URI} !^/wp-login\\.php$ [NC]
+  RewriteCond %{REQUEST_URI} !^/xmlrpc\\.php$ [NC]
   RewriteRule ^ /index.html [L]
 </IfModule>
 
@@ -195,9 +205,8 @@ if (!fs.existsSync(htaccessPath)) {
   SecFilterScanPOST Off
 </IfModule>
 # ---- end Digital Newspaper WAF bypass ----`;
-  fs.writeFileSync(htaccessPath, htaccessContent);
-  log('✓ .htaccess created', colors.green);
-}
+fs.writeFileSync(htaccessPath, htaccessContent);
+log('✓ .htaccess written', colors.green);
 
 // Deployment strategy
 const isRelease = branch === 'release';

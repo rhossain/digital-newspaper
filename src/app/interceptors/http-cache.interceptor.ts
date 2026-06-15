@@ -89,6 +89,28 @@ function resolveTtl(url: string): number | null {
 const _cache = new Map<string, CacheEntry>();
 
 /**
+ * Dates that need their next HTTP request to bypass the browser's native cache.
+ *
+ * After an admin save, Angular evicts its own in-memory _cache entry via
+ * evictEditionCache(). However, the browser's native HTTP cache (below Angular)
+ * may still hold a stale response — it previously had Cache-Control: max-age=86400
+ * for past dates, so the browser returns it without ever contacting the server.
+ * Marking a date here causes the interceptor to add "Cache-Control: no-cache" to
+ * the next outgoing request for that date, which forces the browser to revalidate
+ * regardless of the cached max-age. The marker is consumed on first use.
+ */
+const _bypassBrowserCache = new Set<string>();
+
+/**
+ * Mark a specific date's edition URL to bypass the browser's native HTTP cache
+ * on the next request. Call this alongside evictEditionCache() after a save so
+ * users with old max-age=86400 cached responses still get fresh data immediately.
+ */
+export function markForBrowserCacheBypass(date: string): void {
+  _bypassBrowserCache.add(date);
+}
+
+/**
  * Clear all entries — call this after an admin save so stale responses
  * are not served to the same user in the same session.
  */
@@ -161,6 +183,19 @@ export const httpCacheInterceptor: HttpInterceptorFn = (
   if (cached?.etag) {
     // Add If-None-Match so the server can return 304 instead of a full response.
     outReq = req.clone({ setHeaders: { 'If-None-Match': cached.etag } });
+  }
+
+  // ── Browser-cache bypass (post-save eviction) ─────────────────────────────
+  // After a save, evictEditionCache() clears our _cache Map but cannot clear
+  // the browser's native HTTP cache.  If the browser previously stored this
+  // response with max-age=86400 it will return the stale copy at the network
+  // layer without consulting the server.  Adding Cache-Control: no-cache in
+  // the REQUEST header overrides that and forces the browser to revalidate.
+  // The marker is set by markForBrowserCacheBypass() and consumed here once.
+  const dateMatch = req.url.match(/\/data\/editions\/(\d{4}-\d{2}-\d{2})/);
+  if (dateMatch && _bypassBrowserCache.has(dateMatch[1])) {
+    _bypassBrowserCache.delete(dateMatch[1]);
+    outReq = outReq.clone({ setHeaders: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' } });
   }
 
   return (next(outReq) as Observable<HttpEvent<unknown>>).pipe(

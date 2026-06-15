@@ -102,16 +102,38 @@ export class SettingsService {
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
+  /**
+   * Apply full null-safety normalization so all callers — including
+   * NewspaperDataService.getSettings() — can trust every sub-object exists.
+   *
+   * Mirrors the normalization that NewspaperDataService.getSettings() applied
+   * inline. Keeping it here means SettingsService is the single authority on
+   * what a "safe" GlobalSettings object looks like.
+   */
   private _normalise(settings: GlobalSettings): GlobalSettings {
-    // Guard against legacy data where socialLinks was stored as an array
-    if (settings.socialLinks && Array.isArray(settings.socialLinks)) {
-      return { ...settings, socialLinks: {} };
-    }
-    return settings;
+    return {
+      ...settings,
+      // PHP serializes empty arrays as [] — normalize to {}
+      socialLinks: (settings.socialLinks && !Array.isArray(settings.socialLinks))
+        ? settings.socialLinks
+        : {},
+      // Ensure sub-objects always exist so callers don't need null-checks
+      logo:    settings.logo    ?? { url: '', alt: 'Digital Newspaper' },
+      address: settings.address ?? {},
+      editor:  settings.editor  ?? '',
+      language: settings.language || 'en',
+    };
   }
 
   private static _defaults(): GlobalSettings {
-    return { defaultDateMode: 'current', socialLinks: {} };
+    return {
+      defaultDateMode: 'current',
+      socialLinks: {},
+      logo:    { url: '', alt: 'Digital Newspaper' },
+      address: {},
+      editor:  '',
+      language: 'en',
+    };
   }
 
   private static _readFromStorage(): GlobalSettings | null {
@@ -119,10 +141,15 @@ export class SettingsService {
       const raw = localStorage.getItem(SettingsService.CACHE_KEY);
       if (!raw) return null;
       const parsed = JSON.parse(raw) as GlobalSettings;
-      // Normalize socialLinks array (legacy data guard)
+      // Apply the same normalization as _normalise() — static version
+      // (cannot call the instance method here, so replicate the guards).
       if (parsed.socialLinks && Array.isArray(parsed.socialLinks)) {
         parsed.socialLinks = {};
       }
+      if (!parsed.logo)     parsed.logo    = { url: '', alt: 'Digital Newspaper' };
+      if (!parsed.address)  parsed.address = {};
+      if (parsed.editor  === undefined) parsed.editor  = '';
+      if (!parsed.language) parsed.language = 'en';
       return parsed;
     } catch {
       return null; // corrupt storage — start fresh
