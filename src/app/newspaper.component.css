@@ -1192,8 +1192,8 @@
 .section-image-container {
   display: flex;
   flex-direction: column;
-  gap: 20px;
-  padding: 0 20px 20px 20px;
+  gap: 8px;
+  padding: 0 20px 12px 20px;
   flex: 1;
   min-height: 0;
   overflow-y: auto;

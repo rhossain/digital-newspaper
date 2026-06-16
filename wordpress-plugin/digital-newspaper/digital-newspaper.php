@@ -32,6 +32,10 @@ class Digital_Newspaper_API {
   const OPTION_MIGRATED_V2 = 'dn_storage_migrated_v2';
   /** Stores an array of domain alias strings for URL normalisation (CQ-5). */
   const OPTION_DOMAIN_ALIASES = 'dn_domain_aliases';
+  /** Whether Google Ad Manager head script injection is enabled. */
+  const OPTION_GAM_ENABLED = 'dn_gam_enabled';
+  /** Per-slot enabled states: [ 'desktop_page_left' => bool, ... ]. */
+  const OPTION_GAM_SLOT_STATES = 'dn_gam_slot_states';
 
   public function __construct() {
     add_action('init', [$this, 'handle_cors_preflight'], 1);
@@ -56,6 +60,8 @@ class Digital_Newspaper_API {
     // when logged into wp-admin.  This handler runs on every WP load and
     // responds when ?dn_diag=… is present (after a current_user_can check).
     add_action('init', [$this, 'maybe_handle_diag_query'], 5);
+    // Inject Google Ad Manager head scripts when enabled.
+    add_action('wp_head', [$this, 'inject_gam_head_script'], 1);
   }
 
   /**
@@ -201,6 +207,12 @@ class Digital_Newspaper_API {
       },
       'default' => true
     ]);
+
+    register_setting('digital_newspaper_settings', self::OPTION_GAM_ENABLED, [
+      'type'              => 'boolean',
+      'sanitize_callback' => fn($v) => (bool) $v,
+      'default'           => false,
+    ]);
   }
 
   public function render_settings_page(): void {
@@ -208,8 +220,9 @@ class Digital_Newspaper_API {
       return;
     }
 
-    $origins = esc_textarea(get_option(self::OPTION_ORIGINS, ''));
+    $origins           = esc_textarea(get_option(self::OPTION_ORIGINS, ''));
     $allow_credentials = (bool) get_option(self::OPTION_ALLOW_CREDENTIALS, true);
+    $gam_enabled       = (bool) get_option(self::OPTION_GAM_ENABLED, false);
     ?>
     <div class="wrap">
       <h1>Digital Newspaper Settings</h1>
@@ -232,6 +245,19 @@ class Digital_Newspaper_API {
               </label>
             </td>
           </tr>
+          <tr>
+            <th scope="row">Google Ad Manager</th>
+            <td>
+              <label>
+                <input type="checkbox" name="<?php echo esc_attr(self::OPTION_GAM_ENABLED); ?>" value="1" <?php checked($gam_enabled); ?> />
+                Enable Google Ad Manager (GPT script injected in <code>&lt;head&gt;</code>)
+              </label>
+              <p class="description">
+                When enabled, the GPT library and all ad slot definitions are injected into <code>&lt;head&gt;</code> on every page load.
+                Ad slots are also exposed via <code>/wp-json/digital-newspaper/v1/ads/config</code> for the Angular app.
+              </p>
+            </td>
+          </tr>
         </table>
         <?php submit_button(); ?>
       </form>
@@ -245,6 +271,152 @@ class Digital_Newspaper_API {
       return esc_url_raw($origin);
     }, $parts);
     return implode(', ', $parts);
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  GOOGLE AD MANAGER
+  // ══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Returns the canonical ad slot definitions.
+   * Each entry: [ 'id' => string, 'unit' => string, 'sizes' => int[][], 'div' => string,
+   *               'min_width' => int, 'min_height' => int, 'enabled' => bool ]
+   *
+   * The 'enabled' field is merged from OPTION_GAM_SLOT_STATES so the Angular app
+   * knows which individual slots to render without extra round-trips.
+   */
+  private function gam_ad_slots(): array {
+    $slot_states = (array) get_option(self::OPTION_GAM_SLOT_STATES, []);
+
+    $slots = [
+      // ── Desktop page ──────────────────────────────────────────────────────
+      [
+        'id'        => 'desktop_page_left',
+        'unit'      => '/22062727803/TDSEV3_Desktop_Page_Left-01',
+        'sizes'     => [[120, 600], [120, 240], [160, 600]],
+        'div'       => 'div-gpt-ad-1781436865448-0',
+        'min_width' => 120,
+        'min_height'=> 240,
+      ],
+      [
+        'id'        => 'desktop_page_right',
+        'unit'      => '/22062727803/TDSEV3_Desktop_Page_Right-01',
+        'sizes'     => [[336, 280], [300, 250]],
+        'div'       => 'div-gpt-ad-1781437781482-0',
+        'min_width' => 300,
+        'min_height'=> 250,
+      ],
+      // ── Desktop post preview ──────────────────────────────────────────────
+      [
+        'id'        => 'desktop_post_preview_top',
+        'unit'      => '/22062727803/TDSEV3_Desktop_Post_Preview_Top-01',
+        'sizes'     => [[320, 100], [300, 100]],
+        'div'       => 'div-gpt-ad-1781440036290-0',
+        'min_width' => 300,
+        'min_height'=> 100,
+      ],
+      [
+        'id'        => 'desktop_post_preview_middle',
+        'unit'      => '/22062727803/TDSEV3_Desktop_Post_Preview_Middle-01',
+        'sizes'     => [[320, 100], [300, 100], [300, 250], [336, 280]],
+        'div'       => 'div-gpt-ad-1781441150109-0',
+        'min_width' => 300,
+        'min_height'=> 100,
+      ],
+      // ── Desktop post ──────────────────────────────────────────────────────
+      // desktop_post_top was split into two distinct slots so the image panel
+      // and the text panel each have their own GAM div ID. GAM's SRP requires
+      // every div on the page to have a unique ID; using the same slot in both
+      // panels produced duplicate IDs and a double display() call.
+      // Both slots share the same ad unit path — GAM serves the same unit
+      // into two different containers, which is valid and common practice.
+      [
+        'id'        => 'desktop_post_top_image',
+        'unit'      => '/22062727803/TDSEV3_Desktop_Post_Top-01',
+        'sizes'     => [[320, 100], [300, 100], [728, 90], [468, 60]],
+        'div'       => 'div-gpt-ad-1781518880480-0',
+        'min_width' => 300,
+        'min_height'=> 60,
+      ],
+      [
+        'id'        => 'desktop_post_top_text',
+        'unit'      => '/22062727803/TDSEV3_Desktop_Post_Top-01',
+        'sizes'     => [[320, 100], [300, 100], [728, 90], [468, 60]],
+        'div'       => 'div-gpt-ad-1781518880480-1',
+        'min_width' => 300,
+        'min_height'=> 60,
+      ],
+      [
+        'id'        => 'desktop_post_middle',
+        'unit'      => '/22062727803/TDSEV3_Desktop_Post_Middle-01',
+        'sizes'     => [[300, 100], [300, 250], [728, 90], [336, 280], [320, 100], [468, 60]],
+        'div'       => 'div-gpt-ad-1781519469306-0',
+        'min_width' => 300,
+        'min_height'=> 60,
+      ],
+      // ── Mobile post ───────────────────────────────────────────────────────
+      [
+        'id'        => 'mobile_post_top',
+        'unit'      => '/22062727803/TDSEV3_Mobile_Post_Top-01',
+        'sizes'     => [[320, 100], [300, 100]],
+        'div'       => 'div-gpt-ad-1781520617033-0',
+        'min_width' => 300,
+        'min_height'=> 100,
+      ],
+      [
+        'id'        => 'mobile_post_middle',
+        'unit'      => '/22062727803/TDSEV3_Mobile_Post_Middle-01',
+        'sizes'     => [[320, 100], [300, 100], [300, 250]],
+        'div'       => 'div-gpt-ad-1781521397082-0',
+        'min_width' => 300,
+        'min_height'=> 100,
+      ],
+    ];
+
+    // Merge persisted per-slot enabled states into each slot definition.
+    return array_map(function ( array $slot ) use ( $slot_states ): array {
+      $slot['enabled'] = isset( $slot_states[ $slot['id'] ] )
+        ? (bool) $slot_states[ $slot['id'] ]
+        : false;
+      return $slot;
+    }, $slots);
+  }
+
+  /**
+   * Hooked to wp_head (priority 1).
+   * Outputs the GPT library tag and all defineSlot calls only when GAM is enabled.
+   */
+  public function inject_gam_head_script(): void {
+    if (!(bool) get_option(self::OPTION_GAM_ENABLED, false)) {
+      return;
+    }
+
+    $slots = $this->gam_ad_slots();
+
+    // Build defineSlot JS lines from the single source of truth.
+    $define_lines = [];
+    foreach ($slots as $slot) {
+      $sizes_json = wp_json_encode($slot['sizes']);
+      $define_lines[] = sprintf(
+        "\t\tgoogletag.defineSlot('%s', %s, '%s').addService(googletag.pubads());",
+        esc_js($slot['unit']),
+        $sizes_json,
+        esc_js($slot['div'])
+      );
+    }
+    $define_js = implode("\n", $define_lines);
+    ?>
+<script async src="https://securepubads.g.doubleclick.net/tag/js/gpt.js" crossorigin="anonymous"></script>
+<script>
+window.googletag = window.googletag || {cmd: []};
+googletag.cmd.push(function() {
+<?php echo $define_js; ?>
+
+		googletag.pubads().enableSingleRequest();
+		googletag.enableServices();
+});
+</script>
+    <?php
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -2051,6 +2223,91 @@ class Digital_Newspaper_API {
       'callback'            => [$this, 'get_health_endpoint'],
       'permission_callback' => [$this, 'admin_required'],
     ]);
+
+    // GET /ads/config — public endpoint returning GAM slot configuration for
+    // the Angular app. Returns { enabled: bool, slots: [...] }.
+    // POST /ads/config — admin-only endpoint to update the enabled flag.
+    register_rest_route('digital-newspaper/v1', '/ads/config', [
+      [
+        'methods'             => 'GET',
+        'callback'            => [$this, 'get_ads_config'],
+        'permission_callback' => '__return_true',
+      ],
+      [
+        'methods'             => 'POST',
+        'callback'            => [$this, 'update_ads_config'],
+        'permission_callback' => [$this, 'admin_required'],
+        'args'                => [
+          'enabled' => [
+            'required'          => true,
+            'type'              => 'boolean',
+            'sanitize_callback' => fn($v) => (bool) $v,
+          ],
+          'slot_states' => [
+            'required'          => false,
+            'type'              => 'object',
+            'default'           => [],
+            // Sanitize: cast each value to bool; sanitize each key as a safe slug.
+            'sanitize_callback' => function ( $v ) {
+              if ( ! is_array( $v ) ) return [];
+              $out = [];
+              foreach ( $v as $id => $state ) {
+                $out[ sanitize_key( (string) $id ) ] = (bool) $state;
+              }
+              return $out;
+            },
+          ],
+        ],
+      ],
+    ]);
+  }
+
+  /**
+   * GET /wp-json/digital-newspaper/v1/ads/config
+   *
+   * Returns the GAM enabled flag and the full slot definition list so the
+   * Angular app can render ad slots without hard-coding unit paths or div IDs.
+   */
+  public function get_ads_config(WP_REST_Request $request): WP_REST_Response {
+    $this->add_public_security_headers();
+
+    $enabled = (bool) get_option(self::OPTION_GAM_ENABLED, false);
+
+    return new WP_REST_Response([
+      'enabled' => $enabled,
+      'slots'   => $this->gam_ad_slots(),
+    ], 200);
+  }
+
+  /**
+   * POST /wp-json/digital-newspaper/v1/ads/config
+   *
+   * Admin-only endpoint to update the GAM enabled flag and per-slot states.
+   * Body: { "enabled": true|false, "slot_states": { "desktop_page_left": true, ... } }
+   * Returns: { "enabled": bool, "slots": [...] }  (slots include the updated 'enabled' field)
+   */
+  public function update_ads_config(WP_REST_Request $request): WP_REST_Response {
+    $enabled     = (bool) $request->get_param('enabled');
+    $slot_states = (array) $request->get_param('slot_states');
+
+    update_option(self::OPTION_GAM_ENABLED, $enabled, false);
+
+    if ( ! empty( $slot_states ) ) {
+      // Whitelist to known slot IDs to prevent arbitrary key pollution.
+      $known_ids = array_column( $this->gam_ad_slots(), 'id' );
+      $sanitized = [];
+      foreach ( $slot_states as $id => $state ) {
+        if ( in_array( (string) $id, $known_ids, true ) ) {
+          $sanitized[ (string) $id ] = (bool) $state;
+        }
+      }
+      update_option( self::OPTION_GAM_SLOT_STATES, $sanitized, false );
+    }
+
+    return new WP_REST_Response([
+      'enabled' => $enabled,
+      'slots'   => $this->gam_ad_slots(), // now reflects updated per-slot states
+    ], 200);
   }
 
   public function warm_cache_permission(WP_REST_Request $request) {

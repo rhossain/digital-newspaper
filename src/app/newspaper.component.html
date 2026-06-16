@@ -354,66 +354,81 @@
   </header>
   <!-- Main Content Area -->
   <div class="main-layout">
-    <!-- Left Panel: Thumbnail List -->
+    <!-- Left Panel: Thumbnail List / Ad slot -->
     <div class="left-panel" [class.hidden]="!leftPanelVisible">
       <h2 class="panel-title">{{ 'header.pages' | translate }}</h2>
-      @if (pages.length > 0) {
-        <div class="thumbnail-list">
-          @for (page of pages; track trackByPageId($index, page)) {
-            @defer (on viewport) {
-              <div
-                class="thumbnail-item"
-                [class.active]="currentPage?.id === page.id"
-                (click)="onPageClick(page)"
-                >
-                <div class="thumbnail-image-wrapper">
-                  @if (thumbnailsLoading[page.id]) {
-                    <div class="skeleton-loader"></div>
-                  }
-                  @if (pageThumbnailSrcs[page.id]) {
-                    <img
-                      [src]="pageThumbnailSrcs[page.id]"
-                      [alt]="'Page ' + page.id"
-                      loading="lazy"
-                      decoding="async"
-                      (load)="onThumbnailLoad(page.id)"
-                      (error)="onThumbnailLoad(page.id)"
-                      [style.opacity]="thumbnailsLoading[page.id] ? '0' : '1'"
-                      />
-                  }
+
+      @if (!adService.ready()) {
+        <!--
+          AdService is still fetching /ads/config.
+          Render nothing until we know whether to show an ad or thumbnails.
+          The fetch is a fast, CDN-cached public endpoint so this is imperceptible.
+          Crucially: no thumbnail requests are initiated here.
+        -->
+      } @else if (adService.slotEnabledMap().get('desktop_page_left')) {
+        <!-- Ad slot replaces the page thumbnail list entirely -->
+        <app-ad-slot slotId="desktop_page_left" />
+      } @else {
+        <!-- No ad — normal thumbnail list with its own loading skeleton -->
+        @if (pages.length > 0) {
+          <div class="thumbnail-list">
+            @for (page of pages; track trackByPageId($index, page)) {
+              @defer (on viewport) {
+                <div
+                  class="thumbnail-item"
+                  [class.active]="currentPage?.id === page.id"
+                  (click)="onPageClick(page)"
+                  >
+                  <div class="thumbnail-image-wrapper">
+                    @if (thumbnailsLoading[page.id]) {
+                      <div class="skeleton-loader"></div>
+                    }
+                    @if (pageThumbnailSrcs[page.id]) {
+                      <img
+                        [src]="pageThumbnailSrcs[page.id]"
+                        [alt]="'Page ' + page.id"
+                        loading="lazy"
+                        decoding="async"
+                        (load)="onThumbnailLoad(page.id)"
+                        (error)="onThumbnailLoad(page.id)"
+                        [style.opacity]="thumbnailsLoading[page.id] ? '0' : '1'"
+                        />
+                    }
+                  </div>
+                  <span class="page-number">{{ ts.toLocaleDigits(page.id) }}</span>
                 </div>
-                <span class="page-number">{{ ts.toLocaleDigits(page.id) }}</span>
-              </div>
-            } @placeholder {
-              <!-- Maintains panel height while item is deferred, preventing scrollbar jump -->
-              <div class="thumbnail-item thumbnail-item-placeholder"></div>
+              } @placeholder {
+                <!-- Maintains panel height while item is deferred, preventing scrollbar jump -->
+                <div class="thumbnail-item thumbnail-item-placeholder"></div>
+              }
             }
-          }
-        </div>
-      }
-      <!-- Skeleton thumbnails while API data is loading -->
-      @if (isLoading && pages.length === 0) {
-        <div class="thumbnail-list">
-          @for (n of [1,2,3,4]; track trackByIndex($index, n)) {
-            <div class="thumbnail-item skeleton-thumbnail-item">
-              <div class="thumbnail-image-wrapper">
-                <div class="skeleton-loader"></div>
+          </div>
+        }
+        <!-- Skeleton thumbnails while pages API data is loading -->
+        @if (isLoading && pages.length === 0) {
+          <div class="thumbnail-list">
+            @for (n of [1,2,3,4]; track trackByIndex($index, n)) {
+              <div class="thumbnail-item skeleton-thumbnail-item">
+                <div class="thumbnail-image-wrapper">
+                  <div class="skeleton-loader"></div>
+                </div>
+                <div class="skeleton-page-number"></div>
               </div>
-              <div class="skeleton-page-number"></div>
-            </div>
-          }
-        </div>
+            }
+          </div>
+        }
+        @if (pages.length === 0 && !isLoading) {
+          <div class="empty-state">
+            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+              <polyline points="14 2 14 8 20 8"></polyline>
+            </svg>
+            <p>{{ 'viewer.noPagesAvailable' | translate }}</p>
+            <p class="empty-state-subtitle">{{ 'viewer.for' | translate }} {{ displayDate }}</p>
+          </div>
+        }
       }
-      @if (pages.length === 0 && !isLoading) {
-        <div class="empty-state">
-          <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-            <polyline points="14 2 14 8 20 8"></polyline>
-          </svg>
-          <p>{{ 'viewer.noPagesAvailable' | translate }}</p>
-          <p class="empty-state-subtitle">{{ 'viewer.for' | translate }} {{ displayDate }}</p>
-        </div>
-      }
+
     </div>
     <!-- Center Panel: Main Page View -->
     <div class="center-panel">
@@ -713,6 +728,8 @@
         <!-- Full Section Image -->
         @if (currentPage) {
           <div class="section-image-container">
+            <!-- Slot 3: desktop_post_preview_top — above the section image -->
+            <app-ad-slot slotId="desktop_post_preview_top" />
             <div class="section-item">
               <div class="section-image-wrapper" (click)="openImageModal()" [title]="ts.t('viewer.clickToViewFull')">
                 @if (sectionImageLoading && croppedSectionImage) {
@@ -755,6 +772,8 @@
                 <p class="section-page-number">{{ 'viewer.page' | translate }} {{ ts.toLocaleDigits(currentPage.id) }}</p>
               </div>
             </div>
+            <!-- Slot 4: desktop_post_preview_middle — between section image and linked sections -->
+            <app-ad-slot slotId="desktop_post_preview_middle" />
             <!-- Linked Sections -->
             @if (linkedSections.length > 0) {
               <div class="linked-sections">
@@ -825,18 +844,24 @@
     </div>
   }
   @if (!isLoading && !selectedSection) {
-    <div class="placeholder">
-      <div class="placeholder-content">
-        <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-          <polyline points="14 2 14 8 20 8"></polyline>
-          <line x1="16" y1="13" x2="8" y2="13"></line>
-          <line x1="16" y1="17" x2="8" y2="17"></line>
-          <polyline points="10 9 9 9 8 9"></polyline>
-        </svg>
-        <p>{{ 'viewer.selectSection' | translate }}</p>
+    @if (adService.slotEnabledMap().get('desktop_page_right')) {
+      <!-- Ad takes the place of the placeholder when this slot is enabled.
+           It hides automatically via CSS when the right panel is open (selectedSection). -->
+      <app-ad-slot slotId="desktop_page_right" />
+    } @else {
+      <div class="placeholder">
+        <div class="placeholder-content">
+          <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+            <polyline points="14 2 14 8 20 8"></polyline>
+            <line x1="16" y1="13" x2="8" y2="13"></line>
+            <line x1="16" y1="17" x2="8" y2="17"></line>
+            <polyline points="10 9 9 9 8 9"></polyline>
+          </svg>
+          <p>{{ 'viewer.selectSection' | translate }}</p>
+        </div>
       </div>
-    </div>
+    }
   }
 </div>
 <!-- Image + Content Modals -->

@@ -121,7 +121,7 @@
 .modal-images-container {
   display: flex;
   flex-direction: column;
-  gap: 30px;
+  gap: 12px;
   align-items: center;
 }
 

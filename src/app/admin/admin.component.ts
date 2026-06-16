@@ -9,6 +9,7 @@ import { ToasterService } from '../services/toaster.service';
 import { LoaderService } from '../services/loader.service';
 import { LockService, LockInfo } from '../services/lock.service';
 import { ActivityLogService, ActivityLogEntry, ActivityLogFilters, ACTION_LABELS, ACTION_COLOR } from '../services/activity-log.service';
+import { AdService, AdSlot } from '../services/ad.service';
 import { ActionTrackerDirective } from '../directives/action-tracker.directive';
 import { TranslationService } from '../i18n/translation.service';
 import { ADMIN_THEME } from './themes.config';
@@ -57,7 +58,7 @@ export class AdminComponent implements OnInit, OnDestroy {
   
   // UI State
   activeTab: 'pages' | 'sections' = 'pages';
-  activeMainTab: 'content' | 'settings' | 'logs' = 'content';
+  activeMainTab: 'content' | 'settings' | 'ads' | 'logs' = 'content';
   isEditingPage = false;
   isEditingSection = false;
   showImageCropper = false;
@@ -159,6 +160,16 @@ export class AdminComponent implements OnInit, OnDestroy {
   };
   logoInputMode: 'url' | 'file' = 'url';
   logoFile: File | null = null;
+
+  // ─── Ad Manager state ─────────────────────────────────────────────────────
+  adManagerForm: { enabled: boolean; slotStates: Record<string, boolean> } = {
+    enabled: false,
+    slotStates: {},
+  };
+  adManagerSlots: AdSlot[] = [];
+  isSavingAdManager = false;
+  /** Handle for the slot-polling interval so it can be cleared on destroy. */
+  private _adManagerPollInterval: ReturnType<typeof setInterval> | null = null;
 
   // Predefined page name options (paired BN / EN)
   readonly predefinedPageNames: { bn: string; en: string }[] = [
@@ -392,7 +403,8 @@ export class AdminComponent implements OnInit, OnDestroy {
     private translationService: TranslationService,
     private loader: LoaderService,
     private lockService: LockService,
-    private activityLog: ActivityLogService
+    private activityLog: ActivityLogService,
+    private adService: AdService
   ) {}
 
   // ── Image format helpers ─────────────────────────────────────────────────
@@ -449,6 +461,11 @@ export class AdminComponent implements OnInit, OnDestroy {
     // Tear down all long-lived subscriptions (version poll listener, etc.)
     this.destroy$.next();
     this.destroy$.complete();
+    // Clear the ad-manager slot-polling interval if it's still running.
+    if (this._adManagerPollInterval !== null) {
+      clearInterval(this._adManagerPollInterval);
+      this._adManagerPollInterval = null;
+    }
   }
 
   private markUnsavedChanges(): void {
@@ -3536,6 +3553,12 @@ export class AdminComponent implements OnInit, OnDestroy {
     this.closeMenu();
   }
 
+  menuGoToAdManager(): void {
+    this.activeMainTab = 'ads';
+    this.loadAdManagerSettings();
+    this.closeMenu();
+  }
+
   menuGoToActivityLog(): void {
     this.activeMainTab = 'logs';
     this.loadActivityLog();
@@ -3973,6 +3996,91 @@ export class AdminComponent implements OnInit, OnDestroy {
         this.toaster.error('Failed to save settings');
       }
     });
+  }
+
+  // ─── Ad Manager ───────────────────────────────────────────────────────────
+
+  /**
+   * Sync the adManagerForm from the AdService signal.
+   * Called when the user opens the Ad Manager tab to ensure the form
+   * reflects the latest value from the server.
+   */
+  loadAdManagerSettings(): void {
+    // Cancel any outstanding poll from a previous tab-open.
+    if (this._adManagerPollInterval !== null) {
+      clearInterval(this._adManagerPollInterval);
+      this._adManagerPollInterval = null;
+    }
+
+    const slots = this.adService.slots();
+    this.adManagerForm = {
+      enabled: this.adService.enabled(),
+      slotStates: Object.fromEntries(slots.map(s => [s.id, s.enabled])),
+    };
+    this.adManagerSlots = slots;
+
+    // If the service hasn't fetched yet (first open), poll until the HTTP
+    // response arrives. Cap at 15 × 200 ms = 3 s to avoid an infinite loop
+    // when the network request fails.
+    if (!this.adManagerSlots.length) {
+      let attempts = 0;
+      this._adManagerPollInterval = setInterval(() => {
+        attempts++;
+        const loaded = this.adService.slots();
+        if (loaded.length || attempts >= 15) {
+          this.adManagerSlots = loaded;
+          this.adManagerForm = {
+            enabled: this.adService.enabled(),
+            slotStates: Object.fromEntries(loaded.map(s => [s.id, s.enabled])),
+          };
+          clearInterval(this._adManagerPollInterval!);
+          this._adManagerPollInterval = null;
+          this.cdr.detectChanges();
+        }
+      }, 200);
+    }
+  }
+
+  /**
+   * Save the Ad Manager enabled flag via POST /ads/config.
+   * On success the AdService signal is updated and the UI reflects the
+   * persisted state without a page reload.
+   */
+  saveAdManagerSettings(): void {
+    this.isSavingAdManager = true;
+    this.cdr.detectChanges();
+
+    this.adService
+      .setEnabled(this.adManagerForm.enabled, this.adManagerForm.slotStates)
+      .subscribe({
+        next: () => {
+          this.isSavingAdManager = false;
+          this.toaster.success('Ad Manager settings saved successfully.');
+          this.cdr.detectChanges();
+        },
+        error: () => {
+          this.isSavingAdManager = false;
+          this.toaster.error('Failed to save Ad Manager settings. Please try again.');
+          this.cdr.detectChanges();
+        },
+      });
+  }
+
+  /** Human-readable placement description for each slot ID (allocated once). */
+  private static readonly SLOT_PLACEMENTS: Readonly<Record<string, string>> = {
+    desktop_page_left:           'Left sidebar — replaces page thumbnails',
+    desktop_page_right:          'Right panel — shown when no article is open',
+    desktop_post_preview_top:    'Post preview — above the section image',
+    desktop_post_preview_middle: 'Post preview — between image and linked sections',
+    desktop_post_top_image:      'Article modal — before main image (image panel)',
+    desktop_post_top_text:       'Article modal — before article title (text panel)',
+    desktop_post_middle:         'Article modal — before linked section images',
+    mobile_post_top:             'Mobile — top ad (placement coming soon)',
+    mobile_post_middle:          'Mobile — middle ad (placement coming soon)',
+  };
+
+  getSlotPlacement(id: string): string {
+    return AdminComponent.SLOT_PLACEMENTS[id] ?? id;
   }
 
   onLogoFileSelected(event: Event): void {

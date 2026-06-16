@@ -1,0 +1,48 @@
+/* ── AdSlotComponent host styles ─────────────────────────────────────────── */
+
+:host {
+  display: block;
+}
+
+/* Hide the host element when no slot config is available. */
+:host(.dn-ad--hidden) {
+  display: none;
+}
+
+/* ── Desktop-only slots ────────────────────────────────────────────────────
+   Slots whose id starts with 'desktop_' receive the .dn-ad--desktop class.
+   They are hidden below 768 px so no ad space is reserved on mobile.       */
+:host(.dn-ad--desktop) {
+  display: none;
+}
+
+@media (min-width: 768px) {
+  :host(.dn-ad--desktop) {
+    display: block;
+  }
+}
+
+/* ── Mobile-only slots ─────────────────────────────────────────────────────
+   Slots whose id starts with 'mobile_' receive the .dn-ad--mobile class.
+   They are hidden on desktop. Activate when mobile slots are defined.       */
+:host(.dn-ad--mobile) {
+  display: block;
+}
+
+@media (min-width: 768px) {
+  :host(.dn-ad--mobile) {
+    display: none;
+  }
+}
+
+/* ── Ad container ──────────────────────────────────────────────────────────
+   GAM needs the div to have at least the declared min-size so it can
+   pick a creative. min-width/min-height are set via [style] binding from
+   the slot config; overflow is hidden to prevent layout shifts.             */
+.dn-ad-container {
+  overflow: hidden;
+  /* Prevent empty placeholder from pushing layout when no ad fills. */
+  box-sizing: border-box;
+  text-align: center;
+  padding: 8px 0;
+}

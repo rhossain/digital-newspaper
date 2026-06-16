@@ -142,6 +142,10 @@
                 <button class="vhdr-menu-item vhdr-menu-item--toplevel" (click)="menuGoToSettings()" role="menuitem">
                   Global Settings <span class="vhdr-admin-badge">Admin</span>
                 </button>
+                <!-- Ad Manager -->
+                <button class="vhdr-menu-item vhdr-menu-item--toplevel" (click)="menuGoToAdManager()" role="menuitem">
+                  Ad Manager <span class="vhdr-admin-badge">Admin</span>
+                </button>
                 <!-- Activity Log -->
                 <button class="vhdr-menu-item vhdr-menu-item--toplevel" (click)="menuGoToActivityLog()" role="menuitem">
                   Activity Log <span class="vhdr-admin-badge">Admin</span>
@@ -219,6 +223,15 @@
                 [class.active]="activeMainTab === 'settings'"
                 (click)="activeMainTab = 'settings'" dnTrack="settings_open">
                 ⚙️ Global Settings
+              </button>
+            }
+            @if (isAdmin) {
+              <button
+                class="main-tab"
+                [class.active]="activeMainTab === 'ads'"
+                (click)="activeMainTab = 'ads'; loadAdManagerSettings()"
+                dnTrack="ad_manager_open">
+                📢 Ad Manager
               </button>
             }
             @if (isAdmin) {
@@ -1833,6 +1846,128 @@
   </div>
 }
   <!-- /Global Settings Panel -->
+
+  <!-- ════════════════════════════════════════════════════════════════════════
+       AD MANAGER PANEL  (admin only)
+       ════════════════════════════════════════════════════════════════════════ -->
+  @if (isAuthenticated && isAdmin && activeMainTab === 'ads') {
+    <div class="admin-body settings-panel" [class.maximized]="isBodyMaximized">
+
+      @if (!isBodyMaximized) {
+        <button class="maximize-btn floating-maximize-btn" (click)="isBodyMaximized = true" title="Maximize panel">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="15 3 21 3 21 9"></polyline><polyline points="9 21 3 21 3 15"></polyline>
+            <line x1="21" y1="3" x2="14" y2="10"></line><line x1="3" y1="21" x2="10" y2="14"></line>
+          </svg>
+        </button>
+      }
+      @if (isBodyMaximized) {
+        <button class="maximize-btn floating-minimize-btn" (click)="isBodyMaximized = false" title="Minimize panel">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="4 14 10 14 10 20"></polyline><polyline points="20 10 14 10 14 4"></polyline>
+            <line x1="10" y1="14" x2="3" y2="21"></line><line x1="21" y1="3" x2="14" y2="10"></line>
+          </svg>
+        </button>
+      }
+
+      <div class="settings-container">
+
+        <!-- Header -->
+        <div class="settings-header">
+          <h2>📢 Ad Manager</h2>
+          <button
+            class="btn btn-success"
+            (click)="saveAdManagerSettings()"
+            [disabled]="isSavingAdManager">
+            @if (isSavingAdManager) {
+              <span>Saving…</span>
+            } @else {
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+                <polyline points="17 21 17 13 7 13 7 21"></polyline>
+                <polyline points="7 3 7 8 15 8"></polyline>
+              </svg>
+              Save Settings
+            }
+          </button>
+        </div>
+
+        <div class="settings-content">
+
+          <!-- Master enable / disable -->
+          <div class="settings-section">
+            <h3>Google Ad Manager (GAM)</h3>
+            <div class="form-group">
+              <label class="radio-option" style="cursor:pointer; display:flex; align-items:center; gap:10px;">
+                <input
+                  type="checkbox"
+                  [(ngModel)]="adManagerForm.enabled"
+                  style="width:18px; height:18px; cursor:pointer;" />
+                <span>Master switch — enable Google Ad Manager globally</span>
+              </label>
+            </div>
+            <div class="hint-text">
+              @if (adManagerForm.enabled) {
+                <p>✅ <strong>On</strong> — GPT script and <code>defineSlot</code> calls are injected into <code>&lt;head&gt;</code>. Individual slot visibility is controlled below.</p>
+              } @else {
+                <p>⛔ <strong>Off</strong> — No GPT script loads and no ads are served, regardless of per-slot settings.</p>
+              }
+            </div>
+          </div>
+
+          <!-- Per-slot enable / disable -->
+          <div class="settings-section">
+            <h3>Ad Slot Configuration</h3>
+            <div class="hint-text" style="margin-bottom:12px;">
+              <p>Enable individual slots to control exactly where ads appear. Each slot is only active when the master switch above is also on.</p>
+            </div>
+
+            @if (adManagerSlots.length) {
+              <div class="ad-slots-table-wrap">
+                <table class="ad-slots-table">
+                  <thead>
+                    <tr>
+                      <th style="width:60px; text-align:center;">Enable</th>
+                      <th>Slot ID</th>
+                      <th>Placement</th>
+                      <th>Min Size</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    @for (slot of adManagerSlots; track slot.id) {
+                      <tr [class.ad-slot-row--off]="!adManagerForm.enabled">
+                        <td style="text-align:center;">
+                          <input
+                            type="checkbox"
+                            [checked]="adManagerForm.slotStates[slot.id]"
+                            (change)="adManagerForm.slotStates[slot.id] = $any($event.target).checked"
+                            [disabled]="!adManagerForm.enabled"
+                            style="width:16px; height:16px; cursor:pointer;" />
+                        </td>
+                        <td>
+                          <code class="ad-slot-id">{{ slot.id }}</code>
+                        </td>
+                        <td>
+                          <span class="ad-slot-placement">{{ getSlotPlacement(slot.id) }}</span>
+                        </td>
+                        <td class="ad-sizes-cell">{{ slot.min_width }}×{{ slot.min_height }}px</td>
+                      </tr>
+                    }
+                  </tbody>
+                </table>
+              </div>
+            } @else {
+              <div class="hint-text">
+                <p>⏳ Loading slot configuration from server…</p>
+              </div>
+            }
+          </div>
+
+        </div><!-- /settings-content -->
+      </div><!-- /settings-container -->
+    </div><!-- /admin-body -->
+  }
+  <!-- /Ad Manager Panel -->
 
   <!-- ════════════════════════════════════════════════════════════════════════
        ACTIVITY LOG PANEL  (admin only, dedicated full-page tab)

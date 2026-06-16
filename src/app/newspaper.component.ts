@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy, ChangeDetectionStrategy, ChangeDetectorRef, ElementRef, ViewChild, viewChild, effect, untracked, Inject, PLATFORM_ID } from '@angular/core';
+import { Component, OnInit, OnDestroy, ChangeDetectionStrategy, ChangeDetectorRef, ElementRef, ViewChild, viewChild, effect, untracked, inject, Inject, PLATFORM_ID } from '@angular/core';
 import { Location, DOCUMENT, isPlatformBrowser } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute } from '@angular/router';
@@ -11,18 +11,24 @@ import { LocaleDatePipe } from './i18n/locale-date.pipe';
 import { DatePickerComponent } from './components/date-picker/date-picker.component';
 import { SectionOverlayComponent } from './components/section-overlay/section-overlay.component';
 import { ArticleModalComponent } from './components/article-modal/article-modal.component';
+import { AdSlotComponent } from './components/ad-slot/ad-slot.component';
+import { AdService } from './services/ad.service';
 import { Subscription } from 'rxjs';
 
 @Component({
   selector: 'app-newspaper',
   standalone: true,
-  imports: [FormsModule, TranslatePipe, LocaleDatePipe, DatePickerComponent, SectionOverlayComponent, ArticleModalComponent],
+  imports: [FormsModule, TranslatePipe, LocaleDatePipe, DatePickerComponent, SectionOverlayComponent, ArticleModalComponent, AdSlotComponent],
   templateUrl: './newspaper.component.html',
   styleUrls: ['./newspaper.component.css'],
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class NewspaperComponent implements OnInit, OnDestroy {
   @ViewChild('mainImage') mainImageRef?: ElementRef<HTMLImageElement>;
+
+  /** Exposed for template — reads slotEnabledMap signal (reactive, OnPush-safe). */
+  protected readonly adService = inject(AdService);
+
   // Signal-based viewChild: the effect() below re-runs only when this
   // element enters/leaves the DOM (much cheaper than afterEveryRender).
   readonly paginationBarRef = viewChild<ElementRef<HTMLElement>>('paginationBar');

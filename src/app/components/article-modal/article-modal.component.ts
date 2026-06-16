@@ -7,6 +7,7 @@ import {
 } from '../../services/newspaper-data.service';
 import { ShareButtonsComponent } from '../../shared/share-buttons/share-buttons.component';
 import { NormalizeContentPipe } from '../../shared/pipes/normalize-content.pipe';
+import { AdSlotComponent } from '../ad-slot/ad-slot.component';
 
 /**
  * Presentational component that renders both the image modal and the content modal.
@@ -33,7 +34,7 @@ import { NormalizeContentPipe } from '../../shared/pipes/normalize-content.pipe'
 @Component({
   selector: 'app-article-modal',
   standalone: true,
-  imports: [ShareButtonsComponent, NormalizeContentPipe],
+  imports: [ShareButtonsComponent, NormalizeContentPipe, AdSlotComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './article-modal.component.html',
   styleUrls: ['./article-modal.component.css'],

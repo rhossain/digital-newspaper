@@ -50,6 +50,7 @@ const PUBLIC_READ_PATHS = [
   '/data/dates',
   '/data/editions/',
   '/data/version',
+  '/ads/config',
 ] as const;
 
 function isPublicReadEndpoint(url: string, method: string): boolean {

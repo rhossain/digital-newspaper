@@ -5,18 +5,18 @@ import { appConfig } from './app.config';
 
 // Server-side routing rules:
 //
-//   ''         — PRERENDER. At `ng build` time, Node.js renders the homepage
-//                with real WordPress data and writes a static index.html.
-//                Apache serves this immediately — user sees full newspaper content
-//                without waiting for JS to load or API calls to complete.
-//                HTTP Transfer Cache (provideClientHydration) stores the API
-//                responses in the HTML so Angular hydrates with the same data
-//                (no duplicate requests, no content flash).
-//                Version polling (startVersionPoll) detects new editions after
-//                hydration and refreshes — content is always current after ~30 s.
+//   ''         — CLIENT. Angular emits a static index.html app shell at build
+//                time — no WordPress API call required, so the build never fails
+//                due to Imunify360 cookie requirements or API unavailability.
+//                The browser fetches live data on hydration exactly as before.
+//                .htaccess serves index.html for root; other routes get index.csr.html.
 //
-//                WORKFLOW: rebuild + redeploy whenever a new edition is published
-//                so the prerendered HTML reflects the current edition at deploy time.
+//                WHY not RenderMode.Prerender?
+//                Prerendering calls loadNewspaperData() at build time, which hits
+//                the WordPress API. The build machine has no Imunify360 session
+//                cookie, so the API request fails, prerendering throws, and Angular
+//                silently emits prerendered-routes.json = {"routes":{}}.  No
+//                index.html is written → Apache 404s on the root URL.
 //
 //   /admin/**  — client-only (heavy browser APIs: canvas, localStorage, IndexedDB,
 //                file upload). The server sends the SPA shell; Angular takes over
@@ -27,7 +27,7 @@ import { appConfig } from './app.config';
 //                and Angular bootstraps as CSR. Full SSR activates automatically
 //                if the app is ever moved to a Node.js server.
 const serverRoutes: ServerRoute[] = [
-  { path: '',      renderMode: RenderMode.Prerender },
+  { path: '',      renderMode: RenderMode.Client },
   { path: 'admin', renderMode: RenderMode.Client },
   { path: '**',    renderMode: RenderMode.Server },
 ];

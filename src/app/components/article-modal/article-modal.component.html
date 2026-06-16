@@ -53,6 +53,8 @@
       <!-- Image panel: always present in DOM; hidden on mobile when text view is active -->
       <div class="modal-images-container"
         [class.modal-images-hidden]="isMobileView && mobileModalView === 'text'">
+        <!-- Slot 5a: desktop_post_top_image — before the main image (image panel) -->
+        <app-ad-slot slotId="desktop_post_top_image" />
         <!-- Main/Selected Image -->
         @if (modalImage) {
           <div class="modal-image-item">
@@ -64,6 +66,8 @@
               />
           </div>
         }
+        <!-- Slot 6: desktop_post_middle — before the linked section images -->
+        <app-ad-slot slotId="desktop_post_middle" />
         <!-- Linked Section Images -->
         @for (linkedSection of modalLinkedSections; track trackByLinkedSectionId($index, linkedSection)) {
           <div class="modal-image-item"
@@ -114,6 +118,8 @@
       }
       @if (section) {
         <div class="modal-body">
+          <!-- Slot 5b: desktop_post_top_text — before the article title (text panel) -->
+          <app-ad-slot slotId="desktop_post_top_text" />
           @if (section.title) {
             <h2 class="article-modal-title">{{ section.title }}</h2>
           }
