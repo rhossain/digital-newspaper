@@ -109,8 +109,9 @@
 
 .modal-image-content {
   background: var(--color-white);
-  max-width: 95vw;
-  max-height: 95vh;
+  width: 100%;
+  max-width: 98vw;
+  max-height: 98vh;
   overflow: auto;
   position: relative;
   animation: slideUp 0.3s ease;
