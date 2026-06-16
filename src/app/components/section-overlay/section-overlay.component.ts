@@ -88,7 +88,7 @@ import { NewsSection } from '../../services/newspaper-data.service';
       max-width: 90%;
       overflow: hidden;
       text-overflow: ellipsis;
-      font-family: 'Google Sans', sans-serif;
+      font-family: 'Google Sans Variable', sans-serif;
     }
 
     .clickable-section:hover .section-label {

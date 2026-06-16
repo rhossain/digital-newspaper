@@ -1,4 +1,4 @@
-import { ApplicationConfig, isDevMode } from '@angular/core';
+import { ApplicationConfig, Injectable, isDevMode } from '@angular/core';
 import {
   provideHttpClient,
   withInterceptors,
@@ -7,12 +7,14 @@ import {
 import {
   provideRouter,
   withPreloading,
-  PreloadAllModules,
+  PreloadingStrategy,
+  Route,
   Routes,
   UrlSerializer,
   DefaultUrlSerializer,
   UrlTree,
 } from '@angular/router';
+import { Observable, EMPTY } from 'rxjs';
 import { provideServiceWorker } from '@angular/service-worker';
 import { provideClientHydration } from '@angular/platform-browser';
 import { NewspaperComponent } from './newspaper.component';
@@ -31,6 +33,24 @@ const routes: Routes = [
   { path: ':date/:page/:edition/:section', component: NewspaperComponent },
   { path: '**', redirectTo: '' },
 ];
+
+/**
+ * Only preload the admin lazy chunk for authenticated users.
+ *
+ * PreloadAllModules would download the ~689 KB admin bundle in the background
+ * for every public reader, even though they never visit /admin. This strategy
+ * checks for the auth token in localStorage and only preloads when the user
+ * is logged in — saving bandwidth for the vast majority of readers.
+ */
+@Injectable({ providedIn: 'root' })
+class AuthAwarePreloadingStrategy implements PreloadingStrategy {
+  preload(route: Route, load: () => Observable<unknown>): Observable<unknown> {
+    const isAuthenticated =
+      typeof localStorage !== 'undefined' &&
+      !!localStorage.getItem('dn_wp_token');
+    return isAuthenticated && route.path === 'admin' ? load() : EMPTY;
+  }
+}
 
 /**
  * Ensures all URLs end with a trailing slash.
@@ -58,10 +78,9 @@ export const appConfig: ApplicationConfig = {
       withInterceptors([httpCacheInterceptor, wpApiInterceptor, loaderInterceptor]),
     ),
 
-    // PreloadAllModules silently fetches the admin lazy chunk in the background
-    // after the viewer loads, so /admin navigation is instant for users who
-    // visit the viewer first.
-    provideRouter(routes, withPreloading(PreloadAllModules)),
+    // AuthAwarePreloadingStrategy only preloads the admin lazy chunk when the
+    // user has an auth token — public readers don't pay the bandwidth cost.
+    provideRouter(routes, withPreloading(AuthAwarePreloadingStrategy)),
 
     { provide: UrlSerializer, useClass: TrailingSlashUrlSerializer },
 

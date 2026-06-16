@@ -4,7 +4,7 @@
   margin: 0 auto;
   height: 100vh;
   background-color: var(--color-bg-app);
-  font-family: 'Google Sans', sans-serif;
+  font-family: 'Google Sans Variable', sans-serif;
 }
 
 /* Fixed Header Styles */
@@ -1443,7 +1443,7 @@
 
 .placeholder-content p {
   font-size: 16px;
-  font-family: 'Google Sans', sans-serif;
+  font-family: 'Google Sans Variable', sans-serif;
 }
 
 /* Scrollbar Styles */

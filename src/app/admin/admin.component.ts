@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy, ViewChild, ElementRef, ChangeDetectorRef, HostListener } from '@angular/core';
+import { Component, OnInit, OnDestroy, ViewChild, ElementRef, ChangeDetectorRef, HostListener, ViewEncapsulation } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
@@ -22,7 +22,14 @@ import { resizeImageToWidth } from '../shared/utils/image-resize.util';
   standalone: true,
   imports: [CommonModule, FormsModule, QuillModule, BulkXmlImportComponent, ActionTrackerDirective],
   templateUrl: './admin.component.html',
-  styleUrls: ['./admin.component.css']
+  styleUrls: ['./admin.component.css'],
+  // ViewEncapsulation.None is required so that Quill's dynamically-generated DOM
+  // (which carries no Angular attribute) can be styled by the Quill CSS imported
+  // via admin.component.css.  The admin CSS uses only class-based selectors so
+  // there is no risk of these styles leaking onto the viewer.
+  // The Quill styles are bundled with the admin lazy chunk rather than the main
+  // bundle, so first-load visitors never download them.
+  encapsulation: ViewEncapsulation.None,
 })
 export class AdminComponent implements OnInit, OnDestroy {
   /** Active theme — set in themes.config.ts */

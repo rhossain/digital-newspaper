@@ -65,19 +65,39 @@ function resolveTtl(url: string): number | null {
         const dateMatch = url.match(/\/data\/editions\/(\d{4}-\d{2}-\d{2})/);
         if (!dateMatch) return null;
         const requestDate = dateMatch[1];
-        const today = new Date();
-        const todayStr = [
-          today.getFullYear(),
-          String(today.getMonth() + 1).padStart(2, '0'),
-          String(today.getDate()).padStart(2, '0'),
-        ].join('-');
         // Past dates: 24 hours. Today: 5 minutes.
-        return requestDate < todayStr ? 24 * 60 * 60 * 1000 : 5 * 60 * 1000;
+        return requestDate < getTodayStr() ? 24 * 60 * 60 * 1000 : 5 * 60 * 1000;
       }
       return rule.ttlMs;
     }
   }
   return null;
+}
+
+// ─── Memoized today string ────────────────────────────────────────────────────
+
+/**
+ * Returns "YYYY-MM-DD" for the current local date.
+ * The result is cached until the calendar day changes to avoid allocating a
+ * new Date on every cacheable request (resolveTtl is called per request).
+ */
+let _todayCached: { date: string; dayStart: number } | null = null;
+
+function getTodayStr(): string {
+  const now = Date.now();
+  if (_todayCached && now < _todayCached.dayStart + 24 * 60 * 60 * 1000) {
+    return _todayCached.date;
+  }
+  const d = new Date();
+  const date = [
+    d.getFullYear(),
+    String(d.getMonth() + 1).padStart(2, '0'),
+    String(d.getDate()).padStart(2, '0'),
+  ].join('-');
+  // dayStart = midnight of the current day in local time
+  const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  _todayCached = { date, dayStart };
+  return date;
 }
 
 // ─── Cache store (module-level singleton) ─────────────────────────────────────
@@ -131,6 +151,19 @@ export function evictEditionCache(date: string): void {
   // Also evict /data/dates since the available-dates list may have changed.
   for (const key of Array.from(_cache.keys())) {
     if (key.includes('/data/dates')) {
+      _cache.delete(key);
+    }
+  }
+}
+
+/**
+ * Evict only the settings cache entry.
+ * Use this after a settings-only PATCH so edition entries are preserved
+ * and readers don't pay the cost of re-fetching all active editions.
+ */
+export function evictSettingsCache(): void {
+  for (const key of Array.from(_cache.keys())) {
+    if (key.includes('/data/settings')) {
       _cache.delete(key);
     }
   }

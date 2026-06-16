@@ -3,10 +3,10 @@ import { isPlatformBrowser } from '@angular/common';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { HttpClient, HttpResponse } from '@angular/common/http';
 import { Observable, BehaviorSubject, Subject, Subscription, timer, forkJoin, interval, of, throwError } from 'rxjs';
-import { tap, map, catchError, timeout, retry, switchMap, debounceTime, distinctUntilChanged } from 'rxjs/operators';
+import { tap, map, catchError, timeout, retry, switchMap, exhaustMap, debounceTime, distinctUntilChanged } from 'rxjs/operators';
 import { AuthService } from './auth.service';
 import { WP_BASE_URL } from '../config';
-import { clearHttpCache, evictEditionCache, markForBrowserCacheBypass } from '../interceptors/http-cache.interceptor';
+import { clearHttpCache, evictEditionCache, evictSettingsCache, markForBrowserCacheBypass } from '../interceptors/http-cache.interceptor';
 import { SettingsService } from './settings.service';
 import { DateIndexService } from './date-index.service';
 import { EditionCacheService } from './edition-cache.service';
@@ -684,6 +684,10 @@ export class NewspaperDataService {
     if (!this.isBrowser) return; // SSR — no localStorage
     if (this.dataRecoveredFromMediaLibrary) return;
     if (!this.hasAnyPages(data)) return;
+    // Only write emergency drafts in authenticated admin sessions.
+    // Public readers never edit content, so serialising their full JSON
+    // state every 2 s is pure waste.
+    if (!this.auth.getToken()) return;
     try {
       localStorage.setItem(
         NewspaperDataService.EMERGENCY_DRAFT_KEY,
@@ -1383,7 +1387,10 @@ export class NewspaperDataService {
           const current = this.dataSubject.value;
           this.dataSubject.next({ ...current, dataVersion: response.newDataVersion, settings });
         }
-        clearHttpCache();
+        // Only evict the settings cache — edition entries are still valid.
+        // Using clearHttpCache() here was wasteful: it forced readers to
+        // re-download every cached edition after any settings change.
+        evictSettingsCache();
       })
     );
   }
@@ -1700,17 +1707,20 @@ export class NewspaperDataService {
    */
   startVersionPoll(intervalMs = 30_000): void {
     this.stopVersionPoll();
-    // Emit immediately once, then every interval
-    this.versionPollSub = interval(intervalMs).subscribe(() => {
-      this.http.get<{ dataVersion: number }>(this.versionUrl).pipe(
-        catchError(() => of(null)) // network error → skip silently
-      ).subscribe(res => {
-        if (!res) return;
-        const local = this.dataSubject.value.dataVersion ?? 0;
-        if (res.dataVersion > local) {
-          this.remoteDataChanged$.next(res.dataVersion);
-        }
-      });
+    // exhaustMap: if the previous version check hasn't resolved by the time
+    // the next interval fires, the new tick is ignored — no request stacking.
+    this.versionPollSub = interval(intervalMs).pipe(
+      exhaustMap(() =>
+        this.http.get<{ dataVersion: number }>(this.versionUrl).pipe(
+          catchError(() => of(null)) // network error → skip silently
+        )
+      )
+    ).subscribe(res => {
+      if (!res) return;
+      const local = this.dataSubject.value.dataVersion ?? 0;
+      if (res.dataVersion > local) {
+        this.remoteDataChanged$.next(res.dataVersion);
+      }
     });
   }
 

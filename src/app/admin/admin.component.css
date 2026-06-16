@@ -1,3 +1,8 @@
+/* Quill rich-text editor styles — loaded lazily with the admin chunk only.
+   ViewEncapsulation.None on AdminComponent is required for these styles to
+   reach Quill's dynamically-generated DOM. */
+@import "quill/dist/quill.snow.css";
+
 /* Admin Container */
 .admin-container {
   height: 100vh;
@@ -5,7 +10,7 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  font-family: 'Google Sans', sans-serif;
+  font-family: 'Google Sans Variable', sans-serif;
 }
 
 /* Header */

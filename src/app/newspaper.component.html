@@ -555,7 +555,7 @@
                 >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"></polyline></svg>
               </button>
-              @for (item of getPaginationPages(); track trackByIndex($index, item)) {
+              @for (item of paginationPages; track trackByIndex($index, item)) {
                 @if (item === null) {
                   <span class="pagination-ellipsis" aria-hidden="true">&#8230;</span>
                 }

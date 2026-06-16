@@ -22,9 +22,7 @@ import { WP_BASE_URL } from '../config';
 export class DateIndexService {
 
   private readonly _endpoint =
-    // ngsw-bypass keeps this endpoint out of Angular SW dataGroup cache so
-    // a hard refresh right after creating a date sees the latest index.
-    `${WP_BASE_URL}/wp-json/digital-newspaper/v1/data/dates?ngsw-bypass=true`;
+    `${WP_BASE_URL}/wp-json/digital-newspaper/v1/data/dates`;
 
   // ── State ──────────────────────────────────────────────────────────────────
 
@@ -64,15 +62,7 @@ export class DateIndexService {
    */
   fetch(): Observable<string[]> {
     return this.http
-      .get<{ dates: string[]; latestDate: string }>(this._endpoint, {
-        // Prevent stale browser-level max-age responses after an admin save
-        // followed by a hard refresh. This still allows the app-level
-        // interceptor cache to serve fast in-session hits.
-        headers: {
-          'Cache-Control': 'no-cache',
-          'Pragma': 'no-cache',
-        },
-      })
+      .get<{ dates: string[]; latestDate: string }>(this._endpoint)
       .pipe(
         tap(res => {
           const dates = Array.isArray(res.dates) ? [...res.dates].sort().reverse() : [];

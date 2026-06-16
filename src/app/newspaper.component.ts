@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy, AfterViewChecked, ChangeDetectorRef, ElementRef, ViewChild, Inject, PLATFORM_ID } from '@angular/core';
+import { Component, OnInit, OnDestroy, ChangeDetectionStrategy, ChangeDetectorRef, ElementRef, ViewChild, viewChild, effect, untracked, Inject, PLATFORM_ID } from '@angular/core';
 import { Location, DOCUMENT, isPlatformBrowser } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute } from '@angular/router';
@@ -18,13 +18,18 @@ import { Subscription } from 'rxjs';
   standalone: true,
   imports: [FormsModule, TranslatePipe, LocaleDatePipe, DatePickerComponent, SectionOverlayComponent, ArticleModalComponent],
   templateUrl: './newspaper.component.html',
-  styleUrls: ['./newspaper.component.css']
+  styleUrls: ['./newspaper.component.css'],
+  changeDetection: ChangeDetectionStrategy.OnPush,
 })
-export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
+export class NewspaperComponent implements OnInit, OnDestroy {
   @ViewChild('mainImage') mainImageRef?: ElementRef<HTMLImageElement>;
-  @ViewChild('paginationBar') private paginationBarRef?: ElementRef<HTMLElement>;
+  // Signal-based viewChild: the effect() below re-runs only when this
+  // element enters/leaves the DOM (much cheaper than afterEveryRender).
+  readonly paginationBarRef = viewChild<ElementRef<HTMLElement>>('paginationBar');
   private paginationContainerWidth = 0;
   private paginationObserver?: ResizeObserver;
+  /** Section ID → section lookup, rebuilt once per edition load instead of per-click. */
+  private _sectionByIdCache = new Map<string, NewsSection>();
   pages: NewspaperPage[] = [];
   currentPage: NewspaperPage | null = null;
   selectedSection: NewsSection | null = null;
@@ -89,6 +94,15 @@ export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
   // Global settings
   settings: GlobalSettings | null = null;
   socialLinks: any = {};
+
+  // Cached localized string properties — computed once in refreshSettings() instead
+  // of recomputing on every change-detection cycle via getter calls in the template.
+  logoHref = '';
+  localizedEditor = '';
+  localizedAddressLine1 = '';
+  localizedAddressLine2 = '';
+  localizedPhone = '';
+  todayDisplayDate = '';
   
   private subscriptions: Subscription[] = [];
 
@@ -109,17 +123,46 @@ export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
     private titleService: Title,
     @Inject(DOCUMENT) private document: Document,
     @Inject(PLATFORM_ID) private platformId: object,
-  ) {}
+  ) {
+    // Use an effect() + viewChild signal instead of afterEveryRender().
+    // afterEveryRender fires after EVERY render of the entire app; effect() fires
+    // only when the paginationBarRef signal value changes — i.e. when the element
+    // enters or leaves the DOM due to an @if toggle.  This is orders of magnitude
+    // cheaper for a reader who never enters maintenance mode.
+    effect(() => {
+      // Reading the signal registers a reactive dependency. The effect re-runs
+      // only when paginationBarRef changes (element added or removed from DOM).
+      const el = this.paginationBarRef()?.nativeElement;
+      // untracked: mutations inside (paginationContainerWidth, paginationObserver)
+      // are plain properties — not signals — so untracked() is a no-op here, but
+      // it is good practice to mark side-effectful work explicitly.
+      untracked(() => {
+        if (el && !this.paginationObserver) {
+          // Element just became visible — start observing its width.
+          this.paginationObserver = new ResizeObserver(entries => {
+            const w = Math.floor(entries[0]?.contentRect.width ?? 0);
+            if (w !== this.paginationContainerWidth) {
+              this.paginationContainerWidth = w;
+              this.updatePaginationPages();
+              this.cdr.detectChanges();
+            }
+          });
+          this.paginationObserver.observe(el);
+        } else if (!el && this.paginationObserver) {
+          // Element removed from DOM — clean up.
+          this.paginationObserver.disconnect();
+          this.paginationObserver = undefined;
+          this.paginationContainerWidth = 0;
+          this.updatePaginationPages();
+        }
+      });
+    });
+  }
 
   private get isBrowser(): boolean { return isPlatformBrowser(this.platformId); }
 
   /** Expose TranslationService to the template. */
   get ts(): TranslationService { return this.translationService; }
-
-  /** URL for the logo anchor. Uses the configured link, falling back to the app's base URL. */
-  get logoHref(): string {
-    return this.settings?.logo?.link?.trim() || this.document.baseURI;
-  }
 
   ngOnInit() {
     this.todayDate = this.dataService.getTodayDate();
@@ -222,31 +265,14 @@ export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
     }
   }
 
-  ngAfterViewChecked(): void {
-    const el = this.paginationBarRef?.nativeElement;
-    if (el && !this.paginationObserver) {
-      // Element just became visible — start observing its width.
-      this.paginationObserver = new ResizeObserver(entries => {
-        const w = Math.floor(entries[0]?.contentRect.width ?? 0);
-        if (w !== this.paginationContainerWidth) {
-          this.paginationContainerWidth = w;
-          this.cdr.detectChanges();
-        }
-      });
-      this.paginationObserver.observe(el);
-    } else if (!el && this.paginationObserver) {
-      // Element removed from DOM (*ngIf) — clean up.
-      this.paginationObserver.disconnect();
-      this.paginationObserver = undefined;
-      this.paginationContainerWidth = 0;
-    }
-  }
-
   private updateIsMobileView() {
     this.isMobileView = window.innerWidth <= 1024;
     if (!this.isMobileView && this.mobileHeaderMenuOpen) {
       this.mobileHeaderMenuOpen = false;
     }
+    // OnPush: resize events fire outside Angular's zone — mark for check so the
+    // template reflects the updated isMobileView / mobileHeaderMenuOpen values.
+    this.cdr.markForCheck();
   }
 
   toggleMobileHeaderMenu() {
@@ -303,6 +329,23 @@ export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
     if (this.settings?.language) {
       this.translationService.setLanguage(this.settings.language);
     }
+    // Cache localized values so the template reads plain properties instead of
+    // re-executing service calls on every change-detection cycle.
+    const lang = this.translationService.language;
+    this.logoHref          = this.settings?.logo?.link?.trim() || this.document.baseURI;
+    this.localizedEditor   = this.dataService.getLocalizedSetting(
+      this.settings?.editorLabels, this.settings?.editor, lang
+    );
+    this.localizedAddressLine1 = this.dataService.getLocalizedSetting(
+      this.settings?.address?.line1Labels, this.settings?.address?.line1, lang
+    );
+    this.localizedAddressLine2 = this.dataService.getLocalizedSetting(
+      this.settings?.address?.line2Labels, this.settings?.address?.line2, lang
+    );
+    this.localizedPhone = this.dataService.getLocalizedSetting(
+      this.settings?.address?.phoneLabels, this.settings?.address?.phone, lang
+    );
+    this.todayDisplayDate = this.translationService.formatDate(this.todayDate, 'full');
   }
 
   loadCurrentEdition() {
@@ -355,6 +398,14 @@ export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
     const edition = this.dataService.getCurrentEdition(this.selectedEditionNumber);
     if (edition) {
       this.pages = [...edition.pages].sort((a, b) => a.id - b.id);
+      // Rebuild section-ID lookup once here so loadLinkedSections() can do
+      // O(1) lookups instead of O(pages × sections) on every section click.
+      this._sectionByIdCache = new Map<string, NewsSection>();
+      for (const page of this.pages) {
+        for (const section of page.sections) {
+          this._sectionByIdCache.set(section.id, { ...section, pageId: page.id });
+        }
+      }
       // Sequential thumbnail loading: resolve one page at a time so the
       // browser only fetches one thumbnail per round-trip instead of
       // hammering all of them simultaneously.
@@ -441,6 +492,7 @@ export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
       }
     } else {
       this.pages = [];
+      this._sectionByIdCache.clear();
       this.currentPage = null;
       this.selectedSection = null;
       this.croppedSectionImage = null;
@@ -449,6 +501,8 @@ export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.pageThumbnailSrcs = {};
     }
     this.updateDisplayDate();
+    // Recalculate pagination after all page/edition state has settled.
+    this.updatePaginationPages();
     this.cdr.detectChanges();
   }
 
@@ -494,38 +548,8 @@ export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.displayDate = this.translationService.formatDate(this.selectedDate, 'full');
   }
 
-  /** Always shows today's date formatted in the active locale. */
-  get todayDisplayDate(): string {
-    return this.translationService.formatDate(this.todayDate, 'full');
-  }
-
-  /** Localized editor name, falling back to the base editor field. */
-  get localizedEditor(): string {
-    return this.dataService.getLocalizedSetting(
-      this.settings?.editorLabels, this.settings?.editor, this.translationService.language
-    );
-  }
-
-  /** Localized address line 1, falling back to the base field. */
-  get localizedAddressLine1(): string {
-    return this.dataService.getLocalizedSetting(
-      this.settings?.address?.line1Labels, this.settings?.address?.line1, this.translationService.language
-    );
-  }
-
-  /** Localized address line 2, falling back to the base field. */
-  get localizedAddressLine2(): string {
-    return this.dataService.getLocalizedSetting(
-      this.settings?.address?.line2Labels, this.settings?.address?.line2, this.translationService.language
-    );
-  }
-
-  /** Localized phone display, falling back to the base phone field. */
-  get localizedPhone(): string {
-    return this.dataService.getLocalizedSetting(
-      this.settings?.address?.phoneLabels, this.settings?.address?.phone, this.translationService.language
-    );
-  }
+  // localizedEditor, localizedAddressLine1/2, localizedPhone, todayDisplayDate, logoHref
+  // are now plain properties computed in refreshSettings() — see class field declarations above.
 
   checkIfToday() {
     this.isToday = this.selectedDate === this.todayDate;
@@ -648,6 +672,8 @@ export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   selectPage(page: NewspaperPage, targetSectionId?: string, preserveImageLoaded = false) {
     this.currentPage = page;
+    // Refresh the cached pagination array whenever the active page changes.
+    this.updatePaginationPages();
     if (!preserveImageLoaded) {
       this.imageLoaded = false;
       this.startSlowConnectionTimer();
@@ -771,21 +797,29 @@ export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
   }
 
   /**
-   * Returns the page-number items to render in the pagination bar.
-   * Numbers are 1-based indices into this.pages[]. null represents an ellipsis.
+   * Cached pagination items for the template — updated by updatePaginationPages()
+   * whenever pages, currentPage, or paginationContainerWidth change.
    *
-   * If the measured container width is large enough to fit all page buttons on
-   * one line they are all shown. Otherwise a smart window of 7 items with
-   * ellipsis keeps everything on a single line.
+   * Numbers are 1-based indices into this.pages[]. null = ellipsis slot.
+   * Keeping this as a plain property (instead of a getter called every render)
+   * eliminates repeated array allocations and indexOf() scans on every CD cycle.
    */
-  getPaginationPages(): (number | null)[] {
+  paginationPages: (number | null)[] = [];
+
+  /**
+   * Recalculate paginationPages and store the result. Called whenever the
+   * inputs change: page list, selected page, or measured container width.
+   *
+   * If the container is wide enough to fit all page buttons on one line they
+   * are all shown; otherwise a 7-slot window with ellipsis keeps it single-line.
+   */
+  private updatePaginationPages(): void {
     const total = this.pages.length;
 
-    // Determine whether all page buttons fit in the available space.
-    // Each page button width: min-width 32px; numbers ≥10 render wider (~44px).
-    // 2 nav arrows (32px each) + page buttons + gaps (4px × (total+1 slots)).
+    // Each page button: min-width 32px; numbers ≥10 render wider (~44px).
+    // 2 nav arrows (32px each) + gaps (4px × (total+1 slots)).
     const allFit = (): boolean => {
-      if (this.paginationContainerWidth <= 0) return total <= 7; // pre-measurement fallback
+      if (this.paginationContainerWidth <= 0) return total <= 7;
       const needed = 64
         + this.pages.reduce((s, p) => s + (p.id >= 10 ? 44 : 32), 0)
         + (total + 1) * 4;
@@ -793,21 +827,19 @@ export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
     };
 
     if (allFit()) {
-      return Array.from({ length: total }, (_, i) => i + 1);
+      this.paginationPages = Array.from({ length: total }, (_, i) => i + 1);
+      return;
     }
 
-    // Windowed pagination: always exactly 7 visible slots so the bar stays single-line.
+    // Windowed: exactly 7 slots with ellipsis so the bar stays single-line.
     const current = this.pages.indexOf(this.currentPage!) + 1;
     if (current <= 4) {
-      // Near start: 1 2 3 4 5 … last
-      return [1, 2, 3, 4, 5, null, total];
+      this.paginationPages = [1, 2, 3, 4, 5, null, total];
+    } else if (current >= total - 3) {
+      this.paginationPages = [1, null, total - 4, total - 3, total - 2, total - 1, total];
+    } else {
+      this.paginationPages = [1, null, current - 1, current, current + 1, null, total];
     }
-    if (current >= total - 3) {
-      // Near end: 1 … last-4 last-3 last-2 last-1 last
-      return [1, null, total - 4, total - 3, total - 2, total - 1, total];
-    }
-    // Middle: 1 … prev current next … last
-    return [1, null, current - 1, current, current + 1, null, total];
   }
 
   selectSection(section: NewsSection) {
@@ -1214,13 +1246,9 @@ export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
   private loadLinkedSections(section: NewsSection) {
     this.linkedSections = [];
 
-    // Build a full lookup of every section across all pages.
-    const sectionById = new Map<string, NewsSection>();
-    for (const page of this.pages) {
-      for (const pageSection of page.sections) {
-        sectionById.set(pageSection.id, { ...pageSection, pageId: page.id });
-      }
-    }
+    // Use the pre-built lookup (populated in renderCurrentEdition()) instead of
+    // rebuilding it from scratch on every section click — O(1) vs O(pages × sections).
+    const sectionById = this._sectionByIdCache;
 
     // 1) Forward-linked sections: those this section explicitly names in linkedSectionIds.
     const forwardIds = new Set<string>(section.linkedSectionIds ?? []);
@@ -1382,8 +1410,12 @@ export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
       ctx.imageSmoothingEnabled = false;
       ctx.drawImage(img, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
       try {
-        // Use PNG (lossless) to avoid double JPEG compression artifacts and color shift
-        const dataUrl = canvas.toDataURL('image/png');
+        // JPEG at quality 0.85: ~5–10× smaller data URL than PNG for photographic
+        // newspaper pages (PNG was lossless but produced huge in-memory strings).
+        // Source images are WebP; JPEG is chosen over WebP output because
+        // canvas.toDataURL('image/webp') is unsupported in Firefox/Safari (falls
+        // back to PNG silently), whereas JPEG is universally supported.
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
         this.cropCache.set(cacheKey, dataUrl);
         this.cdr.detectChanges();
       } catch (error) {
@@ -1468,8 +1500,10 @@ export class NewspaperComponent implements OnInit, OnDestroy, AfterViewChecked {
       ctx.drawImage(img, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
 
       try {
-        // Use PNG (lossless) to avoid double JPEG compression artifacts and color shift
-        const dataUrl = canvas.toDataURL('image/png');
+        // JPEG at quality 0.85: ~5–10× smaller data URL than PNG.
+        // Source images are WebP; JPEG output is chosen for universal browser
+        // support (canvas.toDataURL('image/webp') silently falls back to PNG in Firefox/Safari).
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
         this.cropCache.set(cacheKey, dataUrl);
         this.croppedSectionImage = dataUrl;
         this.sectionImageLoading = false;
