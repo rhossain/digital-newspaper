@@ -2,95 +2,102 @@
 @if (showImageModal) {
   <div class="modal-overlay" (click)="closeImageModal.emit()">
     <div class="modal-image-content" (click)="$event.stopPropagation()">
-      <button class="modal-close-button" (click)="closeImageModal.emit()">
-        <span>&times;</span>
-      </button>
-      <!-- Share buttons at top with logo -->
-      @if (section) {
-        <app-share-buttons
-          [section]="section"
-          [selectedDate]="selectedDate"
-          [pageSlug]="pageSlug"
-          [editionSlug]="editionSlug"
-          [logo]="logo ?? undefined"
-          [imageUrl]="shareImageUrl || undefined"
-          [siteName]="siteName"
-          [showPrint]="true"
-          [showDownload]="true"
-          (printClicked)="printImages.emit()"
-          (downloadClicked)="downloadImages.emit()">
-        </app-share-buttons>
-      }
-      <!-- Image / Text toggle — mobile only -->
-      @if (isMobileView && section?.content) {
-        <div class="mobile-modal-toggle">
-          <button
-            class="mobile-modal-tab"
-            [class.active]="mobileModalView === 'image'"
-            (click)="mobileViewChange.emit('image')"
-            aria-label="Image view">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-              <circle cx="8.5" cy="8.5" r="1.5"></circle>
-              <polyline points="21 15 16 10 5 21"></polyline>
-            </svg>
-            Image
-          </button>
-          <button
-            class="mobile-modal-tab"
-            [class.active]="mobileModalView === 'text'"
-            (click)="mobileViewChange.emit('text')"
-            aria-label="Text view">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <line x1="3" y1="6" x2="21" y2="6"></line>
-              <line x1="3" y1="12" x2="21" y2="12"></line>
-              <line x1="3" y1="18" x2="15" y2="18"></line>
-            </svg>
-            Text
-          </button>
-        </div>
-      }
-      <!-- Image panel: always present in DOM; hidden on mobile when text view is active -->
-      <div class="modal-images-container"
-        [class.modal-images-hidden]="isMobileView && mobileModalView === 'text'">
-        <!-- Slot 5a: desktop_post_top_image — before the main image (image panel) -->
-        <app-ad-slot slotId="desktop_post_top_image" />
-        <!-- Main/Selected Image -->
-        @if (modalImage) {
-          <div class="modal-image-item">
-            <img
-              [src]="modalImage"
-              [alt]="modalImageTitle"
-              class="modal-full-image"
-              (error)="onModalImageError($event)"
-              />
-          </div>
+
+      <!-- Fixed header: close button + share bar + mobile toggle -->
+      <div class="modal-image-header">
+        <button class="modal-close-button" (click)="closeImageModal.emit()">
+          <span>&times;</span>
+        </button>
+        <!-- Share buttons at top with logo -->
+        @if (section) {
+          <app-share-buttons
+            [section]="section"
+            [selectedDate]="selectedDate"
+            [pageSlug]="pageSlug"
+            [editionSlug]="editionSlug"
+            [logo]="logo ?? undefined"
+            [imageUrl]="shareImageUrl || undefined"
+            [siteName]="siteName"
+            [showPrint]="true"
+            [showDownload]="true"
+            (printClicked)="printImages.emit()"
+            (downloadClicked)="downloadImages.emit()">
+          </app-share-buttons>
         }
-        <!-- Slot 6: desktop_post_middle — before the linked section images -->
-        <app-ad-slot slotId="desktop_post_middle" />
-        <!-- Linked Section Images -->
-        @for (linkedSection of modalLinkedSections; track trackByLinkedSectionId($index, linkedSection)) {
-          <div class="modal-image-item"
-            >
-            <img
-              [src]="getCroppedImage(linkedSection)!"
-              [alt]="linkedSection.title"
-              class="modal-full-image"
-              (error)="onModalImageError($event)"
-              />
+        <!-- Image / Text toggle — mobile only -->
+        @if (isMobileView && section?.content) {
+          <div class="mobile-modal-toggle">
+            <button
+              class="mobile-modal-tab"
+              [class.active]="mobileModalView === 'image'"
+              (click)="mobileViewChange.emit('image')"
+              aria-label="Image view">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                <polyline points="21 15 16 10 5 21"></polyline>
+              </svg>
+              Image
+            </button>
+            <button
+              class="mobile-modal-tab"
+              [class.active]="mobileModalView === 'text'"
+              (click)="mobileViewChange.emit('text')"
+              aria-label="Text view">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="3" y1="6" x2="21" y2="6"></line>
+                <line x1="3" y1="12" x2="21" y2="12"></line>
+                <line x1="3" y1="18" x2="15" y2="18"></line>
+              </svg>
+              Text
+            </button>
           </div>
         }
       </div>
-      <!-- Text panel: mobile-only, created/destroyed via *ngIf to avoid height conflicts -->
-      @if (isMobileView && mobileModalView === 'text' && section) {
-        <div class="modal-text-body"
-          >
-          @if (section.title) {
-            <h2 class="article-modal-title">{{ section.title }}</h2>
+
+      <!-- Scrollable body -->
+      <div class="modal-image-scroll-body">
+        <!-- Image panel: always present in DOM; hidden on mobile when text view is active -->
+        <div class="modal-images-container"
+          [class.modal-images-hidden]="isMobileView && mobileModalView === 'text'">
+          <!-- Slot 5a: desktop_post_top_image — before the main image (image panel) -->
+          <app-ad-slot slotId="desktop_post_top_image" />
+          <!-- Main/Selected Image -->
+          @if (modalImage) {
+            <div class="modal-image-item">
+              <img
+                [src]="modalImage"
+                [alt]="modalImageTitle"
+                class="modal-full-image"
+                (error)="onModalImageError($event)"
+                />
+            </div>
           }
-          <div class="article-body" [innerHTML]="section.content | normalizeContent"></div>
+          <!-- Slot 6: desktop_post_middle — before the linked section images -->
+          <app-ad-slot slotId="desktop_post_middle" />
+          <!-- Linked Section Images -->
+          @for (linkedSection of modalLinkedSections; track trackByLinkedSectionId($index, linkedSection)) {
+            <div class="modal-image-item">
+              <img
+                [src]="getCroppedImage(linkedSection)!"
+                [alt]="linkedSection.title"
+                class="modal-full-image"
+                (error)="onModalImageError($event)"
+                />
+            </div>
+          }
         </div>
-      }
+        <!-- Text panel: mobile-only, created/destroyed via *ngIf to avoid height conflicts -->
+        @if (isMobileView && mobileModalView === 'text' && section) {
+          <div class="modal-text-body">
+            @if (section.title) {
+              <h2 class="article-modal-title">{{ section.title }}</h2>
+            }
+            <div class="article-body" [innerHTML]="section.content | normalizeContent"></div>
+          </div>
+        }
+      </div>
+
     </div>
   </div>
 }

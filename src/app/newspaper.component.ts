@@ -78,8 +78,29 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   thumbnailsLoading: { [key: number]: boolean } = {};
   /** Pre-resolved thumbnail src for each page (thumbnail → fullImage fallback). */
   pageThumbnailSrcs: { [pageId: number]: string } = {};
-  /** Queue of pages whose thumbnails have not yet been requested (sequential loading). */
-  private thumbnailLoadQueue: NewspaperPage[] = [];
+  /**
+   * Cross-date thumbnail source cache — keyed by page ID scoped to a date.
+   * Key format: `${date}:${pageId}` — survives date navigation so that
+   * returning to a previously-visited date can skip the skeleton for URLs
+   * already confirmed loaded.  Distinct from pageThumbnailSrcs (which is
+   * reset on every renderCurrentEdition) to avoid cross-date false-positives.
+   */
+  private _thumbnailSrcCache = new Map<string, string>();
+  /**
+   * The selectedDate value at the time pageThumbnailSrcs was last populated.
+   * Used in onThumbnailLoad instead of selectedDate to avoid a date-race:
+   * if the user navigates to a new date before all (load) events fire, the
+   * cache key must still reflect the date the thumbnails were built for —
+   * not the currently-selected date (which may have already advanced).
+   */
+  private _thumbnailRenderDate = '';
+  /**
+   * Set to true in ngOnDestroy so that async image callbacks (img.onload /
+   * img.onerror) never call detectChanges() on an already-destroyed view.
+   * Without this guard an OnPush component would throw ViewDestroyedError if
+   * the user navigates away while a crop image is still in flight.
+   */
+  private _viewDestroyed = false;
   sectionImageLoading = false;
   sectionImageError = false;
   
@@ -261,6 +282,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy() {
+    this._viewDestroyed = true;
     this.subscriptions.forEach(sub => sub.unsubscribe());
     this.dataService.stopVersionPoll();
     this.clearSlowConnectionTimer();
@@ -382,12 +404,11 @@ export class NewspaperComponent implements OnInit, OnDestroy {
                                 !this.pendingSectionSlug;
 
     // Snapshot position before resetting state so we can restore it below.
-    const prevPageId      = this.currentPage?.id ?? null;
-    const prevSectionId   = this.selectedSection?.id ?? null;
-    const prevMainUrl     = this.currentPage
+    const prevPageId    = this.currentPage?.id ?? null;
+    const prevSectionId = this.selectedSection?.id ?? null;
+    const prevMainUrl   = this.currentPage
       ? this.resolveImageUrl((this.currentPage.fullImage ?? '').trim())
       : null;
-    const prevThumbnailSrcs = { ...this.pageThumbnailSrcs };
 
     // Reset main view so the image element gets recreated when date changes
     this.currentPage = null;
@@ -412,45 +433,42 @@ export class NewspaperComponent implements OnInit, OnDestroy {
           this._sectionByIdCache.set(section.id, { ...section, pageId: page.id });
         }
       }
-      // Sequential thumbnail loading: resolve one page at a time so the
-      // browser only fetches one thumbnail per round-trip instead of
-      // hammering all of them simultaneously.
+      // Parallel thumbnail seeding — all pages get their src assigned at
+      // once. The sequential queue was removed because @defer (on viewport)
+      // caused it to permanently stall: the queue advances via (load), but
+      // (load) only fires when the <img> renders, and deferred blocks only
+      // render when the item enters the viewport. Any out-of-viewport page
+      // silently blocked every subsequent page from loading.
+      // The browser's own connection pool (6 concurrent per host) provides
+      // natural throttling; thumbnails are loaded eagerly (no loading="lazy").
       this.thumbnailsLoading = {};
       this.pageThumbnailSrcs = {};
-      this.thumbnailLoadQueue = [];
+      // Capture the date NOW so onThumbnailLoad always writes the cache key for
+      // the date these thumbnails belong to, regardless of when (load) fires.
+      this._thumbnailRenderDate = this.selectedDate;
 
-      if (isBackgroundRefresh) {
-        // For a background refresh, skip skeleton for thumbnails whose URL
-        // hasn't changed — the image is already in the browser cache.
-        const pagesNeedingLoad: NewspaperPage[] = [];
-        this.pages.forEach(page => {
-          const thumb = typeof page.thumbnail === 'string' ? page.thumbnail.trim() : '';
-          const full  = typeof page.fullImage  === 'string' ? page.fullImage.trim()  : '';
-          const newSrc = this.resolveImageUrl(thumb || full);
-          if (newSrc && prevThumbnailSrcs[page.id] === newSrc) {
-            // URL unchanged — restore immediately, no skeleton needed
-            this.pageThumbnailSrcs[page.id] = newSrc;
+      this.pages.forEach(page => {
+        const thumb  = typeof page.thumbnail === 'string' ? page.thumbnail.trim() : '';
+        const full   = typeof page.fullImage  === 'string' ? page.fullImage.trim()  : '';
+        const newSrc = this.resolveImageUrl(thumb || full);
+        const cacheKey = `${this._thumbnailRenderDate}:${page.id}`;
+
+        if (newSrc && this._thumbnailSrcCache.get(cacheKey) === newSrc) {
+          // URL previously confirmed loaded for this date+page — restore
+          // immediately with no skeleton. The cross-date cache survives date
+          // navigation so returning to a visited date never re-shows skeleton.
+          this.pageThumbnailSrcs[page.id] = newSrc;
+          this.thumbnailsLoading[page.id] = false;
+        } else {
+          // New or first-time URL — show skeleton until (load) fires.
+          this.pageThumbnailSrcs[page.id] = newSrc;
+          this.thumbnailsLoading[page.id] = !!newSrc;
+          if (!newSrc) {
+            // No image at all — clear skeleton immediately.
             this.thumbnailsLoading[page.id] = false;
-          } else {
-            // New or changed URL — queue for (re)loading
-            this.thumbnailsLoading[page.id] = true;
-            pagesNeedingLoad.push(page);
           }
-        });
-        if (pagesNeedingLoad.length > 0) {
-          this.thumbnailLoadQueue = pagesNeedingLoad.slice(1);
-          this.seedThumbnail(pagesNeedingLoad[0]);
         }
-      } else {
-        // Initial / explicit load — queue all pages normally
-        // Mark every page as pending (skeleton shows)
-        this.pages.forEach(page => { this.thumbnailsLoading[page.id] = true; });
-        if (this.pages.length > 0) {
-          // Kick off page 1 immediately; the rest wait in the queue
-          this.thumbnailLoadQueue = this.pages.slice(1);
-          this.seedThumbnail(this.pages[0]);
-        }
-      }
+      });
 
       if (this.pages.length > 0) {
         // Resolve target page:
@@ -730,33 +748,42 @@ export class NewspaperComponent implements OnInit, OnDestroy {
 
   onThumbnailLoad(pageId: number) {
     this.thumbnailsLoading[pageId] = false;
-    this.loadNextThumbnail();
-  }
-
-  /** Resolve and assign the src for a single page thumbnail. */
-  private seedThumbnail(page: NewspaperPage): void {
-    const thumb = typeof page.thumbnail === 'string' ? page.thumbnail.trim() : '';
-    const full  = typeof page.fullImage  === 'string' ? page.fullImage.trim()  : '';
-    const src   = this.resolveImageUrl(thumb || full);
-    this.pageThumbnailSrcs[page.id] = src;
-    if (!src) {
-      // No image for this page — mark done and immediately load the next
-      this.thumbnailsLoading[page.id] = false;
-      this.loadNextThumbnail();
+    // Persist the confirmed-loaded src in the cross-date cache so that
+    // returning to this date skips the skeleton entirely.
+    // Use _thumbnailRenderDate (captured at render time) rather than
+    // selectedDate: if the user navigates dates quickly, selectedDate may
+    // already point to the NEW date when this (load) event fires, which
+    // would write the cache key for the wrong date.
+    const src = this.pageThumbnailSrcs[pageId];
+    if (src && this._thumbnailRenderDate) {
+      this._thumbnailSrcCache.set(`${this._thumbnailRenderDate}:${pageId}`, src);
     }
+    // OnPush: thumbnailsLoading is a plain object (mutated in-place, no new
+    // reference). markForCheck() ensures the template re-evaluates the
+    // skeleton @if and opacity binding after the mutation.
+    this.cdr.markForCheck();
   }
 
-  /** Dequeue and start loading the next pending thumbnail. */
-  private loadNextThumbnail(): void {
-    if (this.thumbnailLoadQueue.length === 0) return;
-    const next = this.thumbnailLoadQueue.shift()!;
-    this.seedThumbnail(next);
+  onThumbnailError(pageId: number) {
+    // Clear the skeleton on image load failure, but do NOT cache the URL.
+    // Caching a failed src in _thumbnailSrcCache would cause every future
+    // visit to this date to skip the skeleton but show a permanently broken
+    // image — the cache hit logic assumes the URL was successfully loaded.
+    this.thumbnailsLoading[pageId] = false;
+    this.cdr.markForCheck();
   }
 
   onImageLoad() {
     this.clearSlowConnectionTimer();
     this.imageLoaded = true;
-    
+    // markForCheck is required here: this method is called both from the
+    // template (load) binding (where Angular handles CD automatically) AND
+    // from a setTimeout() in selectPage() for browser-cached images (where
+    // it runs outside Angular's event cycle). Without markForCheck(), setting
+    // imageLoaded = true from setTimeout never triggers OnPush re-evaluation
+    // and the skeleton persists indefinitely for already-cached images.
+    this.cdr.markForCheck();
+
     // Store reference to the loaded image for cropping
     const imgElement = this.document.querySelector('.main-page-image') as HTMLImageElement;
     if (imgElement) {
@@ -773,6 +800,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   onImageError() {
     this.clearSlowConnectionTimer();
     this.imageLoaded = true;
+    this.cdr.markForCheck(); // same reason as onImageLoad()
   }
 
   /** Reload the entire page when the user requests it from the slow-connection notice. */
@@ -1423,10 +1451,19 @@ export class NewspaperComponent implements OnInit, OnDestroy {
         // back to PNG silently), whereas JPEG is universally supported.
         const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
         this.cropCache.set(cacheKey, dataUrl);
-        this.cdr.detectChanges();
+        if (!this._viewDestroyed) this.cdr.detectChanges();
       } catch (error) {
         console.error('Failed to crop linked section image:', error);
       }
+    };
+
+    // Without an onerror handler the linked-section panel would be permanently
+    // stuck in a loading/empty state if the page image fails to fetch. Logging
+    // the failure and triggering CD lets the UI gracefully show "no image" for
+    // this linked section instead of hanging forever.
+    img.onerror = () => {
+      console.warn('[NewspaperComponent] Failed to load linked section image for crop:', srcUrl);
+      if (!this._viewDestroyed) this.cdr.detectChanges();
     };
 
     img.src = srcUrl;
@@ -1513,7 +1550,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
         this.cropCache.set(cacheKey, dataUrl);
         this.croppedSectionImage = dataUrl;
         this.sectionImageLoading = false;
-        this.cdr.detectChanges();
+        if (!this._viewDestroyed) this.cdr.detectChanges();
         if (this.pendingMobileModal) {
           this.pendingMobileModal = false;
           setTimeout(() => this.openImageModal(), 0);
@@ -1522,7 +1559,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
         this.croppedSectionImage = null;
         this.sectionImageError = true;
         this.sectionImageLoading = false;
-        this.cdr.detectChanges();
+        if (!this._viewDestroyed) this.cdr.detectChanges();
         console.error('Failed to crop section image due to canvas security restrictions:', error);
         if (this.pendingMobileModal) {
           this.pendingMobileModal = false;
@@ -1540,7 +1577,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
       if (this.selectedSection !== sectionAtStart) return;
       this.sectionImageError = true;
       this.sectionImageLoading = false;
-      this.cdr.detectChanges();
+      if (!this._viewDestroyed) this.cdr.detectChanges();
       console.error('Failed to load image for cropping:', srcUrl);
       if (this.pendingMobileModal) {
         this.pendingMobileModal = false;

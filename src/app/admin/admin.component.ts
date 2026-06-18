@@ -1872,6 +1872,16 @@ export class AdminComponent implements OnInit, OnDestroy {
     this.cropperStartY = 0;
     this.cropperEndX = 0;
     this.cropperEndY = 0;
+
+    // Same-URL re-open fix: when the cropper is closed and reopened for the same
+    // page, [src] doesn't change so the browser never re-fires (load).
+    // Force-trigger onCropperImageLoad manually if the image is already decoded.
+    this.cdr.detectChanges(); // commit showImageCropper = true so @ViewChild resolves
+    const img = this.cropperImageRef?.nativeElement;
+    if (img && img.complete && img.naturalWidth > 0) {
+      // Image is already in browser cache — synthesise the load event.
+      this.onCropperImageLoad({ target: img } as unknown as Event);
+    }
   }
 
   onCropperImageLoad(event: Event) {
@@ -1899,6 +1909,15 @@ export class AdminComponent implements OnInit, OnDestroy {
         }
       }
     });
+  }
+
+  onCropperImageError() {
+    // Image failed to load (broken URL, network error, etc.).
+    // Set cropperImageLoaded = true so the crop UI still renders — the user
+    // can see the broken-image placeholder and the overlay controls rather than
+    // a blank, unresponsive panel with no indication of what went wrong.
+    this.cropperImageLoaded = true;
+    this.cdr.detectChanges();
   }
 
   onCropperMouseDown(event: MouseEvent) {

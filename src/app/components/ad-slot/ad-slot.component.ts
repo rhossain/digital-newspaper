@@ -7,6 +7,7 @@ import {
   effect,
   inject,
   input,
+  signal,
   viewChild,
   PLATFORM_ID,
 } from '@angular/core';
@@ -50,7 +51,7 @@ import { AdService, AdSlot } from '../../services/ad.service';
   host: {
     '[class.dn-ad--desktop]': 'isDesktop()',
     '[class.dn-ad--mobile]':  'isMobile()',
-    '[class.dn-ad--hidden]':  '!slot() || !slot()!.enabled',
+    '[class.dn-ad--hidden]':  '!slot() || !slot()!.enabled || removedByBrowser()',
   },
 })
 export class AdSlotComponent {
@@ -82,6 +83,16 @@ export class AdSlotComponent {
   /** Guard: inject the display script only once per slot instance. */
   private _scriptInjected = false;
 
+  /** Cleanup fn for the MutationObserver watching for Chrome Heavy Ad removal. */
+  private _cleanupObserver?: () => void;
+
+  /**
+   * True when Chrome's Heavy Ad Intervention removes the ad iframe.
+   * When set, the host's dn-ad--hidden class collapses the slot so no
+   * blank space is reserved for a removed ad.
+   */
+  readonly removedByBrowser = signal(false);
+
   constructor() {
     /**
      * This effect tracks two signals:
@@ -99,6 +110,8 @@ export class AdSlotComponent {
       // re-enabling a slot within the same session injects a fresh display call.
       if (!slot || !slot.enabled) {
         this._scriptInjected = false;
+        this.removedByBrowser.set(false);
+        this._cleanupObserver?.();
         return;
       }
 
@@ -122,6 +135,54 @@ export class AdSlotComponent {
       script.text =
         `googletag.cmd.push(function() { googletag.display('${slot.div}'); });`;
       this.renderer.appendChild(container.nativeElement, script);
+
+      // Watch for Chrome's Heavy Ad Intervention, which replaces the ad iframe
+      // with an intervention notice element and leaves the container visible.
+      // When detected, collapse the slot so it takes no layout space.
+      this._observeForHeavyAdRemoval(container.nativeElement, slot.div);
     });
+  }
+
+  /**
+   * Sets up a MutationObserver that collapses the slot ONLY when Chrome's
+   * Heavy Ad Intervention removes an iframe that was previously present.
+   *
+   * The key invariant: we must first observe the iframe being ADDED by GPT,
+   * then watch for it being REMOVED by Chrome. Checking "no iframe present"
+   * immediately on the first mutation would be a false positive — GPT builds
+   * the ad in multiple DOM steps (outer div first, then the SafeFrame iframe),
+   * so the observer fires before the iframe exists during normal ad loading.
+   */
+  private _observeForHeavyAdRemoval(container: HTMLElement, divId: string): void {
+    this._cleanupObserver?.(); // disconnect any prior observer
+
+    // Track whether the SafeFrame iframe was ever observed inside this container.
+    // We must not collapse the slot until we have confirmed the iframe existed,
+    // otherwise normal GPT construction (multi-step DOM mutations) would
+    // trigger a false positive and collapse a healthy ad before it renders.
+    let iframeWasPresent = false;
+
+    const iframeSelector = `iframe[id*="${divId}"], iframe[name*="${divId}"]`;
+
+    const observer = new MutationObserver(() => {
+      const iframePresent = !!container.querySelector(iframeSelector);
+
+      if (iframePresent) {
+        // Normal ad load — record that the iframe arrived.
+        iframeWasPresent = true;
+        return;
+      }
+
+      // iframe is gone — only act if it was previously confirmed present.
+      // This distinguishes Chrome's Heavy Ad removal from the normal period
+      // between script injection and GPT completing the SafeFrame build.
+      if (iframeWasPresent) {
+        this.removedByBrowser.set(true);
+        observer.disconnect();
+      }
+    });
+
+    observer.observe(container, { childList: true, subtree: true });
+    this._cleanupObserver = () => observer.disconnect();
   }
 }

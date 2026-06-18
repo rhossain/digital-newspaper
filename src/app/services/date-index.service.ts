@@ -1,7 +1,7 @@
 import { Injectable, signal, Signal } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable, of } from 'rxjs';
-import { tap, map, catchError } from 'rxjs/operators';
+import { tap, map, catchError, timeout } from 'rxjs/operators';
 import { WP_BASE_URL } from '../config';
 
 /**
@@ -24,10 +24,26 @@ export class DateIndexService {
   private readonly _endpoint =
     `${WP_BASE_URL}/wp-json/digital-newspaper/v1/data/dates`;
 
+  /**
+   * localStorage key for the most-recently-published date.
+   *
+   * Persisting latestDate lets NewspaperDataService initialize
+   * currentDateSubject with the correct date before any HTTP request
+   * fires — eliminating the visible "today → latestDate" jump on page load
+   * for returning visitors when the newspaper hasn't published today yet.
+   */
+  static readonly LATEST_DATE_CACHE_KEY = 'dn_latest_date';
+
   // ── State ──────────────────────────────────────────────────────────────────
 
   private readonly _availableDates = signal<string[]>([]);
-  private readonly _latestDate     = signal<string>('');
+  /**
+   * Initialized from localStorage so the value is available synchronously
+   * at app startup, before fetch() has completed its HTTP request.
+   * NewspaperDataService reads this in its constructor to pre-warm
+   * currentDateSubject with the correct date.
+   */
+  private readonly _latestDate = signal<string>(DateIndexService._readLatestDateFromStorage());
 
   /**
    * Sorted list of dates that have at least one edition, newest-first.
@@ -36,10 +52,10 @@ export class DateIndexService {
   readonly availableDates: Signal<string[]> = this._availableDates.asReadonly();
 
   /**
-   * The most-recently published date, or '' until first fetch.
-   * Equivalent to `availableDates()[0]` for most use cases, but provided
-   * directly from the server to avoid off-by-one errors when the in-memory
-   * list is stale.
+   * The most-recently published date.
+   * Pre-warmed from localStorage on service init; updated to the server
+   * value after fetch() completes. Returns '' on the very first ever visit
+   * (no localStorage entry yet).
    */
   readonly latestDate: Signal<string> = this._latestDate.asReadonly();
 
@@ -64,14 +80,18 @@ export class DateIndexService {
     return this.http
       .get<{ dates: string[]; latestDate: string }>(this._endpoint)
       .pipe(
+        // Per-request timeout: fail fast so a single slow endpoint doesn't
+        // exhaust the 20 s granular-chain budget in NewspaperDataService.
+        timeout(10000),
         tap(res => {
           const dates = Array.isArray(res.dates) ? [...res.dates].sort().reverse() : [];
           this._availableDates.set(dates);
-          if (res.latestDate) {
-            this._latestDate.set(res.latestDate);
-          } else if (dates.length > 0) {
-            // Derive latestDate from the list if the server omitted it
-            this._latestDate.set([...dates].sort().reverse()[0]);
+          const latest = res.latestDate || (dates.length > 0 ? [...dates].sort().reverse()[0] : '');
+          if (latest) {
+            this._latestDate.set(latest);
+            // Persist so the next page load can pre-warm currentDateSubject
+            // without waiting for this HTTP request to complete.
+            DateIndexService._persistLatestDate(latest);
           }
         }),
         map(res => (Array.isArray(res.dates) ? [...res.dates].sort().reverse() : [])),
@@ -114,7 +134,37 @@ export class DateIndexService {
       .reverse();
     this._availableDates.set(merged);
     if (merged.length > 0 && !this._latestDate()) {
-      this._latestDate.set(merged[0]);
+      const latest = merged[0];
+      this._latestDate.set(latest);
+      DateIndexService._persistLatestDate(latest);
+    }
+  }
+
+  // ── localStorage helpers (static — called from signal initializer and tap) ──
+
+  /**
+   * Read the cached latestDate from localStorage.
+   * Returns '' on SSR or if no entry exists yet.
+   */
+  private static _readLatestDateFromStorage(): string {
+    if (typeof localStorage === 'undefined') return ''; // SSR guard
+    try {
+      return localStorage.getItem(DateIndexService.LATEST_DATE_CACHE_KEY) ?? '';
+    } catch {
+      return '';
+    }
+  }
+
+  /**
+   * Persist latestDate to localStorage so the next page load can read it
+   * synchronously before any HTTP request fires.
+   */
+  private static _persistLatestDate(date: string): void {
+    if (typeof localStorage === 'undefined') return; // SSR guard
+    try {
+      localStorage.setItem(DateIndexService.LATEST_DATE_CACHE_KEY, date);
+    } catch {
+      // Quota exceeded or private browsing — silently ignore.
     }
   }
 }

@@ -336,7 +336,14 @@ export class NewspaperDataService {
       },
       editions: []
     });
-    this.currentDateSubject = new BehaviorSubject<string>(this.getTodayDate());
+    // Use getDefaultDate() rather than getTodayDate() so that returning visitors
+    // whose localStorage already holds settings (defaultDateMode / specificDate)
+    // and a cached latestDate (from DateIndexService) see the correct date from
+    // the very first render — eliminating the "today → latestDate" visual jump
+    // while HTTP is in flight.  getDefaultDate() reads only synchronous caches
+    // (settingsService signal + dateIndexService.latestDate() signal, both
+    // pre-warmed from localStorage) so it is safe to call in a constructor.
+    this.currentDateSubject = new BehaviorSubject<string>(this.getDefaultDate());
     this.currentDate$ = this.currentDateSubject.asObservable();
     this.data$ = this.dataSubject.asObservable();
 
@@ -499,32 +506,52 @@ export class NewspaperDataService {
   /**
    * Fast granular load via the per-resource cacheable endpoints.
    *
-   * Fetches settings + dates in parallel, then fetches editions for the
-   * most-recent date (and today, if it differs).  Total request count: 3–4
-   * tiny requests instead of one huge blob.
+   * Fetches settings + dates + the expected initial edition all in parallel,
+   * then fetches any remaining editions needed (usually none).
+   *
+   * Performance strategy — two-phase waterfall eliminated:
+   *   Old:  forkJoin(settings, dates, version)
+   *           → await → forkJoin(editions[latestDate], editions[today])
+   *   New:  forkJoin(settings, dates, version, editions[speculativeDate])
+   *           → only fetch remaining dates if speculative guess was wrong
+   *
+   * speculativeDate = getDefaultDate() which reads only synchronous caches
+   * (localStorage-backed settings + latestDate signals), so on return visits
+   * the guess is almost always correct and no second round-trip is needed.
+   * On a first-ever visit speculativeDate = today, which is right when the
+   * newspaper has published today and wrong otherwise — the latter triggers
+   * the normal step-2 fetch as a fallback.
+   *
+   * The speculative edition fetch goes through EditionCacheService's
+   * 4-layer cache (memory → localStorage → IndexedDB → HTTP), so on return
+   * visits it resolves from IDB without hitting the network at all.
    *
    * Throws on any error so `loadData()` can fall back to the legacy path.
    */
   private loadDataFromGranular(): Observable<NewspaperData> {
-    // Step 1: settings + dates index + current server version in parallel.
-    // The version endpoint is tiny (~30 B) and must be fetched here so the
-    // local dataVersion is NEVER reset to 0.  Resetting to 0 causes the
-    // version poll to immediately fire remoteDataChanged$ on the very next
-    // tick (because serverVersion > 0 is always true), producing the false
-    // "Content updated by another user" toast on every reload.
+    // Determine the expected initial date from synchronous caches so we can
+    // start the edition fetch in the same parallel batch as settings/dates/version.
+    const speculativeDate = this.getDefaultDate();
+
+    // Single parallel batch: settings + dates index + version + edition for
+    // the expected initial date.  The version endpoint is tiny (~30 B) and
+    // must be included here so the local dataVersion is NEVER reset to 0
+    // (resetting to 0 causes the version poll to immediately fire
+    // remoteDataChanged$ and show a false "content updated" toast).
     return forkJoin({
-      settings: this.settingsService.fetch(),
-      dates:    this.dateIndexService.fetch(),
-      version:  this.http
-        .get<{ dataVersion: number }>(this.versionUrl)
-        .pipe(catchError(() => of({ dataVersion: 0 }))),
+      settings:            this.settingsService.fetch(),
+      dates:               this.dateIndexService.fetch(),
+      version:             this.http
+                             .get<{ dataVersion: number }>(this.versionUrl)
+                             .pipe(catchError(() => of({ dataVersion: 0 }))),
+      speculativeEditions: this.editionCacheService.getEditionsForDate(speculativeDate)
+                             .pipe(catchError(() => of([] as NewspaperEdition[]))),
     }).pipe(
-      // Step 2: load editions for the dates needed for initial display
-      switchMap(({ settings, dates, version }) => {
+      switchMap(({ settings, dates, version, speculativeEditions }) => {
         const today      = this.getTodayDate();
         const latestDate = dates[0] ?? today;
 
-        // Load the most-recent date and today in parallel (often the same date).
+        // Canonical set of dates needed for the initial view.
         const datesToLoad = [...new Set([latestDate, today])].filter(Boolean);
 
         if (datesToLoad.length === 0) {
@@ -534,14 +561,37 @@ export class NewspaperDataService {
           throw new Error('Granular dates list is empty — falling back to legacy blob');
         }
 
+        // Which canonical dates are NOT yet covered by the speculative fetch?
+        // On return visits speculativeDate == latestDate so this is usually [].
+        //
+        // IMPORTANT: only treat speculativeDate as "covered" when the speculative
+        // fetch actually returned data.  An empty result means the fetch failed or
+        // found nothing — in that case the date must be retried via the remaining-
+        // dates path below, not silently dropped.
+        const speculativeCovered = speculativeEditions.length > 0;
+        const remainingDates = datesToLoad.filter(
+          d => !(speculativeCovered && d === speculativeDate)
+        );
+
+        if (remainingDates.length === 0) {
+          // speculativeCovered must be true here (if it were false, speculativeDate
+          // would still be in remainingDates, so length would be > 0).
+          // Speculative fetch covered everything — no second round-trip needed.
+          return of({ settings, editions: speculativeEditions, dataVersion: version.dataVersion ?? 0 } as NewspaperData);
+        }
+
+        // Fetch the dates not covered by the speculative batch.
         return forkJoin(
-          datesToLoad.reduce((acc, date) => {
+          remainingDates.reduce((acc, date) => {
             acc[date] = this.editionCacheService.getEditionsForDate(date);
             return acc;
           }, {} as Record<string, Observable<NewspaperEdition[]>>)
         ).pipe(
           map((editionsByDate): NewspaperData => {
-            const editions: NewspaperEdition[] = Object.values(editionsByDate).flat();
+            const editions: NewspaperEdition[] = [
+              ...speculativeEditions,
+              ...Object.values(editionsByDate).flat(),
+            ];
             // If all edition options came back empty the granular options were
             // not yet written (partial migration: index exists but dn_edition_*
             // options don't).  Throw so catchError falls back to the legacy blob.
@@ -552,9 +602,11 @@ export class NewspaperDataService {
           })
         );
       }),
-      // 15 s total — tighter than the 20 s legacy timeout so we can still
-      // attempt the legacy fallback within a reasonable overall wait time.
-      timeout(15000),
+      // 20 s total — each individual fetch already has a 10 s per-request
+      // timeout, so this outer guard only fires if the chain as a whole stalls
+      // (e.g. a forkJoin leg silently hangs past its own timeout). Matches the
+      // legacy blob timeout so the two paths are symmetric.
+      timeout(20000),
       switchMap((data) => {
         this.dataRecoveredFromMediaLibrary = false;
         return this.hasAnyPages(data) ? of(data) : this.loadDataFromMediaLibrary(data);
@@ -1734,8 +1786,16 @@ export class NewspaperDataService {
     if (settings.defaultDateMode === 'specific' && settings.specificDate) {
       return settings.specificDate;
     }
-    // 'current' mode: use today, but fall back to the most recent date with
-    // pages if today's edition has no pages yet.
+    // 'current' mode: prefer the cached latestDate (persisted to localStorage
+    // by DateIndexService after each successful fetch).  This lets us return
+    // the correct date synchronously at construction time — before any HTTP
+    // request has fired — so currentDateSubject is pre-warmed correctly.
+    // Falls through to the today / edition-pages logic when no cached value
+    // exists (first-ever visit, private browsing, or cleared storage).
+    const cachedLatest = this.dateIndexService.latestDate();
+    if (cachedLatest) return cachedLatest;
+    // 'current' mode fallback: use today, but fall back to the most recent date
+    // with pages if today's edition has no pages yet.
     const today = this.getTodayDate();
     const todayHasPages = this.getEditionsByDate(today).some(e => e.pages && e.pages.length > 0);
     if (!todayHasPages) {

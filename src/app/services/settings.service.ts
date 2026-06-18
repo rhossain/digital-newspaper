@@ -1,7 +1,7 @@
 import { Injectable, signal, Signal } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable, of } from 'rxjs';
-import { tap, map, catchError } from 'rxjs/operators';
+import { tap, map, catchError, timeout } from 'rxjs/operators';
 import { GlobalSettings } from './newspaper-data.service';
 import { WP_BASE_URL } from '../config';
 
@@ -66,6 +66,9 @@ export class SettingsService {
     return this.http
       .get<{ settings: GlobalSettings; dataVersion: number }>(this._endpoint)
       .pipe(
+        // Per-request timeout: fail fast so a single slow endpoint doesn't
+        // exhaust the 20 s granular-chain budget in NewspaperDataService.
+        timeout(10000),
         map(res => this._normalise(res.settings ?? SettingsService._defaults())),
         tap(settings => {
           this._settings.set(settings);

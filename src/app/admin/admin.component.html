@@ -2441,6 +2441,7 @@
                 [src]="selectedPage?.fullImageHiRes || selectedPage?.fullImage"
                 alt="Full page"
                 (load)="onCropperImageLoad($event)"
+                (error)="onCropperImageError()"
                 draggable="false"
                 style="display:block;width:100%;height:auto;user-select:none;"
                 />

@@ -286,6 +286,15 @@ class Digital_Newspaper_API {
    * knows which individual slots to render without extra round-trips.
    */
   private function gam_ad_slots(): array {
+    // Use WordPress object cache (wp_cache_get/set) to avoid redundant DB reads
+    // when gam_ad_slots() is called more than once per request (e.g. wp_head +
+    // REST /ads/config in the same PHP process). The cache group is non-persistent
+    // by default so it lives only for the current request — no stale-data risk.
+    $cached = wp_cache_get('gam_ad_slots', 'digital_newspaper');
+    if (is_array($cached)) {
+      return $cached;
+    }
+
     $slot_states = (array) get_option(self::OPTION_GAM_SLOT_STATES, []);
 
     $slots = [
@@ -374,12 +383,15 @@ class Digital_Newspaper_API {
     ];
 
     // Merge persisted per-slot enabled states into each slot definition.
-    return array_map(function ( array $slot ) use ( $slot_states ): array {
+    $result = array_map(function ( array $slot ) use ( $slot_states ): array {
       $slot['enabled'] = isset( $slot_states[ $slot['id'] ] )
         ? (bool) $slot_states[ $slot['id'] ]
         : false;
       return $slot;
     }, $slots);
+
+    wp_cache_set('gam_ad_slots', $result, 'digital_newspaper');
+    return $result;
   }
 
   /**
@@ -412,7 +424,7 @@ window.googletag = window.googletag || {cmd: []};
 googletag.cmd.push(function() {
 <?php echo $define_js; ?>
 
-		googletag.pubads().enableSingleRequest();
+		googletag.setConfig({singleRequest: true});
 		googletag.enableServices();
 });
 </script>

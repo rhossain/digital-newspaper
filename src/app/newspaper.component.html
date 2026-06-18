@@ -373,34 +373,44 @@
         @if (pages.length > 0) {
           <div class="thumbnail-list">
             @for (page of pages; track trackByPageId($index, page)) {
-              @defer (on viewport) {
-                <div
-                  class="thumbnail-item"
-                  [class.active]="currentPage?.id === page.id"
-                  (click)="onPageClick(page)"
-                  >
-                  <div class="thumbnail-image-wrapper">
-                    @if (thumbnailsLoading[page.id]) {
-                      <div class="skeleton-loader"></div>
-                    }
-                    @if (pageThumbnailSrcs[page.id]) {
-                      <img
-                        [src]="pageThumbnailSrcs[page.id]"
-                        [alt]="'Page ' + page.id"
-                        loading="lazy"
-                        decoding="async"
-                        (load)="onThumbnailLoad(page.id)"
-                        (error)="onThumbnailLoad(page.id)"
-                        [style.opacity]="thumbnailsLoading[page.id] ? '0' : '1'"
-                        />
-                    }
-                  </div>
-                  <span class="page-number">{{ ts.toLocaleDigits(page.id) }}</span>
+              <!-- @defer removed: it breaks the thumbnail loading queue.
+                   @defer (on viewport) defers rendering until the item
+                   enters the browser viewport. The queue advances only
+                   when (load) fires — but (load) never fires for a
+                   deferred-but-not-yet-rendered img. The first out-of-
+                   viewport page permanently stalls the queue, leaving
+                   every subsequent thumbnail in skeleton state.
+                   Thumbnails are loaded eagerly; the browser's connection
+                   pool (6 concurrent per host) handles natural throttling. -->
+              <div
+                class="thumbnail-item"
+                [class.active]="currentPage?.id === page.id"
+                (click)="onPageClick(page)"
+                >
+                <div class="thumbnail-image-wrapper">
+                  @if (thumbnailsLoading[page.id]) {
+                    <div class="skeleton-loader"></div>
+                  }
+                  @if (pageThumbnailSrcs[page.id]) {
+                    <!-- NOTE: loading="lazy" was intentionally removed.
+                         Browsers apply lazy-load thresholds against the main
+                         window viewport, NOT a scroll container's viewport.
+                         Thumbnails inside the scrollable panel are treated as
+                         off-screen, so (load) never fires and the skeleton
+                         persists indefinitely. Thumbnails are small images;
+                         loading them eagerly is correct and safe here. -->
+                    <img
+                      [src]="pageThumbnailSrcs[page.id]"
+                      [alt]="'Page ' + page.id"
+                      decoding="async"
+                      (load)="onThumbnailLoad(page.id)"
+                      (error)="onThumbnailError(page.id)"
+                      [style.opacity]="thumbnailsLoading[page.id] ? '0' : '1'"
+                      />
+                  }
                 </div>
-              } @placeholder {
-                <!-- Maintains panel height while item is deferred, preventing scrollbar jump -->
-                <div class="thumbnail-item thumbnail-item-placeholder"></div>
-              }
+                <span class="page-number">{{ ts.toLocaleDigits(page.id) }}</span>
+              </div>
             }
           </div>
         }

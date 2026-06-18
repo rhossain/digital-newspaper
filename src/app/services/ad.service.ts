@@ -1,7 +1,7 @@
 import { Injectable, computed, signal, Signal, inject, PLATFORM_ID } from '@angular/core';
 import { DOCUMENT, isPlatformBrowser } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
-import { catchError, map, Observable, of, tap } from 'rxjs';
+import { catchError, map, Observable, of, retry, tap, timer } from 'rxjs';
 import { WP_BASE_URL } from '../config';
 import { AuthService } from './auth.service';
 
@@ -125,7 +125,7 @@ export class AdService {
    *     googletag.cmd.push(function() {
    *       googletag.defineSlot('/unit', [sizes], 'div').addService(googletag.pubads());
    *       ...
-   *       googletag.pubads().enableSingleRequest();
+   *       googletag.setConfig({singleRequest: true});
    *       googletag.enableServices();
    *     });
    *   </script>
@@ -147,10 +147,12 @@ export class AdService {
     libScript.src = AdService.GPT_SRC;
     head.appendChild(libScript);
 
-    // 2. Inline init block: defineSlot for every slot + enableSingleRequest + enableServices
+    // 2. Inline init block: defineSlot for every slot + setConfig(singleRequest) + enableServices.
     //    All slots are defined regardless of their per-slot `enabled` flag because
-    //    enableSingleRequest() batches the ad call for all defined slots at once.
+    //    single-request mode batches the ad call for all defined slots at once.
     //    Per-slot visibility is controlled by whether display() is called (AdSlotComponent).
+    //    Note: googletag.pubads().enableSingleRequest() was deprecated — replaced by
+    //    googletag.setConfig({singleRequest: true}). See https://goo.gle/gpt-message#170
     const defineLines = slots.map(s => {
       const sizesJson = JSON.stringify(s.sizes);
       return `  googletag.defineSlot('${s.unit}', ${sizesJson}, '${s.div}').addService(googletag.pubads());`;
@@ -161,7 +163,7 @@ export class AdService {
       'window.googletag = window.googletag || {cmd: []};',
       'googletag.cmd.push(function() {',
       defineLines,
-      '  googletag.pubads().enableSingleRequest();',
+      '  googletag.setConfig({singleRequest: true});',
       '  googletag.enableServices();',
       '});',
     ].join('\n');
@@ -219,6 +221,13 @@ export class AdService {
     this.http
       .get<AdsConfigResponse>(AdService.ENDPOINT)
       .pipe(
+        // Retry up to 2 times with exponential back-off (1.5 s, 3 s) to ride
+        // out transient 504 Gateway Timeout errors on shared hosting without
+        // leaving ads permanently disabled for the session.
+        retry({
+          count: 2,
+          delay: (_err, attempt) => timer(attempt * 1500),
+        }),
         catchError(err => {
           console.warn('[AdService] Failed to fetch ads config — ads disabled.', err?.message ?? err);
           return of(null);
