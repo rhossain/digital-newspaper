@@ -209,8 +209,12 @@ export class NewspaperComponent implements OnInit, OnDestroy {
       const sectionParam = params.get('section');
 
       if (dateParam) {
-        this.selectedDate = dateParam;
-        this.dataService.setCurrentDate(dateParam);
+        // Defense-in-depth: ignore future-dated URL params — the server returns
+        // empty editions for them anyway, but redirecting to the latest available
+        // date gives the reader a better experience than a blank page.
+        const effectiveDate = dateParam <= this.todayDate ? dateParam : this.todayDate;
+        this.selectedDate = effectiveDate;
+        this.dataService.setCurrentDate(effectiveDate);
       }
       if (pageParam)    this.pendingPageSlug    = pageParam;
       if (editionParam) this.pendingEditionSlug = editionParam;
@@ -238,7 +242,10 @@ export class NewspaperComponent implements OnInit, OnDestroy {
       if (this.initialLoadComplete) {
         // Re-sync the date picker list — a targeted reload may have added a
         // newly-published edition date that wasn't in the initial load.
-        this.availableDates = this.dataService.getAvailableDates();
+        // Filter future dates: public readers should never see editions whose
+        // publication date has not yet been reached.
+        this.availableDates = this.dataService.getAvailableDates()
+          .filter(d => d <= this.todayDate);
         this.loadCurrentEdition();
         this.cdr.detectChanges();
       }
@@ -315,8 +322,11 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     this.isLoading = true;
     this.dataService.loadData().subscribe({
       next: () => {
-        this.availableDates = this.dataService.getAvailableDates();
-        
+        // Filter future dates: public readers should never see editions whose
+        // publication date has not yet been reached.
+        this.availableDates = this.dataService.getAvailableDates()
+          .filter(d => d <= this.todayDate);
+
         // Load global settings (also done in data$ subscriber, but
         // kept here so settings are guaranteed up-to-date before we
         // read defaultDate below).
@@ -1621,21 +1631,35 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     const othersTitle = this.settings?.othersPageTitle?.trim() || siteName;
     const pageUrl = this.document.location.href;
 
+    // Twitter handle from settings (e.g. "https://twitter.com/handle" → "@handle").
+    // Falls back to empty string — setting twitter:site to the site name is invalid.
+    const twitterHandle = this.getTwitterHandle();
+
+    // Build the social-thumb endpoint base URL once — used for og:image so
+    // crawlers (WhatsApp, Twitter/X) always receive a valid 1200×630 JPEG
+    // with a logo fallback, even when the raw section image is a large WebP.
+    const wpBase       = this.dataService.getApiBaseUrl();
+    const curPageSlug  = this.currentPage ? this.getPageSlug(this.currentPage) : '';
+    const curEdSlug    = this.getEditionSlug(this.selectedEditionNumber);
+    const thumbBase    = `${wpBase}/wp-json/digital-newspaper/v1/social-thumb`;
+
     if (section) {
       // Title
       const title = `${section.title} - ${othersTitle}`;
       this.titleService.setTitle(title);
 
-      // Description: strip HTML tags, collapse whitespace, truncate to 155 chars
+      // Description: strip HTML tags + decode entities, collapse whitespace, truncate
       const rawContent = section.content || '';
-      const plainText = rawContent.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+      const plainText = this.stripHtmlToPlainText(rawContent);
       const description = plainText.length > 155 ? plainText.slice(0, 152) + '...' : (plainText || siteName);
 
-      // Image: prefer section's own imageUrl, fall back to full page image
-      const imageUrl = this.resolveImageUrl(
-        (section.imageUrl && section.imageUrl.trim()) ||
-        (this.currentPage?.fullImage?.trim() ?? '')
-      );
+      // Social image: route through the PHP /social-thumb endpoint so crawlers
+      // receive a properly resized 1200×630 JPEG (with logo fallback) rather
+      // than the raw full-page WebP which can be >5 MB and wrong aspect ratio.
+      const sectionSlug = this.createSectionSlug(section.title, section.id);
+      const socialImageUrl = (this.selectedDate && curPageSlug && curEdSlug)
+        ? `${thumbBase}?date=${encodeURIComponent(this.selectedDate)}&page=${encodeURIComponent(curPageSlug)}&edition=${encodeURIComponent(curEdSlug)}&slug=${encodeURIComponent(sectionSlug)}`
+        : this.resolveImageUrl((section.imageUrl && section.imageUrl.trim()) || (this.currentPage?.fullImage?.trim() ?? ''));
 
       // Open Graph
       this.meta.updateTag({ property: 'og:site_name', content: siteName });
@@ -1643,23 +1667,30 @@ export class NewspaperComponent implements OnInit, OnDestroy {
       this.meta.updateTag({ property: 'og:title',     content: section.title });
       this.meta.updateTag({ property: 'og:description', content: description });
       this.meta.updateTag({ property: 'og:url',       content: pageUrl });
-      this.meta.updateTag({ property: 'og:image',        content: imageUrl });
-      this.meta.updateTag({ property: 'og:image:secure_url', content: imageUrl });
-      this.meta.updateTag({ property: 'og:image:width',  content: '' });
-      this.meta.updateTag({ property: 'og:image:height', content: '' });
+      this.meta.updateTag({ property: 'og:image',        content: socialImageUrl });
+      this.meta.updateTag({ property: 'og:image:secure_url', content: socialImageUrl });
+      // Dimensions always 1200×630 — the /social-thumb endpoint guarantees this.
+      this.meta.updateTag({ property: 'og:image:width',  content: '1200' });
+      this.meta.updateTag({ property: 'og:image:height', content: '630' });
 
       // Twitter Card
       this.meta.updateTag({ name: 'twitter:card',        content: 'summary_large_image' });
-      this.meta.updateTag({ name: 'twitter:site',        content: siteName });
+      this.meta.updateTag({ name: 'twitter:site',        content: twitterHandle });
+      this.meta.updateTag({ name: 'twitter:url',         content: pageUrl });
       this.meta.updateTag({ name: 'twitter:title',       content: section.title });
       this.meta.updateTag({ name: 'twitter:description', content: description });
-      this.meta.updateTag({ name: 'twitter:creator',     content: siteName });
-      this.meta.updateTag({ name: 'twitter:image',       content: imageUrl });
+      this.meta.updateTag({ name: 'twitter:creator',     content: twitterHandle });
+      this.meta.updateTag({ name: 'twitter:image',       content: socialImageUrl });
     } else if (this.currentPage) {
       const pageLabel = this.getPageLabel(this.currentPage);
       const displayDate = this.translationService.formatDate(this.selectedDate, 'long');
       const pageTitle = `${pageLabel} ${displayDate} - ${othersTitle}`;
-      const pageImageUrl = this.resolveImageUrl(this.currentPage.fullImage?.trim() ?? '');
+
+      // For page-level (no section), use the /social-thumb endpoint without
+      // a slug — it will serve the logo fallback image.
+      const pageSocialImageUrl = (this.selectedDate && curPageSlug && curEdSlug)
+        ? `${thumbBase}?date=${encodeURIComponent(this.selectedDate)}&page=${encodeURIComponent(curPageSlug)}&edition=${encodeURIComponent(curEdSlug)}`
+        : this.resolveImageUrl(this.currentPage.fullImage?.trim() ?? '');
 
       this.titleService.setTitle(pageTitle);
 
@@ -1668,38 +1699,72 @@ export class NewspaperComponent implements OnInit, OnDestroy {
       this.meta.updateTag({ property: 'og:title',     content: pageTitle });
       this.meta.updateTag({ property: 'og:description', content: pageTitle });
       this.meta.updateTag({ property: 'og:url',       content: pageUrl });
-      this.meta.updateTag({ property: 'og:image',        content: pageImageUrl });
-      this.meta.updateTag({ property: 'og:image:secure_url', content: pageImageUrl });
-      this.meta.updateTag({ property: 'og:image:width',  content: '' });
-      this.meta.updateTag({ property: 'og:image:height', content: '' });
+      this.meta.updateTag({ property: 'og:image',        content: pageSocialImageUrl });
+      this.meta.updateTag({ property: 'og:image:secure_url', content: pageSocialImageUrl });
+      this.meta.updateTag({ property: 'og:image:width',  content: '1200' });
+      this.meta.updateTag({ property: 'og:image:height', content: '630' });
 
       this.meta.updateTag({ name: 'twitter:card',        content: 'summary_large_image' });
-      this.meta.updateTag({ name: 'twitter:site',        content: siteName });
+      this.meta.updateTag({ name: 'twitter:site',        content: twitterHandle });
+      this.meta.updateTag({ name: 'twitter:url',         content: pageUrl });
       this.meta.updateTag({ name: 'twitter:title',       content: pageTitle });
       this.meta.updateTag({ name: 'twitter:description', content: pageTitle });
-      this.meta.updateTag({ name: 'twitter:creator',     content: siteName });
-      this.meta.updateTag({ name: 'twitter:image',       content: pageImageUrl });
+      this.meta.updateTag({ name: 'twitter:creator',     content: twitterHandle });
+      this.meta.updateTag({ name: 'twitter:image',       content: pageSocialImageUrl });
     } else {
-      // Reset to site-level defaults
+      // Reset to site-level defaults — use logo fallback via social-thumb.
       this.titleService.setTitle(siteName);
+      const homepageSocialImageUrl = `${thumbBase}?homepage=1`;
 
       this.meta.updateTag({ property: 'og:site_name', content: siteName });
-      this.meta.updateTag({ property: 'og:type',      content: 'article' });
+      this.meta.updateTag({ property: 'og:type',      content: 'website' });
       this.meta.updateTag({ property: 'og:title',     content: siteName });
       this.meta.updateTag({ property: 'og:description', content: siteName });
       this.meta.updateTag({ property: 'og:url',       content: pageUrl });
-      this.meta.updateTag({ property: 'og:image',        content: '' });
-      this.meta.updateTag({ property: 'og:image:secure_url', content: '' });
-      this.meta.updateTag({ property: 'og:image:width',  content: '' });
-      this.meta.updateTag({ property: 'og:image:height', content: '' });
+      this.meta.updateTag({ property: 'og:image',        content: homepageSocialImageUrl });
+      this.meta.updateTag({ property: 'og:image:secure_url', content: homepageSocialImageUrl });
+      this.meta.updateTag({ property: 'og:image:width',  content: '1200' });
+      this.meta.updateTag({ property: 'og:image:height', content: '630' });
 
       this.meta.updateTag({ name: 'twitter:card',        content: 'summary_large_image' });
-      this.meta.updateTag({ name: 'twitter:site',        content: siteName });
+      this.meta.updateTag({ name: 'twitter:site',        content: twitterHandle });
+      this.meta.updateTag({ name: 'twitter:url',         content: pageUrl });
       this.meta.updateTag({ name: 'twitter:title',       content: siteName });
       this.meta.updateTag({ name: 'twitter:description', content: siteName });
-      this.meta.updateTag({ name: 'twitter:creator',     content: siteName });
-      this.meta.updateTag({ name: 'twitter:image',       content: '' });
+      this.meta.updateTag({ name: 'twitter:creator',     content: twitterHandle });
+      this.meta.updateTag({ name: 'twitter:image',       content: homepageSocialImageUrl });
     }
+  }
+
+  /**
+   * Strip HTML tags and decode common HTML entities so meta description
+   * text doesn't contain raw entities like &nbsp; or &amp;.
+   */
+  private stripHtmlToPlainText(html: string): string {
+    return html
+      .replace(/<[^>]*>/g, ' ')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  /**
+   * Extract a Twitter @handle from the configured socialLinks.twitter URL.
+   * Returns '@handle' if a URL is configured, empty string otherwise.
+   * twitter:site / twitter:creator must be a @handle — never a plain site name.
+   */
+  private getTwitterHandle(): string {
+    const url = this.settings?.socialLinks?.twitter?.trim() ?? '';
+    if (!url) return '';
+    // Extract the last path segment from URLs like https://twitter.com/handle
+    const segment = url.replace(/\/+$/, '').split('/').pop() ?? '';
+    if (!segment) return '';
+    return segment.startsWith('@') ? segment : '@' + segment;
   }
 
   private createSectionSlug(_: string, sectionId: string): string {

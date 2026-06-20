@@ -17,19 +17,23 @@
   <meta property="og:title" content="Daily Sangram Epaper | দৈনিক সংগ্রাম ই-পেপার - আজকের অনলাইন সংস্করণ">
   <meta property="og:description" content="দৈনিক সংগ্রাম ই-পেপার। সর্বশেষ বাংলা খবর, ইসলামী সংবাদ ও ফিচার, আন্তর্জাতিক সংবাদ, ব্যাবসা-বাণিজ্যের খবর, বিনোদন, খেলাধুলার বাংলা সংবাদ পড়তে ভিজিট করুন।">
   <meta property="og:url" content="https://epaper.dailysangram.com/">
-  <meta property="og:image" content="https://epaper.dailysangram.com/assets/logo.png">
-  <meta property="og:image:secure_url" content="https://epaper.dailysangram.com/assets/logo.png">
+  <!-- Last-resort fallback image only: browsers get per-route tags from Angular,
+       social crawlers get per-article tags from the WordPress /social endpoint.
+       Points at the plugin's branded 1200x630 social image rather than the
+       281x90 logo (which is below WhatsApp's 300px minimum and was being falsely
+       declared as 1200x630). -->
+  <meta property="og:image" content="https://epaper.dailysangram.com/wp/wp-json/digital-newspaper/v1/social-thumb?homepage=1">
+  <meta property="og:image:secure_url" content="https://epaper.dailysangram.com/wp/wp-json/digital-newspaper/v1/social-thumb?homepage=1">
+  <meta property="og:image:type" content="image/jpeg">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Daily Sangram Epaper">
 
   <!-- Default Twitter Card meta tags (overridden dynamically by Angular) -->
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:site" content="Daily Sangram Epaper | দৈনিক সংগ্রাম ই-পেপার - আজকের অনলাইন সংস্করণ">
-  <meta name="twitter:url" content="https://epaper.dailysangram.com/">
   <meta name="twitter:title" content="Daily Sangram Epaper | দৈনিক সংগ্রাম ই-পেপার - আজকের অনলাইন সংস্করণ">
   <meta name="twitter:description" content="দৈনিক সংগ্রাম ই-পেপার। সর্বশেষ বাংলা খবর, ইসলামী সংবাদ ও ফিচার, আন্তর্জাতিক সংবাদ, ব্যাবসা-বাণিজ্যের খবর, বিনোদন, খেলাধুলার বাংলা সংবাদ পড়তে ভিজিট করুন।">
-  <meta name="twitter:creator" content="দৈনিক সংগ্রাম ই-পেপার">
-  <meta name="twitter:image" content="https://epaper.dailysangram.com/assets/logo.png">
+  <meta name="twitter:image" content="https://epaper.dailysangram.com/wp/wp-json/digital-newspaper/v1/social-thumb?homepage=1">
 
   <!-- Preload the three Google Sans Variable woff2 subsets used by this site.
        Without preload the browser discovers these files only after downloading

@@ -1292,10 +1292,37 @@ export class NewspaperDataService {
         next: (res) => {
           this.patchDataVersion(res);
           this.evictDateCache(date);
+          // Fire-and-forget: pre-generate this section's social thumbnail so the
+          // first WhatsApp/Twitter/Facebook crawl gets the image instantly.
+          this.prewarmSectionSocial(date, edition, pageId, section.id || originalSectionId);
         },
         error: () => { this.evictDateCache(date); },
       })
     );
+  }
+
+  /**
+   * Fire-and-forget pre-warm of a single section's 1200x630 social thumbnail.
+   *
+   * Hits the public /social-thumb endpoint, which generates and disk-caches the
+   * exact JPEG that /social later references as og:image. Running it right after
+   * a section is saved means the first social-media crawl receives a ready image
+   * instead of triggering a slow on-the-fly resize — which on shared hosting can
+   * exceed the crawler's fetch timeout and produce a thumbnail-less preview.
+   * Every error is intentionally swallowed: this is purely best-effort.
+   */
+  private prewarmSectionSocial(date: string, edition: number, pageId: number, sectionId: string): void {
+    if (!this.isBrowser) return;
+    const id = (sectionId ?? '').trim();
+    if (!date || !id) return;
+    const pad = (n: number) => String(Math.max(1, n)).padStart(2, '0');
+    const url = `${this.wpBaseUrl}/wp-json/digital-newspaper/v1/social-thumb`
+      + `?date=${encodeURIComponent(date)}`
+      + `&page=page-${pad(pageId)}`
+      + `&edition=edition-${pad(edition)}`
+      + `&slug=${encodeURIComponent(id)}`;
+    // The endpoint returns a JPEG; request it as a blob and discard the result.
+    this.http.get(url, { responseType: 'blob' }).subscribe({ next: () => {}, error: () => {} });
   }
 
   /** Atomically delete a single section on the server (DELETE /data/section). */
@@ -1782,9 +1809,11 @@ export class NewspaperDataService {
   }
 
   getDefaultDate(): string {
+    const today = this.getTodayDate();
     const settings = this.getSettings();
     if (settings.defaultDateMode === 'specific' && settings.specificDate) {
-      return settings.specificDate;
+      // Never return a future specific date to public readers — clamp to today.
+      return settings.specificDate <= today ? settings.specificDate : today;
     }
     // 'current' mode: prefer the cached latestDate (persisted to localStorage
     // by DateIndexService after each successful fetch).  This lets us return
@@ -1793,15 +1822,16 @@ export class NewspaperDataService {
     // Falls through to the today / edition-pages logic when no cached value
     // exists (first-ever visit, private browsing, or cleared storage).
     const cachedLatest = this.dateIndexService.latestDate();
-    if (cachedLatest) return cachedLatest;
+    // Defense-in-depth: never surface a future date to the public reader.
+    if (cachedLatest && cachedLatest <= today) return cachedLatest;
     // 'current' mode fallback: use today, but fall back to the most recent date
     // with pages if today's edition has no pages yet.
-    const today = this.getTodayDate();
     const todayHasPages = this.getEditionsByDate(today).some(e => e.pages && e.pages.length > 0);
     if (!todayHasPages) {
       // getAvailableDates() already filters for dates with pages, sorted newest-first
       const availableDates = this.getAvailableDates();
-      const fallback = availableDates.find(d => d < today) ?? availableDates[0];
+      // Only fall back to a date <= today (skip any future dates in the list).
+      const fallback = availableDates.find(d => d <= today);
       if (fallback) return fallback;
     }
     return today;

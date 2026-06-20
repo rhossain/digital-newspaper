@@ -26,6 +26,13 @@ class Digital_Newspaper_API {
   const OPTION_SETTINGS = 'dn_settings';
   /** Stores {dates: string[], dataVersion: float} — the available-dates index. */
   const OPTION_INDEX    = 'dn_data_index';
+  /**
+   * Bump this integer whenever the social HTML template or image-generation
+   * logic changes in ways that require existing transients to be regenerated.
+   * Embedding this in the cache key means old transients are silently abandoned
+   * on the next request — no manual flush needed after code deployment.
+   */
+  const SOCIAL_CACHE_VER = 2;
   /** Prefix for per-date edition option keys; append YYYY-MM-DD. */
   const OPTION_EDITION_PREFIX = 'dn_edition_';
   /** Set to true once the one-time migration from the monolith blob is done. */
@@ -2208,6 +2215,19 @@ googletag.cmd.push(function() {
       ]
     ]);
 
+    // Social thumbnail image endpoint — returns the 1200×630 JPEG for a given
+    // section directly (Content-Type: image/jpeg).  Used by Angular SSR as the
+    // og:image URL so social crawlers always receive a properly sized JPEG,
+    // even when GD cannot resize the original WebP section image.
+    // Falls back to the branded logo image when no section image is available.
+    register_rest_route('digital-newspaper/v1', '/social-thumb', [
+      [
+        'methods'             => 'GET',
+        'callback'            => [$this, 'social_thumb_endpoint'],
+        'permission_callback' => '__return_true',
+      ]
+    ]);
+
     // Stable public image endpoint for generated social JPEGs. This bypasses
     // direct /wp-content/uploads/ fetch issues seen with some crawler UAs.
     register_rest_route('digital-newspaper/v1', '/social-image', [
@@ -2328,21 +2348,85 @@ googletag.cmd.push(function() {
     return $this->admin_required($request);
   }
 
+  /**
+   * Output a social-sharing HTML page directly, bypassing WordPress's JSON
+   * response encoding.  Extracted to avoid duplicating the add_filter pattern
+   * in both the homepage and article branches of social_sharing_endpoint().
+   *
+   * @param string $html   Complete HTML document to send.
+   * @param bool   $cached TRUE when the response came from the transient cache;
+   *                       adds an X-Cache: HIT header for observability/debugging.
+   */
+  private function dn_serve_social_html(string $html, bool $cached): void {
+    add_filter('rest_pre_serve_request', static function ($served) use ($html, $cached) {
+      if (!$served) {
+        status_header(200);
+        header('Content-Type: text/html; charset=utf-8');
+        header('Cache-Control: public, max-age=300, s-maxage=300');
+        // Only 'noarchive' here — a 'noindex'/'nofollow' X-Robots-Tag can make
+        // Twitter/X and LinkedIn card crawlers refuse to render the link
+        // preview for this page (they implement the robots directives).  This
+        // shell is served exclusively to social bots (matched by User-Agent in
+        // .htaccess) and JS-redirects real browsers to the Angular app, so it
+        // never competes with the real pages for search indexing.
+        header('X-Robots-Tag: noarchive');
+        header('Vary: User-Agent');
+        if ($cached) {
+          header('X-Cache: HIT');
+        }
+        echo $html; // phpcs:ignore WordPress.Security.EscapeOutput
+      }
+      return true;
+    }, 99);
+  }
+
   public function social_sharing_endpoint(WP_REST_Request $request) {
+    // ── 1. Parse params ───────────────────────────────────────────────────────
     // Use wp_unslash + trim instead of sanitize_text_field — the latter
     // strips %XX byte sequences which can corrupt multibyte Bengali slugs.
-    $date         = trim(wp_unslash((string) ($request->get_param('date') ?? '')));
-    $pageSlug     = trim(wp_unslash((string) ($request->get_param('page') ?? '')));
-    $editionSlug  = trim(wp_unslash((string) ($request->get_param('edition') ?? '')));
-    $slug         = trim(wp_unslash(urldecode((string) ($request->get_param('slug') ?? ''))));
+    $date        = trim(wp_unslash((string) ($request->get_param('date')    ?? '')));
+    $pageSlug    = trim(wp_unslash((string) ($request->get_param('page')    ?? '')));
+    $editionSlug = trim(wp_unslash((string) ($request->get_param('edition') ?? '')));
+    $slug        = trim(wp_unslash(urldecode((string) ($request->get_param('slug') ?? ''))));
+    $is_homepage = filter_var($request->get_param('homepage'), FILTER_VALIDATE_BOOLEAN);
 
-    // ---------------------------------------------------------------
-    // Homepage case: ?homepage=1 — return site-level OG tags with logo.
+    // ── 2. Transient cache check (PERF) ───────────────────────────────────────
+    // Read the lightweight dn_data_index (a single autoloaded MySQL row, ~200 B)
+    // to get the current dataVersion — orders of magnitude cheaper than loading
+    // the full dn_data blob (~30–50 MB PHP unserialize + MySQL scan).
+    //
+    // The cache key embeds dataVersion so any admin save — which bumps
+    // dataVersion in dn_data_index — automatically invalidates all social cache
+    // entries without any explicit flush call.  No stale OG tags after publish.
+    //
+    // Key = 'dn_soc_' (7 chars) + md5 (32 chars) = 39 chars total,
+    // well within WordPress's 172-char transient key limit.
+    $index       = get_option(self::OPTION_INDEX);
+    $dataVersion = (is_array($index) && isset($index['dataVersion']))
+                   ? (float) $index['dataVersion'] : 0.0;
+
+    $param_key = $is_homepage
+                 ? 'hp'
+                 : "{$date}|{$pageSlug}|{$editionSlug}|{$slug}";
+    $cache_key = 'dn_soc_' . md5($param_key . '|v' . $dataVersion . '|c' . self::SOCIAL_CACHE_VER);
+
+    $cached_html = get_transient($cache_key);
+    if ($cached_html !== false && is_string($cached_html) && $cached_html !== '') {
+      $this->dn_serve_social_html($cached_html, true);
+      return new WP_REST_Response(null, 200);
+    }
+
+    // ── 3. Homepage case: ?homepage=1 ─────────────────────────────────────────
+    // Returns site-level OG tags with logo.
     // Triggered from .htaccess when a social bot visits the root URL (/).
-    // ---------------------------------------------------------------
-    if (filter_var($request->get_param('homepage'), FILTER_VALIDATE_BOOLEAN)) {
-      $data     = $this->get_data();
-      $settings = isset($data['settings']) && is_array($data['settings']) ? $data['settings'] : [];
+    //
+    // PERF: Reads dn_settings (small, autoloaded) instead of the full dn_data
+    // blob.  dn_data_index was already loaded above for the cache key.
+    if ($is_homepage) {
+      $settings_opt = get_option(self::OPTION_SETTINGS, []);
+      $settings = is_array($settings_opt) && !empty($settings_opt)
+                  ? $settings_opt : self::default_data()['settings'];
+
       $siteName = isset($settings['logo']['alt']) ? trim((string) $settings['logo']['alt']) : '';
       if ($siteName === '') {
         $siteName = 'Digital Newspaper';
@@ -2361,30 +2445,42 @@ googletag.cmd.push(function() {
       $imageUrl = $this->dn_fallback_social_image($logoUrl);
 
       // If PHP GD is unavailable on this server, fall back to section image chain.
+      // PERF: Use dn_data_index (already loaded) to find the most recent date, then
+      // load only that date's editions — avoids deserialising the full dn_data blob.
       if ($imageUrl === '') {
         $pageImgFallback = '';
-        $editions = isset($data['editions']) && is_array($data['editions']) ? $data['editions'] : [];
-        usort($editions, static function ($a, $b) {
-          return strcmp((string) ($b['date'] ?? ''), (string) ($a['date'] ?? ''));
-        });
-        if (!empty($editions)) {
-          $latestEdition = $editions[0];
-          foreach (($latestEdition['pages'] ?? []) as $page) {
-            if ($pageImgFallback === '') {
-              $pageImgFallback = $this->dn_resolve_image((string) ($page['fullImage'] ?? ''), $wpBase);
-            }
-            foreach (($page['sections'] ?? []) as $sec) {
-              $rawImg = trim((string) ($sec['imageUrl'] ?? ''));
-              if ($rawImg === '') continue;
-              $candidate = $this->dn_resolve_image($rawImg, $wpBase);
-              if ($candidate !== '') {
-                $imageUrl = $candidate;
-                break 2;
+        $dates = (is_array($index) && isset($index['dates']) && is_array($index['dates']))
+                 ? $index['dates'] : [];
+        if (!empty($dates)) {
+          $sorted_dates = $dates;
+          rsort($sorted_dates); // most-recent date first
+          $latestDate      = (string) $sorted_dates[0];
+          $latest_editions = get_option($this->edition_option_key($latestDate), []);
+          if (!is_array($latest_editions)) {
+            $latest_editions = [];
+          }
+          $latest_editions = array_values($latest_editions);
+          if (!empty($latest_editions)) {
+            // Mirror original logic: look at the first (highest-priority) edition
+            // for the most recent date.
+            $latestEdition = $latest_editions[0];
+            foreach (($latestEdition['pages'] ?? []) as $page) {
+              if ($pageImgFallback === '') {
+                $pageImgFallback = $this->dn_resolve_image((string) ($page['fullImage'] ?? ''), $wpBase);
+              }
+              foreach (($page['sections'] ?? []) as $sec) {
+                $rawImg = trim((string) ($sec['imageUrl'] ?? ''));
+                if ($rawImg === '') continue;
+                $candidate = $this->dn_resolve_image($rawImg, $wpBase);
+                if ($candidate !== '') {
+                  $imageUrl = $candidate;
+                  break 2;
+                }
               }
             }
-          }
-          if ($imageUrl === '' && $pageImgFallback !== '') {
-            $imageUrl = $pageImgFallback;
+            if ($imageUrl === '' && $pageImgFallback !== '') {
+              $imageUrl = $pageImgFallback;
+            }
           }
         }
         if ($imageUrl === '' && $logoUrl !== '') {
@@ -2404,9 +2500,22 @@ googletag.cmd.push(function() {
       $imgExt  = strtolower(pathinfo((string) parse_url($imageUrl, PHP_URL_PATH), PATHINFO_EXTENSION));
       $imgMime = in_array($imgExt, ['png', 'webp', 'gif'], true) ? 'image/' . $imgExt : 'image/jpeg';
 
-      // Homepage image is always our GD-generated 1200×630 fallback (when GD is
-      // available) — emit width/height so WhatsApp doesn't need a separate HEAD.
-      $isStandardSize = strpos($imageUrl, '/dn-social-') !== false;
+      // Resolve og:image:width / og:image:height.
+      $imgWidth  = '';
+      $imgHeight = '';
+      if (strpos($imageUrl, '/dn-social-') !== false) {
+        $imgWidth  = '1200';
+        $imgHeight = '630';
+      } elseif ($imageUrl !== '') {
+        $localPath = $this->dn_uploads_url_to_path_any_host($imageUrl);
+        if ($localPath !== '' && file_exists($localPath)) {
+          $imgSize = @getimagesize($localPath);
+          if ($imgSize !== false && $imgSize[0] > 0 && $imgSize[1] > 0) {
+            $imgWidth  = (string) $imgSize[0];
+            $imgHeight = (string) $imgSize[1];
+          }
+        }
+      }
 
       $ogImgTags      = '';
       $twitterImgTags = '';
@@ -2414,9 +2523,9 @@ googletag.cmd.push(function() {
         $ogImgTags      = "  <meta property=\"og:image\"            content=\"{$img}\">\n"
                         . "  <meta property=\"og:image:secure_url\" content=\"{$img}\">\n"
                         . "  <meta property=\"og:image:type\"       content=\"{$imgMime}\">\n";
-        if ($isStandardSize) {
-          $ogImgTags .= "  <meta property=\"og:image:width\"      content=\"1200\">\n"
-                     .  "  <meta property=\"og:image:height\"     content=\"630\">\n";
+        if ($imgWidth !== '' && $imgHeight !== '') {
+          $ogImgTags .= "  <meta property=\"og:image:width\"      content=\"{$imgWidth}\">\n"
+                     .  "  <meta property=\"og:image:height\"     content=\"{$imgHeight}\">\n";
         }
         $twitterImgTags = "  <meta name=\"twitter:image\"     content=\"{$img}\">\n"
                         . "  <meta name=\"twitter:image:src\" content=\"{$img}\">\n"
@@ -2450,26 +2559,23 @@ googletag.cmd.push(function() {
 </html>
 HTML;
 
-      add_filter('rest_pre_serve_request', static function ($served) use ($html) {
-        if (!$served) {
-          status_header(200);
-          header('Content-Type: text/html; charset=utf-8');
-          header('Cache-Control: public, max-age=300, s-maxage=300');
-          header('X-Robots-Tag: noindex, nofollow, noarchive');
-          header('Vary: User-Agent');
-          echo $html; // phpcs:ignore WordPress.Security.EscapeOutput
-        }
-        return true;
-      }, 99);
-
+      set_transient($cache_key, $html, HOUR_IN_SECONDS);
+      $this->dn_serve_social_html($html, false);
       return new WP_REST_Response(null, 200);
     }
 
+    // ── 4. Article / section case ─────────────────────────────────────────────
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) || $slug === '') {
       return new WP_REST_Response(['error' => 'Invalid params'], 400);
     }
 
-    $data     = $this->get_data();
+    // PERF: Use get_data_scoped_to_date() instead of get_data() — reads only
+    // dn_settings (autoloaded, ~5 KB) and dn_edition_{date} (a few MB at most),
+    // completely skipping the ~30–50 MB dn_data blob unserialise + MySQL scan.
+    // Returned shape matches get_data(): {dataVersion, settings, editions}.
+    // editions contains ONLY entries for $date, so the ($editionDate !== $date)
+    // guards below are always false — kept as-is for defensive correctness.
+    $data     = $this->get_data_scoped_to_date($date);
     $settings = isset($data['settings']) && is_array($data['settings']) ? $data['settings'] : [];
     $siteName = isset($settings['logo']['alt']) ? trim((string) $settings['logo']['alt']) : '';
     $logoUrl  = isset($settings['logo']['url'])  ? trim((string) $settings['logo']['url'])  : '';
@@ -2513,7 +2619,7 @@ HTML;
           $title = (string) ($sec['title'] ?? '');
           if ($this->dn_matches_section_slug($slug, $title, $id)) {
             $secTitle   = $title;
-            $secContent = strip_tags((string) ($sec['content'] ?? ''));
+            $secContent = html_entity_decode(strip_tags((string) ($sec['content'] ?? '')), ENT_QUOTES | ENT_HTML5, 'UTF-8');
             $rawImg     = trim((string) ($sec['imageUrl'] ?? ''));
             if ($rawImg !== '') {
               $imageUrl = $this->dn_resolve_image($rawImg, $wpBase);
@@ -2569,10 +2675,28 @@ HTML;
       $canonical = $angularBase . '/' . rawurlencode($date) . '/' . rawurlencode($slug);
     }
 
-    // Resize to 1200×630 for consistent social-media thumbnail dimensions.
-    // Falls back to the original URL if GD is unavailable or the fetch fails.
+    // Resize to 1200×630 JPEG for consistent social-media thumbnail dimensions.
     if ($imageUrl !== '') {
       $imageUrl = $this->dn_resize_for_social($imageUrl);
+    }
+
+    // If the resize failed (GD + Imagick both unavailable or couldn't parse
+    // the format) or produced a corrupt/zero-byte/oversized file, fall back to
+    // the branded 1200×630 logo image.  Validating the actual file — not just
+    // the URL shape — guarantees WhatsApp / Twitter receive a thumbnail they
+    // can render, and the site logo otherwise.
+    if (!$this->dn_social_image_is_valid($imageUrl)) {
+      $logoFallback = $this->dn_fallback_social_image($logoUrl);
+      if ($this->dn_social_image_is_valid($logoFallback)) {
+        $imageUrl = $logoFallback;
+      } elseif ($logoUrl !== '' && !preg_match('/\.svgz?(?:[?#]|$)/i', $logoUrl)) {
+        // GD unavailable on this server — use the raw logo URL directly so
+        // social bots still see *something* rather than a broken image.
+        // Skip SVG logos: WhatsApp/Twitter do not reliably render SVG.
+        $imageUrl = $logoUrl;
+      } else {
+        $imageUrl = '';
+      }
     }
 
     $t   = esc_attr($secTitle !== '' ? $secTitle : $siteName);
@@ -2584,20 +2708,40 @@ HTML;
     $twitterDomain = esc_attr((string) ($wpParsed['host'] ?? ''));
     $red = wp_json_encode($canonical, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
 
-    // Detect whether the image is our GD-generated 1200×630 JPEG so we can
-    // emit accurate og:image:width / og:image:height — WhatsApp uses these
-    // hints to display the preview without an extra image HEAD request.
-    $isStandardSize = strpos($imageUrl, '/dn-social-') !== false;
+    // Resolve og:image:width / og:image:height for WhatsApp / Facebook.
+    // GD-generated dn-social-* images are always 1200×630.
+    // For original uploads (e.g. WebP that GD couldn't resize), query
+    // getimagesize() directly from disk — fast, no HTTP round-trip.
+    $imgWidth  = '';
+    $imgHeight = '';
+    if (strpos($imageUrl, '/dn-social-') !== false) {
+      $imgWidth  = '1200';
+      $imgHeight = '630';
+    } elseif ($imageUrl !== '') {
+      $localPath = $this->dn_uploads_url_to_path_any_host($imageUrl);
+      if ($localPath !== '' && file_exists($localPath)) {
+        $imgSize = @getimagesize($localPath);
+        if ($imgSize !== false && $imgSize[0] > 0 && $imgSize[1] > 0) {
+          $imgWidth  = (string) $imgSize[0];
+          $imgHeight = (string) $imgSize[1];
+        }
+      }
+    }
+
+    // Detect og:image:type from the resolved URL extension.
+    // dn-social-* files are always JPEG; logo/WebP fallbacks may differ.
+    $imgExt     = strtolower(pathinfo((string) parse_url($imageUrl, PHP_URL_PATH), PATHINFO_EXTENSION));
+    $imgMimeArt = in_array($imgExt, ['png', 'webp', 'gif'], true) ? 'image/' . $imgExt : 'image/jpeg';
 
     $ogImgTags     = '';
     $twitterImgTags = '';
     if ($img !== '') {
       $ogImgTags      = "  <meta property=\"og:image\"            content=\"{$img}\">\n"
                       . "  <meta property=\"og:image:secure_url\" content=\"{$img}\">\n"
-                      . "  <meta property=\"og:image:type\"       content=\"image/jpeg\">\n";
-      if ($isStandardSize) {
-        $ogImgTags .= "  <meta property=\"og:image:width\"      content=\"1200\">\n"
-                   .  "  <meta property=\"og:image:height\"     content=\"630\">\n";
+                      . "  <meta property=\"og:image:type\"       content=\"{$imgMimeArt}\">\n";
+      if ($imgWidth !== '' && $imgHeight !== '') {
+        $ogImgTags .= "  <meta property=\"og:image:width\"      content=\"{$imgWidth}\">\n"
+                   .  "  <meta property=\"og:image:height\"     content=\"{$imgHeight}\">\n";
       }
       $twitterImgTags = "  <meta name=\"twitter:image\"     content=\"{$img}\">\n"
                       . "  <meta name=\"twitter:image:src\" content=\"{$img}\">\n"
@@ -2634,32 +2778,44 @@ HTML;
 </html>
 HTML;
 
-    // Output HTML directly, bypassing WordPress's JSON response encoding.
-    add_filter('rest_pre_serve_request', static function ($served) use ($html) {
-      if (!$served) {
-        status_header(200);
-        header('Content-Type: text/html; charset=utf-8');
-        header('Cache-Control: public, max-age=300, s-maxage=300');
-        header('X-Robots-Tag: noindex, nofollow, noarchive');
-        header('Vary: User-Agent');
-        echo $html; // phpcs:ignore WordPress.Security.EscapeOutput
-      }
-      return true;
-    }, 99);
+    // Cache the generated HTML so repeat bot requests (same section re-scraped
+    // by Facebook, WhatsApp, etc.) are served from memory in microseconds.
+    // TTL = 1 hour; auto-invalidated on publish via the dataVersion in the key.
+    set_transient($cache_key, $html, HOUR_IN_SECONDS);
 
+    // Output HTML directly, bypassing WordPress's JSON response encoding.
+    $this->dn_serve_social_html($html, false);
     return new WP_REST_Response(null, 200);
   }
 
   public function social_image_endpoint(WP_REST_Request $request): WP_REST_Response {
     $file = trim((string) ($request->get_param('file') ?? ''));
-    if (!preg_match('/^dn-social-(?:resize|fallback|section)-[a-z0-9_-]+\.jpg$/', $file)) {
+    // Strip any path component defensively before validating the basename,
+    // then match case-insensitively (legacy section crops may be mixed-case).
+    $file = basename($file);
+    if (!preg_match('/^dn-social-(?:resize|fallback|section)-[a-z0-9_-]+\.jpg$/i', $file)) {
       return new WP_REST_Response(['error' => 'Invalid file'], 400);
     }
 
     $upload = wp_upload_dir();
     $path   = rtrim($upload['basedir'], '/') . '/' . $file;
+
+    // Fallback: if the requested thumbnail no longer exists (e.g. the uploads
+    // cache was cleared), serve the branded site-logo image instead of a 404
+    // so social crawlers never receive a broken og:image.
     if (!file_exists($path) || !is_readable($path)) {
-      return new WP_REST_Response(['error' => 'File not found'], 404);
+      $settings_opt = get_option(self::OPTION_SETTINGS, []);
+      $settings     = is_array($settings_opt) && !empty($settings_opt)
+                      ? $settings_opt : self::default_data()['settings'];
+      $logoUrl      = isset($settings['logo']['url']) ? trim((string) $settings['logo']['url']) : '';
+      $fallbackUrl  = $this->dn_fallback_social_image($logoUrl);
+      $fallbackName = $fallbackUrl !== '' ? basename((string) parse_url($fallbackUrl, PHP_URL_PATH)) : '';
+      $fallbackPath = $fallbackName !== '' ? rtrim($upload['basedir'], '/') . '/' . $fallbackName : '';
+      if ($fallbackPath !== '' && file_exists($fallbackPath) && is_readable($fallbackPath)) {
+        $path = $fallbackPath;
+      } else {
+        return new WP_REST_Response(['error' => 'File not found'], 404);
+      }
     }
 
     add_filter('rest_pre_serve_request', static function ($served) use ($path) {
@@ -2669,12 +2825,156 @@ HTML;
         header('Content-Length: ' . (string) filesize($path));
         header('Cache-Control: public, max-age=604800, s-maxage=604800');
         header('Accept-Ranges: bytes');
+        // Some crawler UAs are blocked by host WAFs unless these are present.
+        header('Access-Control-Allow-Origin: *');
+        header('X-Content-Type-Options: nosniff');
         readfile($path); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_read_readfile
       }
       return true;
     }, 99);
 
     return new WP_REST_Response(null, 200);
+  }
+
+  /**
+   * GET /wp-json/digital-newspaper/v1/social-thumb
+   *
+   * Serves the 1200×630 social-sharing JPEG for a given section directly
+   * (Content-Type: image/jpeg).  Angular SSR sets og:image to this endpoint
+   * URL so social crawlers (WhatsApp, Twitter/X, Facebook) always receive a
+   * properly sized JPEG even when the original section image is a large WebP.
+   *
+   * Params: date, page, edition, slug (same as /social).
+   * Falls back to the branded logo image when the section image cannot be
+   * found or resized.
+   *
+   * The generated JPEG is cached on disk by dn_resize_for_social() / dn_fallback_social_image(),
+   * so the first request may take a few seconds (image generation) while all
+   * subsequent requests are served in milliseconds (file_exists check).
+   */
+  public function social_thumb_endpoint(WP_REST_Request $request): WP_REST_Response {
+    $date        = trim(wp_unslash((string) ($request->get_param('date')    ?? '')));
+    $pageSlug    = trim(wp_unslash((string) ($request->get_param('page')    ?? '')));
+    $editionSlug = trim(wp_unslash((string) ($request->get_param('edition') ?? '')));
+    $slug        = trim(wp_unslash(urldecode((string) ($request->get_param('slug') ?? ''))));
+    $is_homepage = filter_var($request->get_param('homepage'), FILTER_VALIDATE_BOOLEAN);
+
+    // Load settings once — needed for logoUrl fallback.
+    $settings_opt = get_option(self::OPTION_SETTINGS, []);
+    $settings     = is_array($settings_opt) && !empty($settings_opt)
+                    ? $settings_opt : self::default_data()['settings'];
+    $logoUrl = isset($settings['logo']['url']) ? trim((string) $settings['logo']['url']) : '';
+    $wpBase  = rtrim(site_url(), '/');
+
+    // ── Resolve section image ─────────────────────────────────────────────────
+    $imageUrl    = '';
+    $skipResize  = false; // Set true when imageUrl is already a dn-social-* JPEG.
+
+    // Homepage / site-level: skip section lookup and go straight to logo fallback.
+    if ($is_homepage) {
+      $imageUrl   = $this->dn_fallback_social_image($logoUrl);
+      $skipResize = true;
+    } elseif ($slug !== '' && $date !== '') {
+      $data     = $this->get_data_scoped_to_date($date);
+      $editions = isset($data['editions']) && is_array($data['editions']) ? $data['editions'] : [];
+
+      $editionNumberFilter = 0;
+      if ($editionSlug !== '' && preg_match('/^edition-(\d+)$/', $editionSlug, $m)) {
+        $editionNumberFilter = (int) $m[1];
+      }
+
+      foreach ($editions as $edition) {
+        $editionDate = substr(trim((string) ($edition['date'] ?? '')), 0, 10);
+        if ($editionDate !== $date) continue;
+        if ($editionNumberFilter > 0) {
+          $edNo = isset($edition['edition']) ? (int) $edition['edition'] : 1;
+          if ($edNo !== $editionNumberFilter) continue;
+        }
+        foreach (($edition['pages'] ?? []) as $editionPage) {
+          $pageImg = $this->dn_resolve_image((string) ($editionPage['fullImage'] ?? ''), $wpBase);
+          foreach (($editionPage['sections'] ?? []) as $sec) {
+            $id    = (string) ($sec['id']    ?? '');
+            $title = (string) ($sec['title'] ?? '');
+            if ($this->dn_matches_section_slug($slug, $title, $id)) {
+              $rawImg = trim((string) ($sec['imageUrl'] ?? ''));
+              if ($rawImg !== '') {
+                $imageUrl = $this->dn_resolve_image($rawImg, $wpBase);
+              } else {
+                $imageUrl = $this->dn_crop_section_from_page($pageImg, $sec);
+                if ($imageUrl === '') {
+                  $imageUrl = $pageImg;
+                }
+              }
+              break 3; // Exit all loops once section found.
+            }
+          }
+        }
+      }
+    }
+
+    // ── Resize to 1200×630 JPEG ───────────────────────────────────────────────
+    if (!$skipResize && $imageUrl !== '') {
+      $imageUrl = $this->dn_resize_for_social($imageUrl);
+    }
+
+    // ── Logo fallback ─────────────────────────────────────────────────────────
+    // Use the branded 1200×630 logo image when:
+    //   (a) no section was found / no imageUrl,
+    //   (b) dn_resize_for_social() failed and returned the original URL,
+    //   (c) the resized file exists but is corrupt / zero-byte / oversized.
+    // (The homepage branch already produced a valid dn-social-fallback JPEG,
+    //  which passes validation and is left untouched.)
+    if (!$this->dn_social_image_is_valid($imageUrl)) {
+      $logoFallback = $this->dn_fallback_social_image($logoUrl);
+      if ($this->dn_social_image_is_valid($logoFallback)) {
+        $imageUrl = $logoFallback;
+      } elseif ($logoUrl !== '' && !preg_match('/\.svgz?(?:[?#]|$)/i', $logoUrl)) {
+        // GD unavailable — redirect to the raw (raster) logo as a last resort.
+        $imageUrl = $logoUrl;
+      } else {
+        $imageUrl = '';
+      }
+    }
+
+    // ── Serve the JPEG directly ───────────────────────────────────────────────
+    $upload   = wp_upload_dir();
+    $filename = basename((string) parse_url($imageUrl, PHP_URL_PATH));
+    $localPath = rtrim($upload['basedir'], '/') . '/' . rawurldecode($filename);
+
+    if ($imageUrl !== '' && file_exists($localPath) && is_readable($localPath)) {
+      $pathCapture = $localPath;
+      add_filter('rest_pre_serve_request', static function ($served) use ($pathCapture) {
+        if (!$served) {
+          status_header(200);
+          header('Content-Type: image/jpeg');
+          header('Content-Length: ' . (string) filesize($pathCapture));
+          header('Cache-Control: public, max-age=3600, s-maxage=3600');
+          header('Access-Control-Allow-Origin: *');
+          header('X-Content-Type-Options: nosniff');
+          readfile($pathCapture); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_read_readfile
+        }
+        return true;
+      }, 99);
+      return new WP_REST_Response(null, 200);
+    }
+
+    // Fallback: redirect to the public image URL (e.g. if local path resolution failed).
+    if ($imageUrl !== '') {
+      $publicUrl = $this->dn_public_social_image_url($imageUrl);
+      if ($publicUrl !== '') {
+        add_filter('rest_pre_serve_request', static function ($served) use ($publicUrl) {
+          if (!$served) {
+            status_header(302);
+            header('Location: ' . esc_url_raw($publicUrl));
+            header('Cache-Control: public, max-age=3600');
+          }
+          return true;
+        }, 99);
+        return new WP_REST_Response(null, 200);
+      }
+    }
+
+    return new WP_REST_Response(['error' => 'Thumbnail not available'], 404);
   }
 
   /**
@@ -2829,16 +3129,21 @@ HTML;
    * social-media OG / Twitter cards.  The result is cached in wp-content/uploads/
    * keyed on md5($imageUrl) so repeated bot hits are served from disk.
    *
-   * Letterbox strategy: the source is scaled to fit inside 1200×630 while
-   * preserving its aspect ratio; the remaining area is filled with #F0F0F0 grey.
-   * This avoids cropping newspaper article images that may be portrait or landscape.
+   * Processing order:
+   *   1. GD — fast, handles JPEG/PNG/GIF natively; WebP requires libwebp.
+   *   2. WP_Image_Editor (Imagick) — handles WebP, AVIF, and other formats
+   *      that GD cannot parse.
    *
-   * Returns the cached public URL, or the original $imageUrl if GD is unavailable
-   * or the fetch fails (no regression — caller always gets a usable URL).
+   * Letterbox strategy: source is scaled to fit inside 1200×630 preserving
+   * aspect ratio; remaining area is filled with #F0F0F0.
+   *
+   * Returns the cached JPEG public URL on success, or the original $imageUrl
+   * on failure.  Callers should fall back to dn_fallback_social_image() when
+   * this returns an unchanged original URL.
    */
   private function dn_resize_for_social(string $imageUrl): string {
-    if ($imageUrl === '' || !extension_loaded('gd') || !function_exists('imagecreatetruecolor')) {
-      return $imageUrl; // GD not available — caller uses original URL as-is.
+    if ($imageUrl === '') {
+      return $imageUrl;
     }
 
     $tw       = 1200;
@@ -2853,9 +3158,10 @@ HTML;
       return $url; // Serve cached version.
     }
 
-    // Read source image: prefer direct disk access (milliseconds) over HTTP
-    // (can be 2–10 s on a shared server, long enough to timeout WhatsApp's bot).
-    $localPath = $this->dn_uploads_url_to_path($imageUrl);
+    // Read source image: prefer direct disk access (milliseconds) over HTTP.
+    // Use dn_uploads_url_to_path_any_host() so cross-domain aliases
+    // (e.g. epaper.dailysangram.com ↔ nepaper.dailysangram.com) resolve correctly.
+    $localPath = $this->dn_uploads_url_to_path_any_host($imageUrl);
     if ($localPath !== '' && file_exists($localPath)) {
       $body = @file_get_contents($localPath);
     } else {
@@ -2865,33 +3171,68 @@ HTML;
     }
     if ($body === false || $body === '') return $imageUrl;
 
-    $src = @imagecreatefromstring($body);
-    if ($src === false) {
-      return $imageUrl;
+    // ── Path 1: GD ────────────────────────────────────────────────────────────
+    if (extension_loaded('gd') && function_exists('imagecreatetruecolor')) {
+      $src = @imagecreatefromstring($body);
+      if ($src !== false) {
+        $canvas = imagecreatetruecolor($tw, $th);
+        $bg     = imagecolorallocate($canvas, 240, 240, 240);
+        imagefill($canvas, 0, 0, $bg);
+        $sw    = imagesx($src);
+        $sh    = imagesy($src);
+        $scale = min($tw / $sw, $th / $sh);
+        $nw    = (int) round($sw * $scale);
+        $nh    = (int) round($sh * $scale);
+        $dx    = (int) round(($tw - $nw) / 2);
+        $dy    = (int) round(($th - $nh) / 2);
+        imagealphablending($src, true);
+        imagecopyresampled($canvas, $src, $dx, $dy, 0, 0, $nw, $nh, $sw, $sh);
+        imagedestroy($src);
+        imagejpeg($canvas, $path, 85);
+        imagedestroy($canvas);
+        if (file_exists($path)) return $url;
+      }
     }
 
-    // Create 1200×630 canvas with light grey background.
-    $canvas = imagecreatetruecolor($tw, $th);
-    $bg     = imagecolorallocate($canvas, 240, 240, 240);
-    imagefill($canvas, 0, 0, $bg);
+    // ── Path 2: WP_Image_Editor / Imagick (handles WebP, AVIF, etc.) ─────────
+    // Detect format from file-header magic bytes so we can give the temp file
+    // the correct extension.  wp_get_image_editor() uses wp_check_filetype()
+    // internally, which keys off the extension — a no-extension temp file would
+    // result in an unknown MIME type and Imagick refusing to load it.
+    $ext = 'jpg'; // safe default
+    if (strlen($body) >= 12) {
+      if (substr($body, 0, 4) === 'RIFF' && substr($body, 8, 4) === 'WEBP') {
+        $ext = 'webp';
+      } elseif (substr($body, 1, 3) === 'PNG') {
+        $ext = 'png';
+      } elseif (substr($body, 0, 2) === "\xFF\xD8") {
+        $ext = 'jpg';
+      } elseif (substr($body, 0, 4) === 'GIF8') {
+        $ext = 'gif';
+      }
+    }
+    $tmpBase = wp_tempnam('dn-social-src');
+    if ($tmpBase !== false) {
+      @unlink($tmpBase); // Remove the extension-less placeholder WordPress created.
+      $tmpFile = $tmpBase . '.' . $ext;
+      if (@file_put_contents($tmpFile, $body) !== false) {
+        $editor = wp_get_image_editor($tmpFile, ['methods' => ['resize', 'save']]);
+        if (!is_wp_error($editor)) {
+          // Resize to fit within 1200×630 (no crop — preserve aspect ratio).
+          $resized = $editor->resize($tw, $th, false);
+          if (!is_wp_error($resized)) {
+            $saved = $editor->save($path, 'image/jpeg');
+            if (!is_wp_error($saved) && file_exists($path)) {
+              @unlink($tmpFile);
+              return $url;
+            }
+          }
+        }
+        @unlink($tmpFile);
+      }
+    }
 
-    // Scale source to fit inside canvas preserving aspect ratio (letterbox).
-    $sw    = imagesx($src);
-    $sh    = imagesy($src);
-    $scale = min($tw / $sw, $th / $sh);
-    $nw    = (int) round($sw * $scale);
-    $nh    = (int) round($sh * $scale);
-    $dx    = (int) round(($tw - $nw) / 2);
-    $dy    = (int) round(($th - $nh) / 2);
-
-    imagealphablending($src, true); // Composite PNG alpha onto grey background.
-    imagecopyresampled($canvas, $src, $dx, $dy, 0, 0, $nw, $nh, $sw, $sh);
-    imagedestroy($src);
-
-    imagejpeg($canvas, $path, 85);
-    imagedestroy($canvas);
-
-    return file_exists($path) ? $url : $imageUrl;
+    return $imageUrl; // All paths failed — caller should use logo fallback.
   }
 
   /**
@@ -2914,7 +3255,11 @@ HTML;
     }
 
     $upload = wp_upload_dir();
-    $idPart = preg_replace('/[^a-zA-Z0-9_-]/', '-', (string) ($section['id'] ?? 'unknown'));
+    // Lowercase the id fragment so the generated filename always matches the
+    // [a-z0-9_-] pattern enforced by social_image_endpoint() and
+    // dn_public_social_image_url(); otherwise mixed-case section IDs would be
+    // served via the raw uploads URL and bypass the crawler-safe endpoint.
+    $idPart = strtolower(preg_replace('/[^a-zA-Z0-9_-]/', '-', (string) ($section['id'] ?? 'unknown')));
     $cacheKey = substr(md5($pageImageUrl . '|' . $xPct . '|' . $yPct . '|' . $wPct . '|' . $hPct), 0, 12);
     $filename = "dn-social-section-{$idPart}-{$cacheKey}.jpg";
     $path = $upload['basedir'] . '/' . $filename;
@@ -3012,12 +3357,64 @@ HTML;
     }
 
     $filename = basename((string) parse_url($imageUrl, PHP_URL_PATH));
-    if (!preg_match('/^dn-social-(?:resize|fallback|section)-[a-z0-9_-]+\.jpg$/', $filename)) {
+    // Case-insensitive: section crops may embed mixed-case section IDs in the
+    // filename (dn_crop_section_from_page now lowercases new files, but legacy
+    // cached files may still contain uppercase characters).
+    if (!preg_match('/^dn-social-(?:resize|fallback|section)-[a-z0-9_-]+\.jpg$/i', $filename)) {
       return $imageUrl;
     }
 
-    $upload = wp_upload_dir();
-    return trailingslashit($upload['baseurl']) . rawurlencode($filename);
+    // Serve the generated JPEG through the plugin's own /social-image REST
+    // endpoint rather than the raw /wp-content/uploads/ URL.  Some hosts'
+    // WAF / hotlink-protection layers (Imunify360, LiteSpeed) block direct
+    // uploads fetches for crawler User-Agents such as WhatsApp/2.x and
+    // Twitterbot, which makes the thumbnail silently fail for those platforms
+    // while a normal browser (different UA) loads it fine.  The REST endpoint
+    // is plugin-controlled and always responds with an explicit
+    // Content-Type: image/jpeg, so the crawlers reliably receive the image.
+    // add_query_arg() URL-encodes the value; pass the plain filename (the
+    // [a-z0-9_-].jpg charset needs no pre-encoding) to avoid double-encoding.
+    return add_query_arg(
+      'file',
+      $filename,
+      rest_url('digital-newspaper/v1/social-image')
+    );
+  }
+
+  /**
+   * Validate that a resolved social image is one a crawler will actually
+   * render: it must be a locally generated JPEG that exists on disk, is a sane
+   * file size (non-empty, under WhatsApp's 600 KB ceiling) and has usable
+   * dimensions (width ≥ 200 px, the practical minimum for a large card).
+   *
+   * Returns false for empty URLs, remote/unresolvable URLs, corrupt or
+   * zero-byte files, and non-image payloads — signalling the caller to fall
+   * back to the branded site-logo image.
+   */
+  private function dn_social_image_is_valid(string $imageUrl): bool {
+    $imageUrl = trim($imageUrl);
+    if ($imageUrl === '') {
+      return false;
+    }
+
+    $localPath = $this->dn_uploads_url_to_path_any_host($imageUrl);
+    if ($localPath === '' || !file_exists($localPath) || !is_readable($localPath)) {
+      return false;
+    }
+
+    $bytes = (int) @filesize($localPath);
+    // 600 KB is WhatsApp's documented hard ceiling; reject anything larger or
+    // implausibly small (a truncated/blank render).
+    if ($bytes < 512 || $bytes > 600 * 1024) {
+      return false;
+    }
+
+    $size = @getimagesize($localPath);
+    if ($size === false || (int) ($size[0] ?? 0) < 200 || (int) ($size[1] ?? 0) < 100) {
+      return false;
+    }
+
+    return true;
   }
 
   /**

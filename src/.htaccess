@@ -1,5 +1,22 @@
 # Redirect all Angular routes to index.csr.html (the Angular SSR browser shell)
 
+# ── Social bot cache bypass ──────────────────────────────────────────────────
+# LiteSpeed page cache and Cloudflare/CDN layers can serve a cached Angular
+# shell to social crawlers, completely bypassing the mod_rewrite rules below.
+# This block runs before mod_rewrite and signals both layers to skip the cache.
+#
+# IS_SOCIAL_BOT — used by the mod_headers block at the bottom to emit
+#   Cache-Control: no-store on the PHP /social endpoint response so CDNs
+#   (Cloudflare, etc.) do not cache it and serve it to regular visitors.
+#
+# no-cache — LiteSpeed Page Cache's built-in env var: when set, LiteSpeed
+#   skips its cache lookup entirely for this request so mod_rewrite fires.
+#   Reference: https://www.litespeedtech.com/support/wiki/doku.php/litespeed_wiki:cache:lscache:no-cache
+<IfModule mod_setenvif.c>
+  SetEnvIfNoCase User-Agent "facebookexternalhit|Facebot|Twitterbot|Xbot|LinkedInBot|WhatsApp|Slackbot|Slackbot-LinkExpanding|TelegramBot|Discordbot|Pinterest|vkShare|W3C_Validator|Googlebot-Image" IS_SOCIAL_BOT=1
+  SetEnvIfNoCase User-Agent "facebookexternalhit|Facebot|Twitterbot|Xbot|LinkedInBot|WhatsApp|Slackbot|Slackbot-LinkExpanding|TelegramBot|Discordbot|Pinterest|vkShare|W3C_Validator|Googlebot-Image" no-cache=1
+</IfModule>
+# ─────────────────────────────────────────────────────────────────────────────
 
 <IfModule mod_rewrite.c>
   RewriteEngine On
@@ -116,4 +133,11 @@
     Header set Pragma "no-cache"
     Header set Expires "0"
   </FilesMatch>
+
+  # Ensure the PHP /social endpoint response is never cached by CDNs (Cloudflare,
+  # etc.) and is never served back to regular visitors.  IS_SOCIAL_BOT is set by
+  # the mod_setenvif block above — this only fires for social-crawler requests.
+  Header always set Cache-Control "no-store, no-cache, must-revalidate" env=IS_SOCIAL_BOT
+  Header always set Pragma "no-cache" env=IS_SOCIAL_BOT
+  Header always set Vary "User-Agent" env=IS_SOCIAL_BOT
 </IfModule>
