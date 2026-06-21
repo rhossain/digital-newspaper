@@ -67,6 +67,21 @@ export class EditionCacheService {
   private readonly _endpoint =
     `${WP_BASE_URL}/wp-json/digital-newspaper/v1/data/editions`;
 
+  /**
+   * Static JSON snapshot directory written by the WordPress plugin on every
+   * publish (feature-flagged server-side). These files are served directly by
+   * Apache with no PHP/MySQL, so reading them first removes the origin from the
+   * hot path under load and makes today's edition load near-instantly.
+   *
+   * The shape is identical to the REST endpoint
+   * (`{ date, editions, dataVersion }`), so the two are interchangeable. When a
+   * snapshot is absent (feature disabled, or a date not yet generated) the
+   * static GET 404s and we transparently fall back to the REST endpoint — so
+   * this optimisation is always safe and self-healing.
+   */
+  private readonly _staticBase =
+    `${WP_BASE_URL}/wp-content/dn-static/editions`;
+
   private readonly _memCache = new Map<string, MemCacheEntry>();
 
   private readonly platformId = inject(PLATFORM_ID);
@@ -129,6 +144,51 @@ export class EditionCacheService {
 
     // ── Layer 3: HTTP (today localStorage miss / future dates) ──────────────
     return this._fetchFromHttp(date, memEntry);
+  }
+
+  /**
+   * First-paint variant used for the very first edition load. Returns the
+   * smaller `<date>.light.json` (article bodies stripped from all but the first
+   * page) when no full copy is already cached locally, so the initial render is
+   * fast even on hosts that don't compress JSON. The caller upgrades to the full
+   * payload in the background.
+   *
+   * Resolution:
+   *   1. Fresh in-memory full copy → return it (light not needed).
+   *   2. localStorage full copy    → return it (light not needed).
+   *   3. `<date>.light.json`       → return light (NOT cached as full).
+   *   4. Fall back to the full path (`getEditionsForDate`).
+   *
+   * The returned `light` flag tells the caller whether a background upgrade to
+   * the full payload is required. Light editions are intentionally never written
+   * to the shared cache layers, so they can't mask the full content later.
+   */
+  getEditionsForDateLight(
+    date: string,
+  ): Observable<{ editions: NewspaperEdition[]; light: boolean }> {
+    const memEntry = this._memCache.get(date);
+    if (memEntry && this._isMemFresh(date, memEntry)) {
+      return of({ editions: memEntry.editions, light: false });
+    }
+    const lsEditions = this._readFromStorage(date);
+    if (lsEditions) {
+      this._setMem(date, lsEditions);
+      return of({ editions: lsEditions, light: false });
+    }
+    return this.http
+      .get<{ editions: NewspaperEdition[] }>(`${this._staticBase}/${date}.light.json`)
+      .pipe(
+        timeout(6000),
+        map(res => (Array.isArray(res?.editions) ? res.editions : [])),
+        switchMap(editions =>
+          editions.length > 0
+            ? of({ editions, light: true })
+            : this.getEditionsForDate(date).pipe(map(full => ({ editions: full, light: false }))),
+        ),
+        catchError(() =>
+          this.getEditionsForDate(date).pipe(map(full => ({ editions: full, light: false }))),
+        ),
+      );
   }
 
   /**
@@ -221,8 +281,57 @@ export class EditionCacheService {
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
-  /** HTTP fetch helper shared by all code paths that reach layer 3. */
+  /**
+   * Layer 3 fetch. Tries the static snapshot first (served by Apache, no PHP),
+   * then falls back to the authoritative REST endpoint when the snapshot is
+   * missing, empty, or errors. Both sources share the same response shape and
+   * both seed the in-memory + persistent layers identically, so callers are
+   * unaffected by which one served the data.
+   */
   private _fetchFromHttp(
+    date: string,
+    staleMemEntry: MemCacheEntry | undefined,
+  ): Observable<NewspaperEdition[]> {
+    // Static snapshot first (served by Apache/LiteSpeed with no PHP), REST
+    // fallback when it's missing/empty/errors. Stable URL (no cache-buster): the
+    // snapshot .htaccess sends `Cache-Control: no-cache, must-revalidate`, so the
+    // browser revalidates via Last-Modified and gets a tiny 304 when unchanged,
+    // fresh bytes after a publish.
+    return this._tryStatic(date).pipe(
+      switchMap(editions =>
+        editions.length > 0 ? of(editions) : this._fetchFromRest(date, staleMemEntry),
+      ),
+    );
+  }
+
+  /**
+   * Fetch the static snapshot for a date. Returns the editions on success (and
+   * seeds the cache layers), or an empty array on miss/error so the caller can
+   * fall through to REST. Never throws.
+   */
+  private _tryStatic(date: string): Observable<NewspaperEdition[]> {
+    return this.http
+      .get<{ date: string; editions: NewspaperEdition[]; dataVersion: number }>(
+        `${this._staticBase}/${date}.json`,
+      )
+      .pipe(
+        timeout(6000),
+        map(res => (Array.isArray(res?.editions) ? res.editions : [])),
+        tap(editions => {
+          if (editions.length > 0) {
+            this._setMem(date, editions);
+            this._persistAll(date, editions);
+          }
+        }),
+        catchError(() => of([] as NewspaperEdition[])),
+      );
+  }
+
+  /**
+   * Authoritative REST fetch (original layer-3 behaviour, unchanged). Used
+   * directly when the static snapshot is unavailable.
+   */
+  private _fetchFromRest(
     date: string,
     staleMemEntry: MemCacheEntry | undefined,
   ): Observable<NewspaperEdition[]> {
@@ -250,6 +359,24 @@ export class EditionCacheService {
           return of(staleMemEntry?.editions ?? []);
         })
       );
+  }
+
+  /**
+   * Best-effort, STATIC-ONLY warm of a date's editions for idle prefetch.
+   *
+   * Unlike getEditionsForDate(), this deliberately NEVER falls back to the REST
+   * endpoint: a speculative background prefetch must not trigger an expensive
+   * WordPress/PHP request. If the static snapshot is missing (e.g. an old date
+   * not yet backfilled) the prefetch simply does nothing — the date will still
+   * load on demand (static-first, REST fallback) if the reader navigates to it.
+   *
+   * Fire-and-forget: returns void, self-subscribes, and swallows all errors.
+   */
+  prefetchStatic(date: string): void {
+    if (!date || this._memCache.has(date)) return;   // already warm or invalid
+    // Static-only (never REST — a non-urgent warm-up must not trigger PHP).
+    // _tryStatic seeds the caches on success.
+    this._tryStatic(date).subscribe();
   }
 
   private _today(): string {

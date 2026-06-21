@@ -44,6 +44,17 @@ class Digital_Newspaper_API {
   /** Per-slot enabled states: [ 'desktop_page_left' => bool, ... ]. */
   const OPTION_GAM_SLOT_STATES = 'dn_gam_slot_states';
 
+  /**
+   * Feature flag: write static JSON snapshots of the public read endpoints to
+   * wp-content/dn-static/ on every publish. OFF by default — enabling it only
+   * produces additive files and has NO effect on request handling until the
+   * operator wires the serve-side rewrite (see STATIC_SNAPSHOTS_DEPLOY_GUIDE.md).
+   * Toggle with: update_option('dn_static_snapshots_enabled', true);
+   */
+  const OPTION_STATIC_SNAPSHOTS = 'dn_static_snapshots_enabled';
+  /** Directory (under wp-content) where snapshots are written. */
+  const STATIC_SNAPSHOT_DIR = 'dn-static';
+
   public function __construct() {
     add_action('init', [$this, 'handle_cors_preflight'], 1);
     add_action('init', [$this, 'register_section_post_type']);
@@ -51,6 +62,15 @@ class Digital_Newspaper_API {
     add_filter('rest_authentication_errors', [$this, 'authenticate_rest_request']);
     add_action('admin_menu', [$this, 'register_settings_page']);
     add_action('admin_init', [$this, 'register_settings']);
+    // "Regenerate snapshots now" button handler (settings page).
+    add_action('admin_post_dn_regenerate_snapshots', [$this, 'regenerate_snapshots_action']);
+    // When static snapshots are turned OFF, delete the frozen files so the
+    // Angular app's static-first reads fall back to the live REST endpoint
+    // instead of serving stale content. Fires only on an actual value change.
+    add_action('update_option_' . self::OPTION_STATIC_SNAPSHOTS, [$this, 'on_static_snapshots_toggled'], 10, 2);
+    add_action('add_option_' . self::OPTION_STATIC_SNAPSHOTS, function ($name, $value) {
+      $this->on_static_snapshots_toggled(true, $value);
+    }, 10, 2);
     // Ensure the activity-log DB table exists on every admin load (handles the
     // case where the plugin file was updated via FTP without re-activating it).
     add_action('admin_init', [$this, 'maybe_create_activity_table']);
@@ -220,6 +240,12 @@ class Digital_Newspaper_API {
       'sanitize_callback' => fn($v) => (bool) $v,
       'default'           => false,
     ]);
+
+    register_setting('digital_newspaper_settings', self::OPTION_STATIC_SNAPSHOTS, [
+      'type'              => 'boolean',
+      'sanitize_callback' => fn($v) => (bool) $v,
+      'default'           => false,
+    ]);
   }
 
   public function render_settings_page(): void {
@@ -230,9 +256,21 @@ class Digital_Newspaper_API {
     $origins           = esc_textarea(get_option(self::OPTION_ORIGINS, ''));
     $allow_credentials = (bool) get_option(self::OPTION_ALLOW_CREDENTIALS, true);
     $gam_enabled       = (bool) get_option(self::OPTION_GAM_ENABLED, false);
+    $static_snapshots  = (bool) get_option(self::OPTION_STATIC_SNAPSHOTS, false);
+
+    // Diagnostic: does the snapshot directory already exist, and what's in it?
+    $snapshot_dir      = trailingslashit(WP_CONTENT_DIR) . self::STATIC_SNAPSHOT_DIR;
+    $snapshot_exists   = is_dir($snapshot_dir);
+    $snapshot_url      = trailingslashit(content_url()) . self::STATIC_SNAPSHOT_DIR;
     ?>
     <div class="wrap">
       <h1>Digital Newspaper Settings</h1>
+      <?php if (isset($_GET['dn_snap'])): ?>
+        <div class="notice notice-success is-dismissible">
+          <p>Static snapshots regenerated — <?php echo (int) $_GET['dn_snap']; ?> edition file(s) written to
+          <code><?php echo esc_html(self::STATIC_SNAPSHOT_DIR); ?>/</code> (including the compression <code>.htaccess</code>).</p>
+        </div>
+      <?php endif; ?>
       <form method="post" action="options.php">
         <?php settings_fields('digital_newspaper_settings'); ?>
         <table class="form-table" role="presentation">
@@ -265,8 +303,50 @@ class Digital_Newspaper_API {
               </p>
             </td>
           </tr>
+          <tr>
+            <th scope="row">Static JSON Snapshots</th>
+            <td>
+              <label>
+                <input type="checkbox" name="<?php echo esc_attr(self::OPTION_STATIC_SNAPSHOTS); ?>" value="1" <?php checked($static_snapshots); ?> />
+                Write static JSON snapshots on every publish (performance / high-traffic)
+              </label>
+              <p class="description">
+                When enabled, each save writes flat JSON files to
+                <code><?php echo esc_html(self::STATIC_SNAPSHOT_DIR); ?>/</code>
+                (<code><?php echo esc_html($snapshot_url); ?></code>) so the origin can serve
+                today's content without booting PHP/MySQL under load. This setting only
+                <em>generates</em> the files — serving them statically requires the rewrite rules
+                in <code>STATIC_SNAPSHOTS_DEPLOY_GUIDE.md</code>. Save a publish after enabling, then
+                the files appear.
+                <br>
+                <strong>Status:</strong>
+                <?php if ($snapshot_exists): ?>
+                  <span style="color:#15803d;">✓ directory exists</span>
+                  — <code><?php echo esc_html($snapshot_dir); ?></code>
+                <?php else: ?>
+                  <span style="color:#b91c1c;">not created yet</span>
+                  — appears after the first publish/save while this box is checked.
+                <?php endif; ?>
+              </p>
+            </td>
+          </tr>
         </table>
         <?php submit_button(); ?>
+      </form>
+
+      <hr>
+      <h2>Regenerate static snapshots</h2>
+      <p class="description" style="max-width:42em;">
+        Rebuilds every date's JSON snapshot now and (re)writes the compression
+        <code>.htaccess</code> into <code><?php echo esc_html(self::STATIC_SNAPSHOT_DIR); ?>/</code>.
+        Use this after enabling snapshots, after a plugin update, or to backfill
+        older dates — without having to re-save each edition. Also turns the
+        feature on.
+      </p>
+      <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+        <input type="hidden" name="action" value="dn_regenerate_snapshots" />
+        <?php wp_nonce_field('dn_regenerate_snapshots'); ?>
+        <?php submit_button('Regenerate snapshots now', 'secondary'); ?>
       </form>
     </div>
     <?php
@@ -1334,6 +1414,382 @@ googletag.cmd.push(function() {
     if (!get_option(self::OPTION_MIGRATED_V2)) {
       update_option(self::OPTION_MIGRATED_V2, true);
     }
+
+    // ── Static snapshot regeneration (feature-flagged, best-effort) ──────────
+    // Keep the flat-file mirror of the read endpoints in sync after every write
+    // so the origin can serve today's content as a static file under load.
+    // No-op unless the operator enabled the flag; never throws.
+    $this->maybe_regenerate_static_snapshots(
+      ($only_date !== null && preg_match('/^\d{4}-\d{2}-\d{2}$/', $only_date)) ? $only_date : null,
+      $dataVersion
+    );
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  STATIC JSON SNAPSHOTS  (feature-flagged; additive; serve-side wired by ops)
+  // ══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Absolute path to the snapshot directory (wp-content/dn-static), or '' when
+   * the base uploads/content dir is not writable. Creates the directory on first
+   * use. wp-content is web-served, so files written here are reachable at
+   *   {home_url}/wp-content/dn-static/...
+   */
+  private function static_snapshot_path(string $relative = ''): string {
+    $base = trailingslashit(WP_CONTENT_DIR) . self::STATIC_SNAPSHOT_DIR;
+    if (!is_dir($base)) {
+      // @-suppressed: directory creation is best-effort; failure disables the
+      // feature silently rather than interrupting the save.
+      if (!@wp_mkdir_p($base)) return '';
+    }
+    // Ensure the per-directory .htaccess exists so the snapshots are served
+    // compressed (gzip/brotli) and with revalidation. This is the single
+    // biggest speed win: the edition JSON is large (hundreds of KB of article
+    // HTML) and is otherwise served uncompressed because wp-content is governed
+    // by WordPress's .htaccess, which doesn't compress application/json.
+    // Idempotent: written once, when missing.
+    $ht   = trailingslashit($base) . '.htaccess';
+    $want = $this->static_snapshot_htaccess();
+    // Write (or refresh) the .htaccess whenever its content differs from the
+    // current desired version — so a plugin update propagates new rules without
+    // a manual delete. Cheap: the file is tiny and regeneration is infrequent.
+    if (!is_file($ht) || @file_get_contents($ht) !== $want) {
+      @file_put_contents($ht, $want);
+    }
+    return $relative === '' ? $base : trailingslashit($base) . ltrim($relative, '/');
+  }
+
+  /**
+   * Fires when the static-snapshots option changes. When it is turned OFF, the
+   * existing snapshot files would otherwise freeze and be served stale by the
+   * Angular app's static-first edition reads — so we delete them, which makes
+   * those reads 404 and transparently fall back to the live REST endpoint.
+   *
+   * @param mixed $old_value Previous option value (unused).
+   * @param mixed $new_value New option value.
+   */
+  public function on_static_snapshots_toggled($old_value, $new_value): void {
+    if (!$new_value) {
+      $this->delete_static_snapshots();
+    }
+  }
+
+  /**
+   * Recursively delete the wp-content/dn-static directory. Best-effort; never
+   * throws. Used when the feature is disabled.
+   */
+  private function delete_static_snapshots(): void {
+    try {
+      $base = trailingslashit(WP_CONTENT_DIR) . self::STATIC_SNAPSHOT_DIR;
+      if (!is_dir($base)) {
+        return;
+      }
+      $items = new \RecursiveIteratorIterator(
+        new \RecursiveDirectoryIterator($base, \FilesystemIterator::SKIP_DOTS),
+        \RecursiveIteratorIterator::CHILD_FIRST
+      );
+      foreach ($items as $item) {
+        if ($item->isDir()) {
+          @rmdir($item->getRealPath());
+        } else {
+          @unlink($item->getRealPath());
+        }
+      }
+      @rmdir($base);
+    } catch (\Throwable $e) {
+      error_log('[DigitalNewspaper] delete_static_snapshots failed: ' . $e->getMessage());
+    }
+  }
+
+  /**
+   * Contents of the auto-generated wp-content/dn-static/.htaccess.
+   *
+   *  - Serves pre-compressed `.json.br` / `.json.gz` siblings by content
+   *    negotiation (≈7× smaller transfer for the large edition payloads). This
+   *    works on LiteSpeed, which does not gzip application/json on the fly and
+   *    ignores mod_deflate/mod_brotli filter directives.
+   *  - `Cache-Control: no-cache, must-revalidate` so browsers revalidate via the
+   *    file's Last-Modified/ETag (the server answers 304 when the snapshot is
+   *    unchanged — fast — and serves fresh bytes after a publish).
+   */
+  private function static_snapshot_htaccess(): string {
+    return <<<HTACCESS
+# Auto-generated by the Digital Newspaper plugin. Do not edit by hand —
+# it is refreshed automatically. Serves PRE-COMPRESSED snapshots so today's
+# edition transfers ~7x smaller and repeat loads get a fast 304.
+#
+# Why pre-compression? On LiteSpeed (and some Apache setups) application/json
+# is not gzip/brotli-compressed on the fly, and mod_deflate/mod_brotli filter
+# directives are ignored. The plugin writes <file>.json.br and <file>.json.gz
+# next to each <file>.json; the rules below serve the right one by negotiation.
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  # Prefer brotli when the client accepts it and a .br sibling exists.
+  RewriteCond %{HTTP:Accept-Encoding} br
+  RewriteCond %{REQUEST_FILENAME}.br -f
+  RewriteRule ^(.+\.json)$ \$1.br [L]
+  # Otherwise gzip.
+  RewriteCond %{HTTP:Accept-Encoding} gzip
+  RewriteCond %{REQUEST_FILENAME}.gz -f
+  RewriteRule ^(.+\.json)$ \$1.gz [L]
+</IfModule>
+
+<IfModule mod_headers.c>
+  # Always revalidate (cheap 304s via Last-Modified) — never serve stale.
+  Header set Cache-Control "no-cache, must-revalidate"
+  Header append Vary Accept-Encoding
+
+  # Tag the pre-compressed variants with the correct encoding + JSON type so
+  # the browser transparently decompresses and parses them.
+  <FilesMatch "\.json\.br$">
+    Header set Content-Encoding br
+    Header set Content-Type "application/json; charset=UTF-8"
+  </FilesMatch>
+  <FilesMatch "\.json\.gz$">
+    Header set Content-Encoding gzip
+    Header set Content-Type "application/json; charset=UTF-8"
+  </FilesMatch>
+</IfModule>
+
+# Safety: never let the server try to (re)compress the already-compressed files.
+<IfModule mod_setenvif.c>
+  SetEnvIfNoCase Request_URI "\.json\.(br|gz)$" no-gzip dont-vary
+</IfModule>
+HTACCESS;
+  }
+
+  /**
+   * Atomically write $contents to $absPath (temp file + rename) so a concurrent
+   * reader never observes a half-written file. Returns true on success.
+   */
+  private function atomic_write(string $absPath, string $contents): bool {
+    $dir = dirname($absPath);
+    if (!is_dir($dir) && !@wp_mkdir_p($dir)) return false;
+    $tmp = $absPath . '.' . wp_generate_password(8, false) . '.tmp';
+    if (@file_put_contents($tmp, $contents, LOCK_EX) === false) {
+      @unlink($tmp);
+      return false;
+    }
+    if (!@rename($tmp, $absPath)) {
+      @unlink($tmp);
+      return false;
+    }
+
+    // For JSON snapshots, also write pre-compressed siblings (.gz always; .br
+    // when the brotli extension is present). The .htaccess serves these by
+    // content negotiation so LiteSpeed — which won't gzip application/json on
+    // the fly — still delivers a small payload. Best-effort; failures are
+    // ignored (the plain .json remains the fallback).
+    if (substr($absPath, -5) === '.json') {
+      if (function_exists('gzencode')) {
+        $gz = @gzencode($contents, 6);
+        if ($gz !== false) { $this->atomic_write($absPath . '.gz', $gz); }
+      }
+      if (function_exists('brotli_compress')) {
+        $br = @brotli_compress($contents, 5);
+        if ($br !== false) { $this->atomic_write($absPath . '.br', $br); }
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Regenerate the static JSON snapshots after a write. Entirely best-effort and
+   * gated behind OPTION_STATIC_SNAPSHOTS so it is a complete no-op in production
+   * until an operator opts in. Wrapped in try/catch so snapshot I/O can never
+   * break a save.
+   *
+   * Writes (all under wp-content/dn-static/):
+   *   settings.json           — { settings, dataVersion }
+   *   dates.json              — { dates, latestDate }
+   *   version.json            — { dataVersion }
+   *   editions/<date>.json    — { date, editions, dataVersion }  (changed date,
+   *                             or all dates on a full-blob write)
+   *   initial-state.json      — inlining payload for the latest/today edition
+   *
+   * @param string|null $only_date  When set, only this date's edition file is
+   *                                 rewritten (scoped atomic write). Null → all.
+   */
+  private function maybe_regenerate_static_snapshots(?string $only_date, $dataVersion): void {
+    if (!get_option(self::OPTION_STATIC_SNAPSHOTS, false)) return;
+    $this->regenerate_static_snapshots($only_date, $dataVersion);
+  }
+
+  /**
+   * Force-regenerate the static snapshots regardless of the feature flag.
+   * Called by the "Regenerate snapshots now" admin button and by the
+   * flag-gated maybe_regenerate_static_snapshots() wrapper. Best-effort:
+   * wrapped in try/catch so it can never break the caller.
+   *
+   * @return int Number of edition date-files written (0 on failure/no data).
+   */
+  private function regenerate_static_snapshots(?string $only_date, $dataVersion): int {
+    $written = 0;
+    try {
+      $base = $this->static_snapshot_path();
+      if ($base === '') return 0;
+
+      // settings.json
+      $granularSettings = $this->get_settings_granular();
+      $this->atomic_write(
+        $this->static_snapshot_path('settings.json'),
+        wp_json_encode([
+          'settings'    => $granularSettings['settings'],
+          'dataVersion' => $granularSettings['dataVersion'],
+        ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
+      );
+
+      // dates.json
+      $granularDates = $this->get_dates_granular();
+      $dates = array_values($granularDates['dates']);
+      $this->atomic_write(
+        $this->static_snapshot_path('dates.json'),
+        wp_json_encode([
+          'dates'      => $dates,
+          'latestDate' => $granularDates['latestDate'],
+        ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
+      );
+
+      // version.json
+      $this->atomic_write(
+        $this->static_snapshot_path('version.json'),
+        wp_json_encode(['dataVersion' => $dataVersion], JSON_UNESCAPED_SLASHES)
+      );
+
+      // editions/<date>.json — scoped (one date) or all dates on a full write.
+      $datesToWrite = ($only_date !== null) ? [$only_date] : $dates;
+      foreach ($datesToWrite as $d) {
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) $d)) continue;
+        $granularEd = $this->get_edition_for_date_granular($d);
+        if ($this->atomic_write(
+          $this->static_snapshot_path('editions/' . $d . '.json'),
+          wp_json_encode([
+            'date'        => $d,
+            'editions'    => $granularEd['editions'],
+            'dataVersion' => $granularEd['dataVersion'],
+          ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
+        )) {
+          $written++;
+        }
+
+        // Light first-paint variant: identical structure, but the heavy section
+        // `content` HTML is kept only for the FIRST page of each edition and
+        // stripped from the rest. The Angular app loads this first for an
+        // instant render, then upgrades to the full payload in the background.
+        // This shrinks the initial transfer dramatically even when the host
+        // does not compress JSON.
+        $this->atomic_write(
+          $this->static_snapshot_path('editions/' . $d . '.light.json'),
+          wp_json_encode([
+            'date'        => $d,
+            'editions'    => $this->build_light_editions($granularEd['editions']),
+            'dataVersion' => $granularEd['dataVersion'],
+            'light'       => true,
+          ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
+        );
+      }
+
+      // initial-state.json — the inlining payload (latest published date).
+      $latest = $granularDates['latestDate'];
+      if (is_string($latest) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $latest)) {
+        $latestEd = $this->get_edition_for_date_granular($latest);
+        $this->atomic_write(
+          $this->static_snapshot_path('initial-state.json'),
+          wp_json_encode([
+            'settings'    => $granularSettings['settings'],
+            'dates'       => $dates,
+            'editions'    => $latestEd['editions'],
+            'dataVersion' => $latestEd['dataVersion'],
+            'generatedAt' => gmdate('c'),
+          ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
+        );
+      }
+    } catch (\Throwable $e) {
+      // Snapshots are an optimisation, never a correctness requirement.
+      error_log('[DigitalNewspaper] static snapshot regeneration failed: ' . $e->getMessage());
+    }
+    return $written;
+  }
+
+  /**
+   * Build the "light" variant of an editions array for first-paint: keep the
+   * section `content` of the page the viewer displays first, and blank out
+   * `content` on every other page. All structure (page list, thumbnails, images,
+   * section coordinates/titles/links) is preserved so the whole viewer renders
+   * correctly; only deferred article bodies are empty until the full payload
+   * arrives.
+   *
+   * IMPORTANT: the "first page" is the one with the LOWEST page id (page number),
+   * NOT the first element of the array. The viewer sorts pages by id ascending
+   * and shows the lowest-id page by default, and editors may upload pages out of
+   * order — so we must match the viewer's ordering, not the upload order.
+   */
+  private function build_light_editions(array $editions): array {
+    foreach ($editions as $ei => $edition) {
+      if (empty($edition['pages']) || !is_array($edition['pages'])) {
+        continue;
+      }
+
+      // Find the array key of the page with the lowest id (the viewer's first
+      // page). Pages without a numeric id sort last (PHP_INT_MAX).
+      $firstPageKey = null;
+      $minId        = null;
+      foreach ($edition['pages'] as $pk => $pg) {
+        $pid = isset($pg['id']) && is_numeric($pg['id']) ? (int) $pg['id'] : PHP_INT_MAX;
+        if ($minId === null || $pid < $minId) {
+          $minId        = $pid;
+          $firstPageKey = $pk;
+        }
+      }
+
+      foreach ($edition['pages'] as $pi => $page) {
+        // Keep the viewer's first page (lowest id) fully intact.
+        if ($pi === $firstPageKey) {
+          continue;
+        }
+        if (empty($page['sections']) || !is_array($page['sections'])) {
+          continue;
+        }
+        foreach ($page['sections'] as $si => $section) {
+          if (array_key_exists('content', $section)) {
+            $editions[$ei]['pages'][$pi]['sections'][$si]['content'] = '';
+          }
+        }
+      }
+    }
+    return $editions;
+  }
+
+  /**
+   * admin-post handler for the "Regenerate snapshots now" button on the
+   * settings page. Forces a full regenerate (writing the compression .htaccess
+   * and every date's JSON) and enables the feature flag so future content saves
+   * keep the snapshots fresh. Redirects back to the settings page with a notice.
+   */
+  public function regenerate_snapshots_action(): void {
+    if (!current_user_can('manage_options')) {
+      wp_die('Insufficient permissions.');
+    }
+    check_admin_referer('dn_regenerate_snapshots');
+
+    // Turn the feature on so subsequent content saves keep regenerating.
+    update_option(self::OPTION_STATIC_SNAPSHOTS, true);
+
+    // Current dataVersion from the index (fallback to a fresh stamp).
+    $index       = get_option(self::OPTION_INDEX);
+    $dataVersion = (is_array($index) && isset($index['dataVersion']))
+      ? $index['dataVersion']
+      : (float) microtime(true);
+
+    $count = $this->regenerate_static_snapshots(null, $dataVersion);
+
+    $redirect = add_query_arg(
+      ['page' => 'digital-newspaper-settings', 'dn_snap' => $count],
+      admin_url('options-general.php')
+    );
+    wp_safe_redirect($redirect);
+    exit;
   }
 
   /**
@@ -3626,6 +4082,10 @@ HTML;
       'newDataVersion' => (string) $new_version,
     ]);
 
+    // Refresh static snapshots so settings.json / initial-state.json reflect the
+    // new settings (feature-flagged, best-effort, never throws).
+    $this->maybe_regenerate_static_snapshots(null, $new_version);
+
     return rest_ensure_response([
       'success'        => true,
       'newDataVersion' => $new_version,
@@ -4507,15 +4967,24 @@ HTML;
       $existingDates = is_array($existingIndex['dates'] ?? null) ? $existingIndex['dates'] : [];
       $unionDates    = array_values(array_unique(array_merge($existingDates, $writtenDates)));
       rsort($unionDates);
+      $rebuildVersion = (float) microtime(true);
       update_option(self::OPTION_INDEX, [
         'dates'       => $unionDates,
-        'dataVersion' => (float) microtime(true),
+        'dataVersion' => $rebuildVersion,
       ], false);
 
       // STEP 5 — Mark migration done so future loads use the granular path.
       if (!get_option(self::OPTION_MIGRATED_V2)) {
         update_option(self::OPTION_MIGRATED_V2, true);
       }
+
+      // STEP 5b — Refresh the static JSON snapshots so static-first readers
+      // never serve content that predates the rebuild. This is the one edit path
+      // that writes edition options directly (to avoid OOM) instead of going
+      // through write_per_date_storage(), so the snapshot hook must be invoked
+      // explicitly here. Best-effort and flag-gated; the data is already
+      // persisted above, so a snapshot failure can never lose content.
+      $this->maybe_regenerate_static_snapshots(null, $rebuildVersion);
 
       $this->log_auth_user_action('rebuild_from_sections', 'Rebuilt data from section posts (incremental)', [
         'untrashed'    => (string) $untrashed,

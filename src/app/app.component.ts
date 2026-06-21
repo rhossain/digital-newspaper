@@ -6,6 +6,7 @@ import { ToasterComponent } from './toaster/toaster.component';
 import { LoaderComponent } from './components/loader/loader.component';
 import { UpdateBannerComponent } from './components/update-banner/update-banner.component';
 import { NewspaperDataService } from './services/newspaper-data.service';
+import { WebVitalsService } from './services/web-vitals.service';
 import { filter, Subscription } from 'rxjs';
 
 @Component({
@@ -38,9 +39,15 @@ export class AppComponent implements OnInit, OnDestroy {
     @Inject(DOCUMENT) private document: Document,
     @Inject(PLATFORM_ID) private platformId: object,
     private cdr: ChangeDetectorRef,
+    private webVitals: WebVitalsService,
   ) {}
 
   ngOnInit(): void {
+    // Begin dependency-free Core Web Vitals collection (browser-only, no-op on
+    // server). Metrics are exposed on window.__dnWebVitals and logged on tab
+    // hide; off-device beaconing stays disabled unless explicitly configured.
+    this.webVitals.start();
+
     this._dataSub = this.dataService.data$.subscribe(() => {
       this.injectHeadScripts();
     });

@@ -10,6 +10,7 @@ import { clearHttpCache, evictEditionCache, evictSettingsCache, markForBrowserCa
 import { SettingsService } from './settings.service';
 import { DateIndexService } from './date-index.service';
 import { EditionCacheService } from './edition-cache.service';
+import { BootstrapStateService } from './bootstrap-state.service';
 
 export interface NewsSection {
   id: string;
@@ -120,6 +121,13 @@ export interface NewspaperData {
    * to detect concurrent-edit conflicts (optimistic concurrency control).
    */
   dataVersion?: number;
+  /**
+   * True when this snapshot was loaded from the "light" first-paint payload
+   * (article bodies stripped from non-first pages). The data service upgrades it
+   * to the full payload in the background; consumers can ignore this flag.
+   * @internal
+   */
+  _partial?: boolean;
 }
 
 interface WpMediaItem {
@@ -327,8 +335,28 @@ export class NewspaperDataService {
     private settingsService: SettingsService,
     private dateIndexService: DateIndexService,
     private editionCacheService: EditionCacheService,
+    private bootstrapState: BootstrapStateService,
   ) {
-    const cachedSettings = NewspaperDataService._readCachedSettings();
+    // ── Publish-time inlined bootstrap state (instant first paint, no SSR) ────
+    // When the WordPress plugin has injected today's content into index.html as
+    // <script id="dn-initial-state">, seed the synchronous caches BEFORE the
+    // first network request so loadDataFromGranular()'s speculative edition
+    // fetch resolves from memory (layer 1) with zero round-trip. Entirely
+    // additive: when the blob is absent (the default), read() returns null and
+    // every downstream path runs exactly as before. The version poll still
+    // fetches the current dataVersion and corrects any staleness.
+    const inlineState = this.bootstrapState.read();
+    if (inlineState) {
+      if (inlineState.settings) {
+        this.settingsService.apply(inlineState.settings);
+      }
+      if (inlineState.editions?.length) {
+        this.dateIndexService.syncFromEditions(inlineState.editions);
+        this.editionCacheService.seedFromLoadedData(inlineState.editions);
+      }
+    }
+
+    const cachedSettings = inlineState?.settings ?? NewspaperDataService._readCachedSettings();
     this.dataSubject = new BehaviorSubject<NewspaperData>({
       settings: cachedSettings || {
         defaultDateMode: 'current',
@@ -420,6 +448,16 @@ export class NewspaperDataService {
     return this.hydrateDateIfMissing(date);
   }
 
+  /**
+   * Warm a date's editions from the static snapshot during browser idle time.
+   * Static-only and fire-and-forget — never triggers a WordPress/PHP request,
+   * so a missing snapshot costs nothing. Used for "yesterday's paper" prefetch.
+   */
+  prefetchDateInBackground(date: string): void {
+    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
+    this.editionCacheService.prefetchStatic(date);
+  }
+
   hydrateDateIfMissing(date: string): Observable<void> {
     if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       return of(void 0);
@@ -480,8 +518,12 @@ export class NewspaperDataService {
    * 3. If the legacy call also fails after 2 retries, serve the bundled
    *    empty asset so the UI shows a clear empty state rather than a crash.
    */
-  loadData(): Observable<NewspaperData> {
-    return this.loadDataFromGranular().pipe(
+  loadData(opts: { lightFirst?: boolean } = {}): Observable<NewspaperData> {
+    // lightFirst is OPT-IN and used ONLY by the public, read-only viewer. The
+    // admin editor must never receive the content-stripped "light" payload — a
+    // save while that data is loaded would persist empty article bodies and
+    // destroy content. All admin callers use the default (full) load.
+    return this.loadDataFromGranular(opts.lightFirst === true).pipe(
       catchError((granularErr) => {
         console.warn(
           '[NewspaperDataService] Granular endpoints failed — falling back to legacy /data blob. Reason:',
@@ -497,10 +539,80 @@ export class NewspaperDataService {
         }
         if (data.editions?.length) {
           this.dateIndexService.syncFromEditions(data.editions);
-          this.editionCacheService.seedFromLoadedData(data.editions);
+          // Do NOT seed the shared cache with light (partial) editions — that
+          // would mask the full article content on later reads. The background
+          // upgrade below fetches and seeds the full payload instead.
+          if (!data._partial) {
+            this.editionCacheService.seedFromLoadedData(data.editions);
+          }
+        }
+        // Light first-paint payload → upgrade to the full payload in the
+        // background. The viewer re-renders automatically when the upgraded
+        // data emits through data$ (same path the version-poll reload uses).
+        if (data._partial) {
+          this.upgradePartialData(data);
         }
       })
     );
+  }
+
+  /**
+   * Replace a light (first-paint) payload with the full payload for its dates.
+   * Fetches the full edition(s) through the normal cache path (which seeds the
+   * cache), merges them into the current data, and emits — so article bodies
+   * that were stripped from the light payload become available. Best-effort and
+   * browser-only; on failure the light payload simply remains (first page still
+   * works, other pages' article bodies load on demand if the reader navigates).
+   */
+  private upgradePartialData(partial: NewspaperData): void {
+    if (!this.isBrowser) return;
+    const dates = [...new Set((partial.editions ?? []).map(e => e.date).filter(Boolean))];
+    if (dates.length === 0) return;
+
+    forkJoin(
+      dates.reduce((acc, date) => {
+        acc[date] = this.editionCacheService.getEditionsForDate(date);
+        return acc;
+      }, {} as Record<string, Observable<NewspaperEdition[]>>)
+    )
+      .pipe(
+        timeout(20000),
+        catchError(() => of(null)),
+      )
+      .subscribe(byDate => {
+        if (!byDate) return;
+        const full: NewspaperEdition[] = Object.values(byDate).flat();
+        if (full.length === 0) return;
+        const current = this.dataSubject.value;
+        const others = current.editions.filter(e => !dates.includes(e.date));
+        const merged: NewspaperData = {
+          ...current,
+          editions: [...others, ...full],
+          _partial: false,
+        };
+        this.dataSubject.next(merged);
+        this.dateIndexService.syncFromEditions(full);
+        this.editionCacheService.seedFromLoadedData(full);
+      });
+  }
+
+  /**
+   * Return the FULL editions for a date (article bodies included), via the
+   * normal cache path. Used when a reader opens an article whose body was
+   * stripped by the light first-paint payload (e.g. a deep-linked article on a
+   * non-first page, before the background upgrade has finished). After the
+   * background upgrade has run this is an instant in-memory hit.
+   *
+   * Deliberately does NOT mutate the data subject — the caller patches only the
+   * open article's bound fields — so calling it from inside an event handler
+   * can't re-enter the render path. The subject is upgraded separately by
+   * upgradePartialData(). Never throws.
+   */
+  getFullEditionsForDate(date: string): Observable<NewspaperEdition[]> {
+    if (!date) return of([] as NewspaperEdition[]);
+    return this.editionCacheService
+      .getEditionsForDate(date)
+      .pipe(catchError(() => of([] as NewspaperEdition[])));
   }
 
   /**
@@ -528,10 +640,19 @@ export class NewspaperDataService {
    *
    * Throws on any error so `loadData()` can fall back to the legacy path.
    */
-  private loadDataFromGranular(): Observable<NewspaperData> {
+  private loadDataFromGranular(lightFirst = false): Observable<NewspaperData> {
     // Determine the expected initial date from synchronous caches so we can
     // start the edition fetch in the same parallel batch as settings/dates/version.
     const speculativeDate = this.getDefaultDate();
+
+    // Light first-paint payload ONLY when the caller (public viewer) opts in.
+    // The default path fetches the FULL edition so the admin editor is always
+    // safe to save. Both shapes resolve to { editions, light }.
+    const speculative$: Observable<{ editions: NewspaperEdition[]; light: boolean }> =
+      lightFirst
+        ? this.editionCacheService.getEditionsForDateLight(speculativeDate)
+        : this.editionCacheService.getEditionsForDate(speculativeDate)
+            .pipe(map(editions => ({ editions, light: false })));
 
     // Single parallel batch: settings + dates index + version + edition for
     // the expected initial date.  The version endpoint is tiny (~30 B) and
@@ -544,12 +665,14 @@ export class NewspaperDataService {
       version:             this.http
                              .get<{ dataVersion: number }>(this.versionUrl)
                              .pipe(catchError(() => of({ dataVersion: 0 }))),
-      speculativeEditions: this.editionCacheService.getEditionsForDate(speculativeDate)
-                             .pipe(catchError(() => of([] as NewspaperEdition[]))),
+      speculativeEditions: speculative$
+                             .pipe(catchError(() => of({ editions: [] as NewspaperEdition[], light: false }))),
     }).pipe(
       switchMap(({ settings, dates, version, speculativeEditions }) => {
         const today      = this.getTodayDate();
         const latestDate = dates[0] ?? today;
+        const specEditions = speculativeEditions.editions;
+        const specLight    = speculativeEditions.light;
 
         // Canonical set of dates needed for the initial view.
         const datesToLoad = [...new Set([latestDate, today])].filter(Boolean);
@@ -568,7 +691,7 @@ export class NewspaperDataService {
         // fetch actually returned data.  An empty result means the fetch failed or
         // found nothing — in that case the date must be retried via the remaining-
         // dates path below, not silently dropped.
-        const speculativeCovered = speculativeEditions.length > 0;
+        const speculativeCovered = specEditions.length > 0;
         const remainingDates = datesToLoad.filter(
           d => !(speculativeCovered && d === speculativeDate)
         );
@@ -577,7 +700,15 @@ export class NewspaperDataService {
           // speculativeCovered must be true here (if it were false, speculativeDate
           // would still be in remainingDates, so length would be > 0).
           // Speculative fetch covered everything — no second round-trip needed.
-          return of({ settings, editions: speculativeEditions, dataVersion: version.dataVersion ?? 0 } as NewspaperData);
+          // `_partial` is set ONLY for a light payload (so loadData() upgrades it).
+          // Full-path data omits the key entirely, keeping the exact original
+          // shape the admin/save path relies on.
+          return of({
+            settings,
+            editions: specEditions,
+            dataVersion: version.dataVersion ?? 0,
+            ...(specLight ? { _partial: true } : {}),
+          } as NewspaperData);
         }
 
         // Fetch the dates not covered by the speculative batch.
@@ -589,7 +720,7 @@ export class NewspaperDataService {
         ).pipe(
           map((editionsByDate): NewspaperData => {
             const editions: NewspaperEdition[] = [
-              ...speculativeEditions,
+              ...specEditions,
               ...Object.values(editionsByDate).flat(),
             ];
             // If all edition options came back empty the granular options were
@@ -598,7 +729,15 @@ export class NewspaperDataService {
             if (editions.length === 0) {
               throw new Error('Granular edition options are empty — falling back to legacy blob');
             }
-            return { settings, editions, dataVersion: version.dataVersion ?? 0 };
+            // _partial only when the speculative (light) date contributes
+            // stripped content; the upgrade then refetches the full payload.
+            // Full-path data omits the key to preserve the original shape.
+            return {
+              settings,
+              editions,
+              dataVersion: version.dataVersion ?? 0,
+              ...(specLight ? { _partial: true } : {}),
+            };
           })
         );
       }),
@@ -735,6 +874,11 @@ export class NewspaperDataService {
   private cacheEmergencyDraft(data: NewspaperData): void {
     if (!this.isBrowser) return; // SSR — no localStorage
     if (this.dataRecoveredFromMediaLibrary) return;
+    // Never persist a light (partial) payload — its article bodies are stripped,
+    // so restoring it later (or saving from it) would lose content. Defensive:
+    // public readers (the only ones with partial data) are already excluded by
+    // the auth-token check below.
+    if (data._partial) return;
     if (!this.hasAnyPages(data)) return;
     // Only write emergency drafts in authenticated admin sessions.
     // Public readers never edit content, so serialising their full JSON

@@ -12,13 +12,14 @@ import { DatePickerComponent } from './components/date-picker/date-picker.compon
 import { SectionOverlayComponent } from './components/section-overlay/section-overlay.component';
 import { ArticleModalComponent } from './components/article-modal/article-modal.component';
 import { AdSlotComponent } from './components/ad-slot/ad-slot.component';
+import { ShareButtonsComponent } from './shared/share-buttons/share-buttons.component';
 import { AdService } from './services/ad.service';
 import { Subscription } from 'rxjs';
 
 @Component({
   selector: 'app-newspaper',
   standalone: true,
-  imports: [FormsModule, TranslatePipe, LocaleDatePipe, DatePickerComponent, SectionOverlayComponent, ArticleModalComponent, AdSlotComponent],
+  imports: [FormsModule, TranslatePipe, LocaleDatePipe, DatePickerComponent, SectionOverlayComponent, ArticleModalComponent, AdSlotComponent, ShareButtonsComponent],
   templateUrl: './newspaper.component.html',
   styleUrls: ['./newspaper.component.css'],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -46,6 +47,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   croppedSectionImage: string | null = null;
   showContentModal = false;
   showImageModal = false;
+  showShareDropdown = false;
   linkedSections: NewsSection[] = [];
   /** Resolved primary section ID for the current section's link group. Set by loadLinkedSections(). */
   private linkedSectionPrimaryId: string | undefined;
@@ -320,7 +322,10 @@ export class NewspaperComponent implements OnInit, OnDestroy {
 
   loadNewspaperData() {
     this.isLoading = true;
-    this.dataService.loadData().subscribe({
+    // Public read-only viewer: opt into the light first-paint payload (fast
+    // render, then background upgrade to full). The admin editor never passes
+    // this, so it always loads the full, save-safe payload.
+    this.dataService.loadData({ lightFirst: true }).subscribe({
       next: () => {
         // Filter future dates: public readers should never see editions whose
         // publication date has not yet been reached.
@@ -348,6 +353,12 @@ export class NewspaperComponent implements OnInit, OnDestroy {
         this.initialLoadComplete = true;
         this.isLoading = false;
         this.cdr.detectChanges();
+
+        // Warm the previous day's edition during browser idle time. Readers
+        // frequently navigate to "yesterday's paper"; pre-hydrating it through
+        // the 4-layer cache makes that navigation instant. Best-effort only:
+        // guarded, cancellable, never blocks the current view.
+        this.prefetchPreviousDateOnIdle();
       },
       error: (error) => {
         console.error('Error loading newspaper data:', error);
@@ -358,6 +369,36 @@ export class NewspaperComponent implements OnInit, OnDestroy {
         this.cdr.detectChanges();
       }
     });
+  }
+
+  /**
+   * Pre-warm the previous available date's edition during browser idle time.
+   *
+   * Best-effort and fully guarded: runs only in the browser, only when
+   * requestIdleCallback exists, swallows all errors, and routes through the
+   * existing 4-layer cache via hydrateDateIfMissing() so it never duplicates
+   * a fetch already covered by cache. Has no effect on the current view.
+   */
+  private prefetchPreviousDateOnIdle(): void {
+    if (!this.isBrowser) return;
+    const ric = (window as unknown as {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+    }).requestIdleCallback;
+    if (typeof ric !== 'function') return;
+
+    ric(() => {
+      try {
+        const dates = this.availableDates;
+        const idx = dates.indexOf(this.selectedDate);
+        // availableDates is sorted newest-first, so the NEXT index is the
+        // previous (older) day — the common "yesterday's paper" navigation.
+        const previousDate = idx >= 0 ? dates[idx + 1] : undefined;
+        if (!previousDate) return;
+        // Static-only warm: hits the fast snapshot file or does nothing.
+        // Never falls back to PHP, so an un-backfilled date costs no time.
+        this.dataService.prefetchDateInBackground(previousDate);
+      } catch { /* never let a prefetch break the view */ }
+    }, { timeout: 4000 });
   }
 
   /** Pull the latest global settings from the data service into component state. */
@@ -886,12 +927,64 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     }
   }
 
+  /**
+   * On-demand article-body hydration for the light first-paint payload.
+   *
+   * The light payload keeps article `content` only for the first page; other
+   * pages' bodies are blank until the background upgrade completes. If the
+   * reader opens such an article before then (most notably via a deep link),
+   * this fetches the full edition and patches the bodies into the bound fields
+   * (`selectedSection`, `linkedSections`, `modalLinkedSections`) so the panel and
+   * modal render immediately. No-op when the body is already present (the common
+   * case) and fully guarded — on failure the existing content simply remains.
+   */
+  private ensureSelectedSectionContent(section: NewsSection): void {
+    if (!this.isBrowser) return;
+    if (section.content && section.content.trim().length > 0) return; // already hydrated
+
+    const capturedId = section.id;
+    this.dataService.getFullEditionsForDate(this.selectedDate).subscribe(fullEditions => {
+      // Bail if the fetch was empty or the reader has moved to another section.
+      if (!fullEditions || fullEditions.length === 0) return;
+      const current = this.selectedSection;
+      if (!current || current.id !== capturedId) return;
+
+      // id → content across the whole edition (linked sections may be on other pages).
+      const contentById = new Map<string, string>();
+      for (const ed of fullEditions) {
+        for (const page of ed.pages ?? []) {
+          for (const s of page.sections ?? []) {
+            contentById.set(s.id, s.content ?? '');
+          }
+        }
+      }
+      // Nothing to add (e.g. snapshot genuinely has empty content) → leave as-is.
+      if (!contentById.has(capturedId)) return;
+
+      this.selectedSection = { ...current, content: contentById.get(capturedId)! };
+      this.linkedSections = (this.linkedSections ?? []).map(s =>
+        contentById.has(s.id) ? { ...s, content: contentById.get(s.id)! } : s,
+      );
+      this.modalLinkedSections = (this.modalLinkedSections ?? []).map(s =>
+        contentById.has(s.id) ? { ...s, content: contentById.get(s.id)! } : s,
+      );
+      this.cdr.detectChanges();
+    });
+  }
+
   selectSection(section: NewsSection) {
     this.selectedSection = section;
     this.sectionImageError = false;
-    
+
     // Load linked sections
     this.loadLinkedSections(section);
+
+    // Light first-paint payload strips article bodies from non-first pages. If
+    // this section's body is empty, fetch the full edition on demand and patch
+    // the bodies into the bound fields (covers a deep-linked article opened
+    // before the background upgrade finishes). No-op when content is present.
+    // Runs AFTER loadLinkedSections so it can patch the freshly-built lists.
+    this.ensureSelectedSectionContent(section);
     
     // Use imageUrl if available, otherwise crop from main image
     if (section.imageUrl) {
@@ -1029,6 +1122,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     this.croppedSectionImage = null;
     this.showContentModal = false;
     this.showImageModal = false;
+    this.showShareDropdown = false;
     this.linkedSections = [];
     this.sectionImageLoading = false;
     this.pendingMobileModal = false;
@@ -1042,6 +1136,22 @@ export class NewspaperComponent implements OnInit, OnDestroy {
 
   openContentModal() {
     this.showContentModal = true;
+  }
+
+  toggleShareDropdown(event: Event): void {
+    event.stopPropagation();
+    this.showShareDropdown = !this.showShareDropdown;
+    if (this.showShareDropdown) {
+      // Close on next outside click
+      setTimeout(() => {
+        const closeHandler = () => {
+          this.showShareDropdown = false;
+          this.cdr.markForCheck();
+          this.document.removeEventListener('click', closeHandler);
+        };
+        this.document.addEventListener('click', closeHandler);
+      });
+    }
   }
 
   closeContentModal() {

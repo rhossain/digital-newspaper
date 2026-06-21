@@ -734,6 +734,48 @@
               <span>{{ 'viewer.readArticle' | translate }}</span>
             </button>
           }
+          <!-- Inline share buttons: visible when container is wide enough -->
+          <div class="share-inline">
+            <app-share-buttons
+              class="inline-share-buttons"
+              [section]="selectedSection"
+              [selectedDate]="selectedDate"
+              [pageSlug]="currentPage ? getPageSlug(currentPage) : ''"
+              [editionSlug]="getEditionSlug(selectedEditionNumber)"
+              [logo]="settings?.logo ?? undefined"
+              [imageUrl]="shareImageUrl || undefined"
+              [siteName]="settings?.logo?.alt || ''"
+              [showPrint]="true"
+              (printClicked)="printContent(selectedSection.content || '', selectedSection.title)">
+            </app-share-buttons>
+          </div>
+          <!-- Dropdown fallback: visible when container is too narrow -->
+          <div class="share-dropdown-wrapper">
+            <button class="share-dropdown-toggle" (click)="toggleShareDropdown($event)" [title]="ts.t('share.share')">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="18" cy="5" r="3"></circle>
+                <circle cx="6" cy="12" r="3"></circle>
+                <circle cx="18" cy="19" r="3"></circle>
+                <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
+                <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
+              </svg>
+            </button>
+            @if (showShareDropdown) {
+              <div class="share-dropdown-panel">
+                <app-share-buttons
+                  [section]="selectedSection"
+                  [selectedDate]="selectedDate"
+                  [pageSlug]="currentPage ? getPageSlug(currentPage) : ''"
+                  [editionSlug]="getEditionSlug(selectedEditionNumber)"
+                  [logo]="settings?.logo ?? undefined"
+                  [imageUrl]="shareImageUrl || undefined"
+                  [siteName]="settings?.logo?.alt || ''"
+                  [showPrint]="true"
+                  (printClicked)="printContent(selectedSection.content || '', selectedSection.title)">
+                </app-share-buttons>
+              </div>
+            }
+          </div>
         </div>
         <!-- Full Section Image -->
         @if (currentPage) {
