@@ -1662,11 +1662,17 @@ HTACCESS;
       foreach ($datesToWrite as $d) {
         if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) $d)) continue;
         $granularEd = $this->get_edition_for_date_granular($d);
+        // Attach intrinsic image dimensions (imageVariants.{width,height}) so the
+        // STATIC SNAPSHOTS carry them. When snapshots are enabled the public
+        // viewer reads these files instead of the REST endpoint, so the CLS-fix
+        // dimensions must be baked in here too (not only in the REST handler).
+        // Best-effort/cached — see dn_attach_page_dimensions().
+        $editionsWithDims = $this->dn_attach_page_dimensions($granularEd['editions']);
         if ($this->atomic_write(
           $this->static_snapshot_path('editions/' . $d . '.json'),
           wp_json_encode([
             'date'        => $d,
-            'editions'    => $granularEd['editions'],
+            'editions'    => $editionsWithDims,
             'dataVersion' => $granularEd['dataVersion'],
           ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
         )) {
@@ -1683,7 +1689,7 @@ HTACCESS;
           $this->static_snapshot_path('editions/' . $d . '.light.json'),
           wp_json_encode([
             'date'        => $d,
-            'editions'    => $this->build_light_editions($granularEd['editions']),
+            'editions'    => $this->build_light_editions($editionsWithDims),
             'dataVersion' => $granularEd['dataVersion'],
             'light'       => true,
           ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
@@ -1699,7 +1705,7 @@ HTACCESS;
           wp_json_encode([
             'settings'    => $granularSettings['settings'],
             'dates'       => $dates,
-            'editions'    => $latestEd['editions'],
+            'editions'    => $this->dn_attach_page_dimensions($latestEd['editions']),
             'dataVersion' => $latestEd['dataVersion'],
             'generatedAt' => gmdate('c'),
           ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)

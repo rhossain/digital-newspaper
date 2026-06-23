@@ -985,6 +985,17 @@ export class AdminComponent implements OnInit, OnDestroy {
 
   // ── trackBy helpers (prevent unnecessary DOM re-creation on *ngFor) ──────
   trackByPageId(_: number, page: NewspaperPage): number { return page.id; }
+
+  /**
+   * Pages sorted by ascending page id, for the admin page grids. Pages can be
+   * uploaded in any order (4, 5, 7, 1, …); the grid should always read 1, 3, 4,
+   * … like the public viewer. Returns a sorted COPY so the underlying `pages`
+   * order (and any index-based logic) is untouched. trackByPageId keeps the DOM
+   * stable across re-sorts.
+   */
+  get sortedPages(): NewspaperPage[] {
+    return [...this.pages].sort((a, b) => a.id - b.id);
+  }
   trackBySectionId(_: number, sec: NewsSection): string { return sec.id; }
   trackByEditionNum(_: number, ed: NewspaperEdition): number { return ed.edition ?? 1; }
   trackByDate(_: number, date: string): string { return date; }

@@ -414,7 +414,7 @@
                   Loading edition...
                 </div>
               }
-              @for (page of pages; track trackByPageId($index, page)) {
+              @for (page of sortedPages; track trackByPageId($index, page)) {
                 <div
                   [class.active]="selectedPage?.id === page.id"
                   (click)="selectPage(page)"
@@ -1079,7 +1079,7 @@
       <!-- ── PAGES GRID ───────────────────────────────────────── -->
       @if (vintageView === 'pages') {
         <div class="vintage-page-grid">
-          @for (page of pages; track trackByPageId($index, page)) {
+          @for (page of sortedPages; track trackByPageId($index, page)) {
             <article class="vpc-card" (click)="vintageSelectPage(page)" role="button" tabindex="0" (keydown.enter)="vintageSelectPage(page)">
               <div class="vpc-thumb">
                 @if (page.fullImage || page.thumbnail) {
@@ -2433,6 +2433,15 @@
         <div class="cropper-layout">
           <!-- Canvas -->
           <div class="cropper-canvas-wrap">
+            <!-- Loading overlay: the hi-res page image can be several MB and take
+                 a moment to fetch. Show a spinner until (load) or (error) fires
+                 (onCropperImageError also sets cropperImageLoaded = true). -->
+            @if (!cropperImageLoaded) {
+              <div class="cropper-loading" role="status" aria-live="polite">
+                <div class="cropper-spinner"></div>
+                <span>Loading full-resolution image…</span>
+              </div>
+            }
             <div class="cropper-stage"
               [style.transform]="'scale(' + cropperZoom + ')'"
               [style.transform-origin]="'top left'">

@@ -1529,8 +1529,17 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     const fullGroup: NewsSection[] = [section, ...combined];
     this.linkedSectionPrimaryId = this.resolveGroupPrimary(fullGroup);
 
-    // 5) Sort — explicit primary gets key 0 (always first); others sort by creation timestamp.
-    combined.sort((a, b) => this.getSectionSortKey(a, this.linkedSectionPrimaryId) - this.getSectionSortKey(b, this.linkedSectionPrimaryId));
+    // 5) Sort the linked-section LIST by page order (page 1, 2, 3, …) so it
+    //    reads naturally for the user. Within the same page, fall back to the
+    //    group primary/timestamp key for a stable sub-order. (The image modal
+    //    keeps its own primary-first ordering via getModalSectionOrder(), which
+    //    re-sorts independently and is unaffected by this.)
+    combined.sort((a, b) => {
+      const pa = a.pageId ?? 0;
+      const pb = b.pageId ?? 0;
+      if (pa !== pb) return pa - pb;
+      return this.getSectionSortKey(a, this.linkedSectionPrimaryId) - this.getSectionSortKey(b, this.linkedSectionPrimaryId);
+    });
     this.linkedSections = combined;
 
     // 6) Trigger canvas cropping for linked sections that don't have their own imageUrl.

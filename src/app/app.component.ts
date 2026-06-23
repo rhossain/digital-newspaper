@@ -1,6 +1,6 @@
 import { Component, OnInit, OnDestroy, Inject, isDevMode, PLATFORM_ID, ChangeDetectionStrategy, ChangeDetectorRef } from '@angular/core';
 import { DOCUMENT, isPlatformBrowser } from '@angular/common';
-import { RouterOutlet } from '@angular/router';
+import { RouterOutlet, Router, NavigationEnd } from '@angular/router';
 import { SwUpdate, VersionReadyEvent } from '@angular/service-worker';
 import { ToasterComponent } from './toaster/toaster.component';
 import { LoaderComponent } from './components/loader/loader.component';
@@ -17,7 +17,7 @@ import { filter, Subscription } from 'rxjs';
     <router-outlet></router-outlet>
     <app-toaster></app-toaster>
     <app-loader></app-loader>
-    @if (updateAvailable) {
+    @if (updateAvailable && !isAdminRoute) {
       <app-update-banner (dismissed)="applyUpdate()" />
     }
   `,
@@ -30,12 +30,24 @@ export class AppComponent implements OnInit, OnDestroy {
   /** Set to true when ngsw signals a new app version is ready to activate. */
   updateAvailable = false;
 
+  /**
+   * True while the user is on an /admin route (login screen or the editor).
+   *
+   * The "new version available" banner is a service-worker / app-build update
+   * prompt for PUBLIC readers. It is intentionally hidden on /admin: it is
+   * confusing for an editor working alone (it reads like a content/edition
+   * notice), and it should never appear over the logged-out login screen.
+   */
+  isAdminRoute = false;
+
   private _swSub?: Subscription;
   private _dataSub?: Subscription;
+  private _routerSub?: Subscription;
 
   constructor(
     private dataService: NewspaperDataService,
     private swUpdate: SwUpdate,
+    private router: Router,
     @Inject(DOCUMENT) private document: Document,
     @Inject(PLATFORM_ID) private platformId: object,
     private cdr: ChangeDetectorRef,
@@ -51,6 +63,20 @@ export class AppComponent implements OnInit, OnDestroy {
     this._dataSub = this.dataService.data$.subscribe(() => {
       this.injectHeadScripts();
     });
+
+    // Track whether we're on an /admin route so the update banner can be hidden
+    // there. Seed from the current URL, then keep it in sync on navigation.
+    const computeIsAdmin = (url: string) => {
+      const path = (url || '').split(/[?#]/)[0]; // strip query/hash
+      return path === '/admin' || path.startsWith('/admin/');
+    };
+    this.isAdminRoute = computeIsAdmin(this.router.url);
+    this._routerSub = this.router.events
+      .pipe(filter((e): e is NavigationEnd => e instanceof NavigationEnd))
+      .subscribe(e => {
+        this.isAdminRoute = computeIsAdmin(e.urlAfterRedirects || e.url);
+        this.cdr.markForCheck();
+      });
 
     // ── Service-worker update notification ──────────────────────────────────
     // SW is browser-only — skip entirely on the server.
@@ -77,6 +103,7 @@ export class AppComponent implements OnInit, OnDestroy {
   ngOnDestroy(): void {
     this._swSub?.unsubscribe();
     this._dataSub?.unsubscribe();
+    this._routerSub?.unsubscribe();
   }
 
   /**
