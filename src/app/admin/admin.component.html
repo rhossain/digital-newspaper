@@ -692,7 +692,7 @@
                     @if (previewLoading) {
                       <div class="image-preview-skeleton"></div>
                     }
-                    <img [src]="pageForm.fullImage" alt="Preview" (load)="onFullImagePreviewLoad()" (error)="onFullImagePreviewError()" />
+                    <img [src]="fullImagePreviewSrc || pageForm.fullImage" alt="Preview" (load)="onFullImagePreviewLoad()" (error)="onFullImagePreviewError()" />
                   </div>
                 }
                 <!-- Page Name (multilingual) -->

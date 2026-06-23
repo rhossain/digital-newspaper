@@ -1004,6 +1004,16 @@
   width: 100%;
 }
 
+/* Transparent wrapper: makes <picture> behave as a full-width block so the
+   inner <img> sizes against it identically to when it was a direct child of
+   .image-inner. This keeps the rendered image box — and therefore the absolute
+   .sections-overlay alignment — pixel-identical whether or not <source>
+   variants are present. */
+.main-page-picture {
+  display: block;
+  width: 100%;
+}
+
 .main-page-image {
   width: 100%;
   height: auto;

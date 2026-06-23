@@ -23,6 +23,22 @@
   RewriteBase /
 
   # ---------------------------------------------------------------
+  # Serve PRE-COMPRESSED static assets (Brotli/Gzip)
+  # On this LiteSpeed host, the mod_deflate / mod_brotli AddOutputFilterByType
+  # directives below are ignored for static files, so JS/CSS/JSON would ship
+  # uncompressed. The build (`npm run build` → scripts/compress-dist.js) writes
+  # <file>.br and <file>.gz siblings; these rules serve them by negotiation.
+  # The -f guards only rewrite when a sibling exists, so a missing compressed
+  # file falls back to the original uncompressed asset exactly as before.
+  # ---------------------------------------------------------------
+  RewriteCond %{HTTP:Accept-Encoding} br
+  RewriteCond %{REQUEST_FILENAME}\.br -f
+  RewriteRule ^(.+\.(?:js|mjs|css|json|svg|webmanifest))$ $1.br [L]
+  RewriteCond %{HTTP:Accept-Encoding} gzip
+  RewriteCond %{REQUEST_FILENAME}\.gz -f
+  RewriteRule ^(.+\.(?:js|mjs|css|json|svg|webmanifest))$ $1.gz [L]
+
+  # ---------------------------------------------------------------
   # Social media crawler detection
   # Internal rewrite (no redirect) to the WordPress /social endpoint so
   # crawlers receive proper OG / Twitter Card meta tags without running JS.
@@ -138,12 +154,49 @@
   AddOutputFilterByType BROTLI_COMPRESS image/svg+xml
 </IfModule>
 
+# ---- Encoding + content-type tags for the PRE-COMPRESSED static assets ----
+# These pair with the rewrite-to-.br/.gz rules at the top. Without them the
+# browser would receive the compressed bytes mislabelled (wrong encoding/type).
+<IfModule mod_headers.c>
+  <FilesMatch "\.(?:js|mjs|css|json|svg|webmanifest)\.br$">
+    Header set Content-Encoding br
+    Header append Vary Accept-Encoding
+  </FilesMatch>
+  <FilesMatch "\.(?:js|mjs|css|json|svg|webmanifest)\.gz$">
+    Header set Content-Encoding gzip
+    Header append Vary Accept-Encoding
+  </FilesMatch>
+  <FilesMatch "\.(?:js|mjs)\.(?:br|gz)$">
+    Header set Content-Type "application/javascript; charset=UTF-8"
+  </FilesMatch>
+  <FilesMatch "\.css\.(?:br|gz)$">
+    Header set Content-Type "text/css; charset=UTF-8"
+  </FilesMatch>
+  <FilesMatch "\.json\.(?:br|gz)$">
+    Header set Content-Type "application/json; charset=UTF-8"
+  </FilesMatch>
+  <FilesMatch "\.svg\.(?:br|gz)$">
+    Header set Content-Type "image/svg+xml"
+  </FilesMatch>
+  <FilesMatch "\.webmanifest\.(?:br|gz)$">
+    Header set Content-Type "application/manifest+json; charset=UTF-8"
+  </FilesMatch>
+</IfModule>
+
+# Safety: never let the server try to (re)compress the already-compressed files.
+<IfModule mod_setenvif.c>
+  SetEnvIfNoCase Request_URI "\.(?:br|gz)$" no-gzip dont-vary
+</IfModule>
+
 # Service worker manifest must never be cached — browsers must always fetch the
 # latest ngsw.json to detect updates and switch to the new service worker.
 # Without this, a CDN or browser cache could serve a stale ngsw.json indefinitely,
 # preventing the SW update cycle and leaving users on old CSS/font URLs.
 <IfModule mod_headers.c>
-  <FilesMatch "^(ngsw\.json|ngsw-worker\.js|safety-worker\.js)$">
+  # The optional (\.(?:br|gz))? suffix keeps these no-cache headers applied even
+  # when the file is served as its pre-compressed .br/.gz sibling (see the
+  # compression rules above) — otherwise the service-worker update cycle breaks.
+  <FilesMatch "^(ngsw\.json|ngsw-worker\.js|safety-worker\.js)(\.(?:br|gz))?$">
     Header set Cache-Control "no-cache, no-store, must-revalidate"
     Header set Pragma "no-cache"
     Header set Expires "0"

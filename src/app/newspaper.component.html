@@ -628,17 +628,33 @@
                   </button>
                 </div>
               }
-              <img
-                #mainImage
-                [src]="resolveImageUrl(currentPage.fullImage)"
-                [alt]="ts.t('viewer.page') + ' ' + ts.toLocaleDigits(currentPage.id)"
-                class="main-page-image"
-                fetchpriority="high"
-                decoding="async"
-                (load)="onImageLoad()"
-                (error)="onImageError()"
-                [style.opacity]="imageLoaded ? '1' : '0'"
-                />
+              <!-- Responsive next-gen sources are emitted ONLY when the server
+                   supplied page.imageVariants (precomputed in selectPage()).
+                   With no variants, both @if blocks are skipped and the <img>
+                   below renders the original fullImage exactly as before. The
+                   <img> remains the element that holds #mainImage, fires
+                   (load)/(error), and is the universal fallback. -->
+              <picture class="main-page-picture">
+                @if (mainAvifSrcset) {
+                  <source type="image/avif" [attr.srcset]="mainAvifSrcset" [attr.sizes]="mainImgSizes || null" />
+                }
+                @if (mainWebpSrcset) {
+                  <source type="image/webp" [attr.srcset]="mainWebpSrcset" [attr.sizes]="mainImgSizes || null" />
+                }
+                <img
+                  #mainImage
+                  [src]="resolveImageUrl(currentPage.fullImage)"
+                  [alt]="ts.t('viewer.page') + ' ' + ts.toLocaleDigits(currentPage.id)"
+                  class="main-page-image"
+                  fetchpriority="high"
+                  decoding="async"
+                  [attr.width]="mainImgWidth"
+                  [attr.height]="mainImgHeight"
+                  (load)="onImageLoad()"
+                  (error)="onImageError()"
+                  [style.opacity]="imageLoaded ? '1' : '0'"
+                  />
+              </picture>
               <!-- Clickable sections overlay -->
               @if (imageLoaded) {
                 <app-section-overlay

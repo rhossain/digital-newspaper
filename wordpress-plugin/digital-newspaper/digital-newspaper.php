@@ -4210,11 +4210,120 @@ HTML;
     header('Last-Modified: ' . gmdate('D, d M Y H:i:s \G\M\T'));
     header('Vary: Origin');
 
+    // Best-effort: attach intrinsic image dimensions so the public viewer can
+    // reserve layout space and avoid CLS. Purely additive, cached, and never
+    // fatal — pages whose image can't be measured locally are returned exactly
+    // as before. Runs after the 304 short-circuit so cached clients skip it.
+    $date_editions = $this->dn_attach_page_dimensions($date_editions);
+
     return rest_ensure_response([
       'date'        => $date,
       'editions'    => $date_editions,
       'dataVersion' => $dataVersion,
     ]);
+  }
+
+  /**
+   * Attach intrinsic pixel dimensions to each page's `imageVariants` so the
+   * public viewer can set width/height on the page <img> and avoid layout
+   * shift (CLS).
+   *
+   * Contract — purely additive, best-effort, never fatal:
+   *   - Only the page's display `fullImage` is measured.
+   *   - Dimensions are read with getimagesize() from the LOCAL file only;
+   *     remote/unresolvable URLs are skipped (no slow HTTP reads in the request
+   *     path).
+   *   - Results are cached in a transient keyed on the image URL, so the disk
+   *     read happens at most once per image (uploads are immutable; a re-upload
+   *     changes the URL and therefore the cache key).
+   *   - Any existing `imageVariants` keys are preserved; existing width/height
+   *     are never overwritten.
+   *   - On any failure the page object is returned untouched, so the viewer
+   *     falls back to its prior no-dimensions render.
+   *
+   * No image files are ever created or modified.
+   *
+   * @param array $editions Editions array (each with a `pages` list).
+   * @return array The same structure, with width/height merged where available.
+   */
+  private function dn_attach_page_dimensions(array $editions): array {
+    if (empty($editions)) {
+      return $editions;
+    }
+
+    foreach ($editions as &$edition) {
+      if (!is_array($edition) || empty($edition['pages']) || !is_array($edition['pages'])) {
+        continue;
+      }
+      foreach ($edition['pages'] as &$page) {
+        if (!is_array($page)) {
+          continue;
+        }
+        // Never overwrite dimensions that are already present.
+        if (isset($page['imageVariants']['width'], $page['imageVariants']['height'])) {
+          continue;
+        }
+        $fullImage = isset($page['fullImage']) ? (string) $page['fullImage'] : '';
+        if ($fullImage === '') {
+          continue;
+        }
+        $dims = $this->dn_get_image_dimensions_cached($fullImage);
+        if ($dims === null) {
+          continue;
+        }
+        $existing = (isset($page['imageVariants']) && is_array($page['imageVariants']))
+          ? $page['imageVariants']
+          : [];
+        $existing['width']  = $dims[0];
+        $existing['height'] = $dims[1];
+        $page['imageVariants'] = $existing;
+      }
+      unset($page);
+    }
+    unset($edition);
+
+    return $editions;
+  }
+
+  /**
+   * Return [width, height] (ints) for an image URL, or null when it cannot be
+   * measured from a local file. Cached in a transient keyed on the URL; a miss
+   * is negatively cached so remote/missing files aren't re-stat'd every request.
+   *
+   * @param string $imageUrl
+   * @return array{0:int,1:int}|null
+   */
+  private function dn_get_image_dimensions_cached(string $imageUrl): ?array {
+    if ($imageUrl === '') {
+      return null;
+    }
+
+    $cacheKey = 'dn_imgdim_' . md5($imageUrl);
+    $cached   = get_transient($cacheKey);
+    if (is_array($cached) && isset($cached[0], $cached[1])) {
+      return [(int) $cached[0], (int) $cached[1]];
+    }
+    if ($cached === 'none') {
+      return null; // Negatively cached miss.
+    }
+
+    // Resolve to a local path only — handles cross-domain upload aliases via the
+    // same helper used by the social-image pipeline. Returns '' if not local.
+    $localPath = $this->dn_uploads_url_to_path_any_host($imageUrl);
+    if ($localPath === '' || !file_exists($localPath)) {
+      set_transient($cacheKey, 'none', DAY_IN_SECONDS);
+      return null;
+    }
+
+    $info = @getimagesize($localPath);
+    if (!is_array($info) || empty($info[0]) || empty($info[1])) {
+      set_transient($cacheKey, 'none', DAY_IN_SECONDS);
+      return null;
+    }
+
+    $dims = [(int) $info[0], (int) $info[1]];
+    set_transient($cacheKey, $dims, 30 * DAY_IN_SECONDS);
+    return $dims;
   }
 
   // ══════════════════════════════════════════════════════════════════════════

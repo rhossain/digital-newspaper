@@ -38,12 +38,32 @@ export interface NewsSection {
   importSource?: 'xml' | 'manual';
 }
 
+/**
+ * Optional responsive/next-gen variants for a page's display image.
+ *
+ * Server-derived from `fullImage` (lazily generated + disk-cached on the WP
+ * side). Purely additive: when absent, the viewer renders the original
+ * `<img [src]="fullImage">` exactly as before. `fullImage` always remains the
+ * source of truth for download / print / zoom / cropping.
+ */
+export interface PageImageVariants {
+  /** Intrinsic pixel dimensions of the source image — used for width/height to prevent CLS. */
+  width?: number;
+  height?: number;
+  /** AVIF sources as "url widthDescriptor" entries, e.g. "https://…/page-01-1400.avif 1400w". */
+  avif?: string[];
+  /** WebP sources in the same "url widthDescriptor" form. */
+  webp?: string[];
+}
+
 export interface NewspaperPage {
   id: number;
   thumbnail: string;
   fullImage: string;
   /** Optional high-resolution image used in the crop selector. Falls back to fullImage if absent. */
   fullImageHiRes?: string;
+  /** Optional responsive AVIF/WebP variants + intrinsic size. Absent → render original fullImage. */
+  imageVariants?: PageImageVariants;
   sections: NewsSection[];
   /** Multilingual page name keyed by language code, e.g. { en: 'Sports', bn: 'খেলাধুলা' } */
   pageLabels?: { [lang: string]: string };

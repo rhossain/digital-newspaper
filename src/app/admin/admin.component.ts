@@ -125,6 +125,32 @@ export class AdminComponent implements OnInit, OnDestroy {
   fullImageHiResFile: File | null = null;
   thumbnailFile: File | null = null;
   previewLoading: boolean = false;
+  /**
+   * Cache-busted src for the full-image PREVIEW only.
+   *
+   * Page image filenames are deterministic (page+edition+date), so re-uploading
+   * to the same page — e.g. after cancelling a wrong upload — overwrites the
+   * same URL on the server. The browser, having cached the previous bytes for
+   * that identical URL, would otherwise keep showing the OLD image in the
+   * preview. We append a one-shot cache-buster here so the preview always
+   * reflects the freshly uploaded file. The clean URL is still what is stored
+   * in pageForm.fullImage and saved — only the preview <img> uses this. Null
+   * means "no override; show pageForm.fullImage as-is" (the normal edit case).
+   */
+  fullImagePreviewSrc: string | null = null;
+
+  /**
+   * Page-image media uploaded during the CURRENT add/edit-page session
+   * (display, hi-res, thumbnail). Tracked so we can remove orphans:
+   *   - Cancel → every entry is deleted (none was ever saved).
+   *   - Save   → entries NOT referenced by the saved page are deleted (e.g. a
+   *              wrong image uploaded, then replaced before saving); the saved
+   *              image is kept.
+   * Pre-existing images (present before this edit began) are never auto-deleted
+   * — only media this session uploaded. Cleanup is best-effort and never blocks
+   * or fails a save.
+   */
+  private sessionUploadedMedia: { id: number; url: string }[] = [];
 
   // Global Settings
   settingsForm: GlobalSettings = {
@@ -1386,6 +1412,9 @@ export class AdminComponent implements OnInit, OnDestroy {
     this.fullImageFile = null;
     this.fullImageHiResFile = null;
     this.thumbnailFile = null;
+    this.fullImagePreviewSrc = null;
+    this.previewLoading = false;
+    this.sessionUploadedMedia = [];
   }
 
   editPage(page: NewspaperPage) {
@@ -1405,6 +1434,10 @@ export class AdminComponent implements OnInit, OnDestroy {
       this.fullImageFile = null;
       this.fullImageHiResFile = null;
       this.thumbnailFile = null;
+      // Show the existing stored image as-is (no cache-buster) when editing.
+      this.fullImagePreviewSrc = null;
+      this.previewLoading = false;
+      this.sessionUploadedMedia = [];
       this.activityLog.track('page_edit', { pageId: String(page.id), pageLabel: this.getPageLabel(page) });
       this.cdr.detectChanges();
     });
@@ -1460,6 +1493,12 @@ export class AdminComponent implements OnInit, OnDestroy {
       if (this.selectedPage?.id === page.id) {
         this.selectedPage = this.pages.find(p => p.id === page.id) || null;
       }
+
+      // Remove any page images uploaded THIS session that the saved page no
+      // longer references (e.g. a wrong image uploaded, then replaced before
+      // saving). The saved image's URLs are kept. Best-effort; runs before
+      // cancelPageEdit so the latter's "delete all" finds an already-empty list.
+      void this.cleanupSessionMedia([page.fullImage, page.fullImageHiRes ?? '', page.thumbnail]);
 
       this.cancelPageEdit();
       this.toaster.success('Page saved successfully!');
@@ -1569,6 +1608,15 @@ export class AdminComponent implements OnInit, OnDestroy {
     this.pageForm = { id: 0, thumbnail: '', fullImage: '', fullImageHiRes: '', sections: [], pageLabels: { en: '', bn: '' } };
     this.pageNameSelect = '';
     this.pageFormErrors = {};
+    // Clear the preview override so a cancelled upload never bleeds into the
+    // next page's form.
+    this.fullImagePreviewSrc = null;
+    this.previewLoading = false;
+    // Delete any page images uploaded during this session — a cancel means none
+    // of them were saved, so they would otherwise be orphaned in the media
+    // library. Best-effort; never throws. (After a save this list is already
+    // empty because savePage ran cleanup first, so nothing is double-deleted.)
+    void this.cleanupSessionMedia([]);
     // Only release if we're not staying on the page (e.g. sections still selected)
     if (!this.selectedPage) {
       this.releaseCurrentLock();
@@ -1787,14 +1835,21 @@ export class AdminComponent implements OnInit, OnDestroy {
           this.markUnsavedChanges();
         }
       });
-    } else {
-      console.error('Missing required fields:', {
-        hasPage: !!this.selectedPage,
-        hasId: !!this.sectionForm.id,
-        hasTitle: !!this.sectionForm.title,
-        sectionForm: this.sectionForm
-      });
+    } else if (closeForm) {
+      // Explicit save (user pressed Save) with something missing → give clear
+      // feedback instead of a silent, alarming console error.
+      if (!this.sectionForm.title) {
+        this.toaster.error('Section title is required before saving.');
+      } else {
+        // Page/id missing is a genuine unexpected state — keep a quiet log.
+        console.warn('[admin] Cannot save section — no page selected or missing id.', {
+          hasPage: !!this.selectedPage,
+          hasId: !!this.sectionForm.id,
+        });
+      }
     }
+    // Background auto-saves (closeForm === false) on an incomplete form — e.g.
+    // cropping an image before a title is entered — are expected; skip silently.
   }
 
   deleteSection(section: NewsSection) {
@@ -2502,10 +2557,21 @@ export class AdminComponent implements OnInit, OnDestroy {
         // Close the cropper panel but stay in the section edit form.
         this.showImageCropper = false;
         this.cdr.detectChanges();
-        // Persist the updated imageUrl to the in-memory store and backend
-        // without closing the section form — the user stays on the edit page.
-        this.saveSection(false);
-        this.saveAllData();
+        // Persist the section (with its new imageUrl) atomically — but ONLY when
+        // it has the required title. Two prior bugs lived here:
+        //   1. saveSection(false) ran with no title guard, so cropping before
+        //      typing a title logged "Missing required fields".
+        //   2. The extra saveAllData() (full POST /data) ran right after the
+        //      atomic saveSection, which had already advanced the server's
+        //      dataVersion — so the full save sent a stale version and got a
+        //      spurious 409 self-conflict. The atomic save alone is sufficient.
+        if (this.selectedPage && this.sectionForm.id && this.sectionForm.title) {
+          this.saveSection(false);
+        } else {
+          // No title yet — keep the cropped image staged in the form; it
+          // persists when the user saves the section.
+          this.markUnsavedChanges();
+        }
         this.deletePreviousGeneratedPostCrop(previousImageUrl, url);
         this.toaster.success('Cropped image saved!');
       })
@@ -2642,7 +2708,45 @@ export class AdminComponent implements OnInit, OnDestroy {
     });
   }
 
-  private async uploadMediaFile(file: File, filename: string): Promise<string> {
+  /**
+   * Short, collision-resistant token (time + randomness, base36) used to make
+   * each page-image upload filename unique. Unique names mean a re-upload never
+   * reuses a URL, so browsers/CDNs can't serve a previously-cached image for it
+   * — the root cause of "old image still showing after replacing it".
+   */
+  private shortToken(): string {
+    return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  }
+
+  /**
+   * Delete page-image media uploaded during this session that the saved page no
+   * longer references. Pass the URLs to KEEP (empty array = delete everything
+   * tracked, used on Cancel). Best-effort and fully guarded — clears the
+   * tracking list synchronously, then deletes in the background; a failed
+   * delete is logged, never thrown.
+   */
+  private async cleanupSessionMedia(keepUrls: string[]): Promise<void> {
+    const tracked = this.sessionUploadedMedia;
+    this.sessionUploadedMedia = []; // clear first so re-entrancy can't double-delete
+    if (!tracked.length) return;
+    const keep = new Set(keepUrls.filter((u): u is string => !!u));
+    const toDelete = tracked.filter(m => m.id > 0 && !keep.has(m.url));
+    if (!toDelete.length) return;
+    const headers = this.authService.getAuthHeaders();
+    for (const m of toDelete) {
+      try {
+        await this.deleteMedia(m.id, headers);
+      } catch (err) {
+        console.warn('[admin] Orphan media cleanup failed for', m.url, err);
+      }
+    }
+  }
+
+  private async uploadMediaFile(
+    file: File,
+    filename: string,
+    onUploaded?: (media: { id: number; url: string }) => void
+  ): Promise<string> {
     const url = `${this.dataService.getApiBaseUrl()}/wp-json/digital-newspaper/v1/media`;
     const headers = this.authService.getAuthHeaders();
     const desiredName = this.normalizeFilename(filename);
@@ -2686,7 +2790,12 @@ export class AdminComponent implements OnInit, OnDestroy {
     }
 
     const data = await response.json();
-    return data.source_url || data.guid?.rendered || '';
+    const sourceUrl = data.source_url || data.guid?.rendered || '';
+    // Report the uploaded media so callers can track it for orphan cleanup.
+    if (onUploaded) {
+      onUploaded({ id: Number(data.id) || 0, url: sourceUrl });
+    }
+    return sourceUrl;
   }
 
   /** Convert YYYY-MM-DD → DD-MM-YYYY for use in media filenames. */
@@ -2696,12 +2805,16 @@ export class AdminComponent implements OnInit, OnDestroy {
     return `${parts[2]}-${parts[1]}-${parts[0]}`;
   }
 
-  private buildPageImageFilename(ext: string, variant: 'full' | 'hires' | 'thumb' = 'full'): string {
+  private buildPageImageFilename(ext: string, variant: 'full' | 'hires' | 'thumb' = 'full', token?: string): string {
     const pageNumber = this.pad2(this.pageForm.id || this.dataService.getNextPageId(this.selectedDate, this.selectedEditionNumber));
     const editionNumber = this.pad2(this.selectedEditionNumber || 1);
     const date = this.formatDateForFilename(this.selectedDate || this.dataService.getTodayDate());
     const suffix = variant === 'full' ? '' : `-${variant}`;
-    return `page-${pageNumber}-e-${editionNumber}-${date}${suffix}.${this.cleanExtension(ext)}`;
+    // Optional unique token keeps each upload's URL distinct so re-uploads never
+    // collide with a browser/CDN-cached copy of a previous image. The name still
+    // begins with the human-readable page/edition/date for easy identification.
+    const unique = token ? `-${token}` : '';
+    return `page-${pageNumber}-e-${editionNumber}-${date}${suffix}${unique}.${this.cleanExtension(ext)}`;
   }
 
   private buildSectionImageFilename(ext: string): string {
@@ -3787,40 +3900,50 @@ export class AdminComponent implements OnInit, OnDestroy {
     this.loader.show('Resizing and uploading page image…');
 
     try {
+      // One unique token shared by this upload's display/hi-res/thumb files so
+      // their URLs are distinct from any previous upload (no cache collisions).
+      const uploadToken = this.shortToken();
+
       // Resize to 700px for the frontend center-panel display image.
       // Encode in the format chosen by the admin (WebP by default).
       const displayFile = await resizeImageToWidth(originalFile, 700, this.imageQuality, this.imageMime);
-      const displayFileName = this.buildPageImageFilename(this.imageExt, 'full');
+      const displayFileName = this.buildPageImageFilename(this.imageExt, 'full', uploadToken);
 
       // Keep the original at full resolution for the section crop tool.
       // Hi-res is the crop source — preserve its original format to avoid
       // quality loss from double re-encoding and to keep max detail for crops.
       const hiResExt = originalFile.name.split('.').pop()?.toLowerCase() || 'jpg';
-      const hiResFileName = this.buildPageImageFilename(hiResExt, 'hires');
+      const hiResFileName = this.buildPageImageFilename(hiResExt, 'hires', uploadToken);
 
       this.activityLog.track('image_upload_page', { fileName: displayFileName, pageId: String(this.pageForm.id ?? '') });
 
       // Upload the 700px display copy and the original hi-res copy in parallel.
+      // Both are tracked for orphan cleanup on cancel/replace.
+      const track = (m: { id: number; url: string }) => this.sessionUploadedMedia.push(m);
       const [displayUrl, hiResUrl] = await Promise.all([
-        this.uploadMediaFile(displayFile, displayFileName),
-        this.uploadMediaFile(originalFile, hiResFileName)
+        this.uploadMediaFile(displayFile, displayFileName, track),
+        this.uploadMediaFile(originalFile, hiResFileName, track)
       ]);
 
-      const prevFullImage = this.pageForm.fullImage;
       this.pageForm.fullImage = displayUrl;
       this.pageForm.fullImageHiRes = hiResUrl;
-      // Only show the loading skeleton if the src URL actually changed.
-      // When overwriting an image WordPress may return the same URL, in which
-      // case the <img> src won't change and the load event never fires, which
-      // would leave the skeleton visible indefinitely.
-      this.previewLoading = (displayUrl !== prevFullImage);
+      // Cache-bust the PREVIEW only (stored URL stays clean). The filename is
+      // deterministic, so an overwrite re-uploads to the same URL; without a
+      // unique query the browser would serve the previously-cached bytes and
+      // the preview would show the old image. A fresh token guarantees the
+      // <img> fetches the just-uploaded file.
+      this.fullImagePreviewSrc = displayUrl
+        + (displayUrl.includes('?') ? '&' : '?') + '_cb=' + Date.now();
+      // The preview src is brand-new (the cache-buster differs every upload),
+      // so the <img> load event will fire — show the skeleton until it does.
+      this.previewLoading = true;
 
       // Auto-generate a thumbnail from the original if none is set yet.
       if (!this.pageForm.thumbnail) {
         this.loader.setMessage('Generating thumbnail…');
         const thumbFile = await resizeImageToWidth(originalFile, 300, this.imageQuality, this.imageMime);
-        const thumbFileName = this.buildPageImageFilename(this.imageExt, 'thumb');
-        const thumbUrl = await this.uploadMediaFile(thumbFile, thumbFileName);
+        const thumbFileName = this.buildPageImageFilename(this.imageExt, 'thumb', uploadToken);
+        const thumbUrl = await this.uploadMediaFile(thumbFile, thumbFileName, track);
         this.pageForm.thumbnail = thumbUrl;
       }
 
@@ -3831,10 +3954,16 @@ export class AdminComponent implements OnInit, OnDestroy {
       this.toaster.error('Failed to upload full image: ' + (error instanceof Error ? error.message : 'Unknown error'));
     } finally {
       this.loader.hide();
+      // Reset the input so re-selecting the SAME file (e.g. picking the
+      // corrected image that happens to match a prior pick) still fires change.
+      input.value = '';
     }
   }
 
   onFullImageUrlChange(value: string) {
+    // A manually typed/pasted URL should display as-is; drop any cache-buster
+    // override left over from a previous file upload.
+    this.fullImagePreviewSrc = null;
     this.previewLoading = !!value;
   }
 
@@ -3843,9 +3972,9 @@ export class AdminComponent implements OnInit, OnDestroy {
     if (input.files && input.files[0]) {
       this.fullImageHiResFile = input.files[0];
       const ext = this.fullImageHiResFile.name.split('.').pop()?.toLowerCase() || 'jpg';
-      const fileName = this.buildPageImageFilename(ext, 'hires');
+      const fileName = this.buildPageImageFilename(ext, 'hires', this.shortToken());
       this.loader.show('Uploading high-res image…');
-      this.uploadMediaFile(this.fullImageHiResFile, fileName)
+      this.uploadMediaFile(this.fullImageHiResFile, fileName, (m) => this.sessionUploadedMedia.push(m))
         .then((url) => {
           this.pageForm.fullImageHiRes = url;
           this.cdr.detectChanges();
@@ -3855,7 +3984,10 @@ export class AdminComponent implements OnInit, OnDestroy {
           console.error('Error uploading high-res image:', error);
           this.toaster.error('Failed to upload high-res image');
         })
-        .finally(() => this.loader.hide());
+        .finally(() => {
+          this.loader.hide();
+          input.value = ''; // allow re-selecting the same file
+        });
     }
   }
 
@@ -3889,8 +4021,8 @@ export class AdminComponent implements OnInit, OnDestroy {
 
     try {
       const thumbFile = await resizeImageToWidth(originalFile, 300, this.imageQuality, this.imageMime);
-      const fileName = this.buildPageImageFilename(this.imageExt, 'thumb');
-      const url = await this.uploadMediaFile(thumbFile, fileName);
+      const fileName = this.buildPageImageFilename(this.imageExt, 'thumb', this.shortToken());
+      const url = await this.uploadMediaFile(thumbFile, fileName, (m) => this.sessionUploadedMedia.push(m));
       this.pageForm.thumbnail = url;
       this.cdr.detectChanges();
       this.toaster.success('Thumbnail uploaded');
@@ -3899,6 +4031,7 @@ export class AdminComponent implements OnInit, OnDestroy {
       this.toaster.error('Failed to upload thumbnail: ' + (error instanceof Error ? error.message : 'Unknown error'));
     } finally {
       this.loader.hide();
+      input.value = ''; // allow re-selecting the same file
     }
   }
 

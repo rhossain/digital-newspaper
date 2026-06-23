@@ -1,7 +1,7 @@
 import { Injectable, OnDestroy } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { Observable, Subject, of, interval, Subscription, EMPTY } from 'rxjs';
-import { catchError, map, switchMap, takeUntil, takeWhile } from 'rxjs/operators';
+import { Observable, Subject, of, interval, Subscription, EMPTY, timer } from 'rxjs';
+import { catchError, map, retry, switchMap, takeUntil, takeWhile } from 'rxjs/operators';
 import { AuthService } from './auth.service';
 import { WP_BASE_URL } from '../config';
 
@@ -116,12 +116,27 @@ export class LockService implements OnDestroy {
       .pipe(takeUntil(this.destroy$))
       .subscribe(() => {
         this.http.post<any>(url, {}, { headers }).pipe(
+          // Transient connection-level failures (ERR_CONNECTION_RESET from
+          // Imunify360 / LiteSpeed rate-limiting, brief network drops) surface
+          // as status 0. Retry those a couple of times within the same beat so a
+          // single blip doesn't let the 90 s lock TTL lapse. A real 404 (lock
+          // gone / admin force-release) is rethrown immediately — never retried —
+          // so force-release still takes effect promptly.
+          retry({
+            count: 2,
+            delay: (err) => {
+              if (err?.status === 404) throw err;
+              return timer(4000);
+            },
+          }),
           catchError(err => {
             if (err?.status === 404) {
-              // Lock was force-released by an admin
+              // Lock was force-released by an admin (or expired server-side).
               console.warn('[LockService] Lock was released externally — stopping heartbeat.');
               this.stopHeartbeat();
             }
+            // Transient errors after retries are exhausted: keep the interval
+            // alive so the next scheduled beat tries again.
             return of(null);
           })
         ).subscribe();

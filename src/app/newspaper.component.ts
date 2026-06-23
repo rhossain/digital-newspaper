@@ -80,6 +80,26 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   thumbnailsLoading: { [key: number]: boolean } = {};
   /** Pre-resolved thumbnail src for each page (thumbnail → fullImage fallback). */
   pageThumbnailSrcs: { [pageId: number]: string } = {};
+
+  /**
+   * Precomputed <picture> sources for the CURRENT main page image.
+   *
+   * Built once per page change in selectPage() so the template reads plain
+   * properties (OnPush-friendly) instead of running srcset-builder logic on
+   * every change-detection cycle. All values are fully resolved absolute URLs.
+   *
+   * When the page has no `imageVariants` (the default for all existing data),
+   * `mainAvifSrcset` and `mainWebpSrcset` are empty strings and the template's
+   * <source> elements are skipped — the <img fallback> renders the original
+   * fullImage exactly as before. `mainImgWidth`/`mainImgHeight` are null unless
+   * the server supplied intrinsic dimensions, so no aspect-ratio is forced when
+   * we don't know it.
+   */
+  mainAvifSrcset = '';
+  mainWebpSrcset = '';
+  mainImgSizes = '';
+  mainImgWidth: number | null = null;
+  mainImgHeight: number | null = null;
   /**
    * Cross-date thumbnail source cache — keyed by page ID scoped to a date.
    * Key format: `${date}:${pageId}` — survives date navigation so that
@@ -747,6 +767,9 @@ export class NewspaperComponent implements OnInit, OnDestroy {
 
   selectPage(page: NewspaperPage, targetSectionId?: string, preserveImageLoaded = false) {
     this.currentPage = page;
+    // Recompute the <picture> sources for the new page (no-op fallback when the
+    // page has no server-supplied variants — keeps today's behaviour intact).
+    this.updateMainImageSources(page);
     // Refresh the cached pagination array whenever the active page changes.
     this.updatePaginationPages();
     if (!preserveImageLoaded) {
@@ -794,6 +817,75 @@ export class NewspaperComponent implements OnInit, OnDestroy {
       }, 0);
       this.updateUrl();
       this.updateMetaTags(null);
+    }
+  }
+
+  /**
+   * Build the precomputed <picture> sources for the given page's main image.
+   *
+   * Fully defensive and additive:
+   *   - No `imageVariants`        → all srcsets empty, dimensions null → template
+   *                                 renders the original <img [src]="fullImage">.
+   *   - Malformed / empty entries → silently skipped.
+   *   - Each variant URL is resolved through the SAME resolveImageUrl() used by
+   *     the <img> fallback, so domain-rewrite / relative-path handling is
+   *     identical and cache-friendly.
+   *
+   * Variant entries arrive as "url <widthDescriptor>" (e.g.
+   * "/uploads/.../page-01-1400.webp 1400w"); only the URL portion is resolved,
+   * the descriptor is preserved verbatim.
+   */
+  private updateMainImageSources(page: NewspaperPage | null): void {
+    // Reset to the safe default (no variants) first.
+    this.mainAvifSrcset = '';
+    this.mainWebpSrcset = '';
+    this.mainImgSizes = '';
+    this.mainImgWidth = null;
+    this.mainImgHeight = null;
+
+    const variants = page?.imageVariants;
+    if (!variants) return;
+
+    const buildSrcset = (entries: unknown): string => {
+      if (!Array.isArray(entries)) return '';
+      const parts: string[] = [];
+      for (const entry of entries) {
+        if (typeof entry !== 'string') continue;
+        const trimmed = entry.trim();
+        if (!trimmed) continue;
+        const lastSpace = trimmed.lastIndexOf(' ');
+        // Entry without a descriptor — resolve the whole thing as a bare URL.
+        if (lastSpace === -1) {
+          const url = this.resolveImageUrl(trimmed);
+          if (url) parts.push(url);
+          continue;
+        }
+        const rawUrl = trimmed.slice(0, lastSpace).trim();
+        const descriptor = trimmed.slice(lastSpace + 1).trim();
+        const url = this.resolveImageUrl(rawUrl);
+        if (url) parts.push(descriptor ? `${url} ${descriptor}` : url);
+      }
+      return parts.join(', ');
+    };
+
+    this.mainAvifSrcset = buildSrcset(variants.avif);
+    this.mainWebpSrcset = buildSrcset(variants.webp);
+
+    // Only advertise sizes when we actually emit a multi-width srcset; for a
+    // single-width source the browser ignores it anyway.
+    if (this.mainAvifSrcset || this.mainWebpSrcset) {
+      // The center image fills the viewport on narrow screens and is capped at
+      // the site max-width (--site-width: 1600px, minus wrapper padding) on
+      // desktop. `sizes` needs a concrete length — CSS variables are not valid
+      // here — so the 1600px cap is hard-coded to match the stylesheet.
+      this.mainImgSizes = '(max-width: 1024px) 100vw, 1600px';
+    }
+
+    if (typeof variants.width === 'number' && variants.width > 0) {
+      this.mainImgWidth = Math.round(variants.width);
+    }
+    if (typeof variants.height === 'number' && variants.height > 0) {
+      this.mainImgHeight = Math.round(variants.height);
     }
   }
 
