@@ -2584,6 +2584,17 @@ HTACCESS;
       ]
     ]);
 
+    // Server-side section crop: the public viewer points an <img> here instead
+    // of re-downloading the full page and cropping it on a <canvas>. Generates
+    // the crop once (disk-cached), then 302-redirects to the static file.
+    register_rest_route('digital-newspaper/v1', '/section-crop', [
+      [
+        'methods' => 'GET',
+        'callback' => [$this, 'section_crop_endpoint'],
+        'permission_callback' => '__return_true'
+      ]
+    ]);
+
     // Custom media endpoints — authenticated via plugin JWT (bypasses core /wp/v2/media auth issues)
     register_rest_route('digital-newspaper/v1', '/media', [
       [
@@ -3695,6 +3706,58 @@ HTML;
     }
 
     return $imageUrl; // All paths failed — caller should use logo fallback.
+  }
+
+  /**
+   * Public endpoint: GET /digital-newspaper/v1/section-crop
+   *   ?src=<page image URL>&x=&y=&w=&h=&id=
+   *
+   * Generates (and disk-caches) the section crop via dn_crop_section_from_page(),
+   * then 302-redirects to the cached static file. The viewer's <img> follows the
+   * redirect, so after first generation the crop is served as a plain static file
+   * (fast, compressible, browser-cacheable) with no per-view PHP work.
+   *
+   * Security: only crops images that resolve to THIS site's uploads directory —
+   * an arbitrary `src` is rejected (no SSRF / no cropping of off-site images).
+   */
+  public function section_crop_endpoint(WP_REST_Request $request) {
+    $this->add_public_security_headers();
+
+    $src = esc_url_raw((string) $request->get_param('src'));
+    $x   = (float) $request->get_param('x');
+    $y   = (float) $request->get_param('y');
+    $w   = (float) $request->get_param('w');
+    $h   = (float) $request->get_param('h');
+    $id  = sanitize_text_field((string) $request->get_param('id'));
+
+    if ($src === '' || $w <= 0 || $h <= 0) {
+      return new WP_REST_Response(['error' => 'Invalid crop parameters'], 400);
+    }
+
+    // SSRF guard: the source must be a file inside this site's uploads dir.
+    $localPath = $this->dn_uploads_url_to_path_any_host($src);
+    if ($localPath === '' || !file_exists($localPath)) {
+      return new WP_REST_Response(['error' => 'Source image not found in uploads'], 404);
+    }
+
+    $url = $this->dn_crop_section_from_page($src, [
+      'id'     => $id !== '' ? $id : 'section',
+      'x'      => $x,
+      'y'      => $y,
+      'width'  => $w,
+      'height' => $h,
+    ]);
+
+    if ($url === '') {
+      return new WP_REST_Response(['error' => 'Crop generation failed'], 500);
+    }
+
+    // The crop URL encodes the exact source + coordinates, so it is immutable —
+    // cache the redirect itself aggressively so repeat views skip PHP entirely.
+    $resp = new WP_REST_Response(null, 302);
+    $resp->header('Location', $url);
+    $resp->header('Cache-Control', 'public, max-age=31536000, immutable');
+    return $resp;
   }
 
   /**

@@ -373,17 +373,16 @@
         @if (pages.length > 0) {
           <div class="thumbnail-list">
             @for (page of pages; track trackByPageId($index, page)) {
-              <!-- @defer removed: it breaks the thumbnail loading queue.
-                   @defer (on viewport) defers rendering until the item
-                   enters the browser viewport. The queue advances only
-                   when (load) fires — but (load) never fires for a
-                   deferred-but-not-yet-rendered img. The first out-of-
-                   viewport page permanently stalls the queue, leaving
-                   every subsequent thumbnail in skeleton state.
-                   Thumbnails are loaded eagerly; the browser's connection
-                   pool (6 concurrent per host) handles natural throttling. -->
+              <!-- Lazy thumbnails: the component assigns pageThumbnailSrcs[id]
+                   (which starts the fetch) only when this item scrolls into the
+                   panel, via an IntersectionObserver rooted on .left-panel (see
+                   observeLazyThumbnails). data-page-id lets the observer map an
+                   intersecting element back to its page. Native loading="lazy"
+                   can't be used here — it measures the window viewport, not the
+                   panel's, so it never fires for panel-scrolled items. -->
               <div
                 class="thumbnail-item"
+                [attr.data-page-id]="page.id"
                 [class.active]="currentPage?.id === page.id"
                 (click)="onPageClick(page)"
                 >
@@ -392,17 +391,14 @@
                     <div class="skeleton-loader"></div>
                   }
                   @if (pageThumbnailSrcs[page.id]) {
-                    <!-- NOTE: loading="lazy" was intentionally removed.
-                         Browsers apply lazy-load thresholds against the main
-                         window viewport, NOT a scroll container's viewport.
-                         Thumbnails inside the scrollable panel are treated as
-                         off-screen, so (load) never fires and the skeleton
-                         persists indefinitely. Thumbnails are small images;
-                         loading them eagerly is correct and safe here. -->
+                    <!-- src is assigned lazily by the IntersectionObserver (or
+                         eagerly for the top few / cached). fetchpriority="low"
+                         lets the high-priority main page image win the network. -->
                     <img
                       [src]="pageThumbnailSrcs[page.id]"
                       [alt]="'Page ' + page.id"
                       decoding="async"
+                      fetchpriority="low"
                       (load)="onThumbnailLoad(page.id)"
                       (error)="onThumbnailError(page.id)"
                       [style.opacity]="thumbnailsLoading[page.id] ? '0' : '1'"

@@ -239,6 +239,19 @@ const htaccessContent = `# Redirect all routes to index.html for Angular HTML5 p
   SetEnvIfNoCase Request_URI "\\.(?:br|gz)$" no-gzip dont-vary
 </IfModule>
 
+# The SPA HTML shell must NEVER be stale-cached. index.html / index.csr.html
+# reference HASHED JS/CSS bundles that change on every deploy. If a browser keeps
+# an old shell (LiteSpeed serves it with max-age=3600 by default), it points at a
+# bundle hash that no longer exists after a deploy → the SPA fallback returns HTML
+# in the script's place → the browser can't execute it → BLANK PAGE for up to an
+# hour. Forcing revalidation makes every load pick up the current shell, while the
+# hashed assets keep their long cache. "always set" overrides LiteSpeed's default.
+<IfModule mod_headers.c>
+  <FilesMatch "^index(\\.csr)?\\.html$">
+    Header always set Cache-Control "no-cache, must-revalidate"
+  </FilesMatch>
+</IfModule>
+
 # ---- Digital Newspaper: disable ModSecurity for the WordPress REST API ----
 # Host-level WAF modules (Imunify360, ModSecurity) can block authenticated
 # POST requests to /wp/wp-json/ before they reach the plugin, causing login

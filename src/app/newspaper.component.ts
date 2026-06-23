@@ -117,6 +117,18 @@ export class NewspaperComponent implements OnInit, OnDestroy {
    */
   private _thumbnailRenderDate = '';
   /**
+   * Resolved thumbnail URL we INTEND to load for each page, computed up-front in
+   * renderCurrentEdition(). The actual `pageThumbnailSrcs[id]` (which triggers
+   * the <img> load) is assigned from this map only when the thumbnail scrolls
+   * into the panel — see observeLazyThumbnails(). Keeps off-screen thumbnail
+   * fetches from competing with the high-priority main page image.
+   */
+  private _thumbnailIntendedSrcs: { [pageId: number]: string } = {};
+  /** Active IntersectionObserver for lazy thumbnail loading (browser-only). */
+  private _thumbnailObserver?: IntersectionObserver;
+  /** How many top thumbnails load eagerly so the panel is never blank. */
+  private readonly EAGER_THUMB_COUNT = 2;
+  /**
    * Set to true in ngOnDestroy so that async image callbacks (img.onload /
    * img.onerror) never call detectChanges() on an already-destroyed view.
    * Without this guard an OnPush component would throw ViewDestroyedError if
@@ -316,6 +328,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     this.dataService.stopVersionPoll();
     this.clearSlowConnectionTimer();
     this.paginationObserver?.disconnect();
+    this._thumbnailObserver?.disconnect();
     clearTimeout(this.resizeDebounceTimer);
     if (this.isBrowser && this.resizeListener) {
       window.removeEventListener('resize', this.resizeListener);
@@ -504,42 +517,60 @@ export class NewspaperComponent implements OnInit, OnDestroy {
           this._sectionByIdCache.set(section.id, { ...section, pageId: page.id });
         }
       }
-      // Parallel thumbnail seeding — all pages get their src assigned at
-      // once. The sequential queue was removed because @defer (on viewport)
-      // caused it to permanently stall: the queue advances via (load), but
-      // (load) only fires when the <img> renders, and deferred blocks only
-      // render when the item enters the viewport. Any out-of-viewport page
-      // silently blocked every subsequent page from loading.
-      // The browser's own connection pool (6 concurrent per host) provides
-      // natural throttling; thumbnails are loaded eagerly (no loading="lazy").
+      // Thumbnail seeding — IntersectionObserver-driven lazy loading.
+      //
+      // The resolved src for every page is computed here into
+      // _thumbnailIntendedSrcs, but only assigned to pageThumbnailSrcs (which
+      // is what triggers the <img> to fetch) when:
+      //   • the URL was already confirmed-loaded for this date (cross-date cache
+      //     hit) → assign now, no skeleton; or
+      //   • the page is in the small eager set (top of the panel) → assign now;
+      //   • otherwise → deferred until observeLazyThumbnails() sees it scroll in.
+      // This stops off-screen thumbnails from competing with the high-priority
+      // main page image for the browser's 6-connection pool.
+      //
+      // Native loading="lazy" can't be used: browsers measure it against the
+      // WINDOW viewport, not the .left-panel scroll viewport, so (load) never
+      // fires for panel-scrolled items (the old "permanent skeleton" bug). An
+      // explicit IntersectionObserver rooted on the panel avoids that.
       this.thumbnailsLoading = {};
       this.pageThumbnailSrcs = {};
+      this._thumbnailIntendedSrcs = {};
       // Capture the date NOW so onThumbnailLoad always writes the cache key for
       // the date these thumbnails belong to, regardless of when (load) fires.
       this._thumbnailRenderDate = this.selectedDate;
 
-      this.pages.forEach(page => {
+      this.pages.forEach((page, index) => {
         const thumb  = typeof page.thumbnail === 'string' ? page.thumbnail.trim() : '';
         const full   = typeof page.fullImage  === 'string' ? page.fullImage.trim()  : '';
         const newSrc = this.resolveImageUrl(thumb || full);
         const cacheKey = `${this._thumbnailRenderDate}:${page.id}`;
 
-        if (newSrc && this._thumbnailSrcCache.get(cacheKey) === newSrc) {
-          // URL previously confirmed loaded for this date+page — restore
-          // immediately with no skeleton. The cross-date cache survives date
-          // navigation so returning to a visited date never re-shows skeleton.
+        if (!newSrc) {
+          // No image at all — nothing to load, no skeleton.
+          this.thumbnailsLoading[page.id] = false;
+          return;
+        }
+
+        this._thumbnailIntendedSrcs[page.id] = newSrc;
+
+        if (this._thumbnailSrcCache.get(cacheKey) === newSrc) {
+          // Confirmed-loaded for this date+page on a previous visit — restore
+          // immediately with no skeleton (cross-date cache survives navigation).
           this.pageThumbnailSrcs[page.id] = newSrc;
           this.thumbnailsLoading[page.id] = false;
-        } else {
-          // New or first-time URL — show skeleton until (load) fires.
+        } else if (index < this.EAGER_THUMB_COUNT) {
+          // Top-of-panel thumbnails: load now so the panel is never blank.
           this.pageThumbnailSrcs[page.id] = newSrc;
-          this.thumbnailsLoading[page.id] = !!newSrc;
-          if (!newSrc) {
-            // No image at all — clear skeleton immediately.
-            this.thumbnailsLoading[page.id] = false;
-          }
+          this.thumbnailsLoading[page.id] = true;
+        } else {
+          // Deferred — skeleton placeholder until the observer assigns the src.
+          this.thumbnailsLoading[page.id] = true;
         }
       });
+
+      // Wire up the observer for the deferred thumbnails once the items render.
+      this.scheduleThumbnailObserver();
 
       if (this.pages.length > 0) {
         // Resolve target page:
@@ -887,6 +918,112 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     if (typeof variants.height === 'number' && variants.height > 0) {
       this.mainImgHeight = Math.round(variants.height);
     }
+  }
+
+  /**
+   * Schedule (or, on SSR / unsupported browsers, bypass) the lazy-thumbnail
+   * observer after the thumbnail items have rendered.
+   */
+  private scheduleThumbnailObserver(): void {
+    if (!this.isBrowser || typeof IntersectionObserver === 'undefined') {
+      // No IntersectionObserver (SSR / very old browser): preserve today's
+      // behaviour by loading every thumbnail immediately.
+      this.assignAllThumbnailSrcsImmediately();
+      return;
+    }
+    // Defer to the next tick so the @for-rendered .thumbnail-item nodes exist.
+    setTimeout(() => this.observeLazyThumbnails(), 0);
+  }
+
+  /** Assign every intended thumbnail src now — used as the no-observer fallback. */
+  private assignAllThumbnailSrcsImmediately(): void {
+    let changed = false;
+    for (const key of Object.keys(this._thumbnailIntendedSrcs)) {
+      const pageId = Number(key);
+      if (!this.pageThumbnailSrcs[pageId]) {
+        this.pageThumbnailSrcs[pageId] = this._thumbnailIntendedSrcs[pageId];
+        changed = true;
+      }
+    }
+    if (changed && !this._viewDestroyed) this.cdr.markForCheck();
+  }
+
+  /**
+   * Observe the deferred thumbnail items inside the scrollable .left-panel and
+   * assign each one's src as it scrolls into view. Robust against the panel not
+   * being painted yet (retries briefly) and against the panel being absent
+   * (falls back to loading everything so no thumbnail is ever stuck on skeleton).
+   */
+  private observeLazyThumbnails(attempt = 0): void {
+    if (!this.isBrowser || typeof IntersectionObserver === 'undefined') {
+      this.assignAllThumbnailSrcsImmediately();
+      return;
+    }
+    if (this._viewDestroyed) return;
+
+    const panel = this.document.querySelector('.left-panel') as HTMLElement | null;
+    const items = panel
+      ? Array.from(panel.querySelectorAll<HTMLElement>('.thumbnail-item[data-page-id]'))
+      : [];
+
+    if (items.length === 0) {
+      // DOM may not be painted yet right after a date switch — retry a few times,
+      // then give up gracefully by loading everything (never leave skeletons).
+      const hasDeferred = Object.keys(this._thumbnailIntendedSrcs).length > 0;
+      if (hasDeferred && attempt < 3) {
+        setTimeout(() => this.observeLazyThumbnails(attempt + 1), 80);
+      } else if (hasDeferred) {
+        this.assignAllThumbnailSrcsImmediately();
+      }
+      return;
+    }
+
+    this._thumbnailObserver?.disconnect();
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        let changed = false;
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const el = entry.target as HTMLElement;
+          const pageId = Number(el.getAttribute('data-page-id'));
+          if (pageId && this.assignThumbnailSrc(pageId)) changed = true;
+          observer.unobserve(el); // one-shot — once loaded it stays loaded
+        }
+        if (changed && !this._viewDestroyed) this.cdr.markForCheck();
+      },
+      // Root is the panel's own scroll viewport (NOT the window). rootMargin is
+      // 0 so a thumbnail loads only once it actually enters the viewport — strict
+      // viewport-based lazy loading, then more load as the user scrolls. (A small
+      // positive margin like '150px' would preload just ahead for smoother
+      // scrolling, at the cost of fetching a few not-yet-visible thumbnails.)
+      { root: panel, rootMargin: '0px', threshold: 0.01 },
+    );
+
+    for (const el of items) {
+      const pageId = Number(el.getAttribute('data-page-id'));
+      // Only observe deferred items: those with an intended src not yet assigned.
+      if (pageId && !this.pageThumbnailSrcs[pageId] && this._thumbnailIntendedSrcs[pageId]) {
+        observer.observe(el);
+      }
+    }
+    this._thumbnailObserver = observer;
+  }
+
+  /**
+   * Promote a deferred thumbnail to "loading" by assigning its real src.
+   * Returns true if an assignment happened (so the caller can trigger CD).
+   */
+  private assignThumbnailSrc(pageId: number): boolean {
+    if (this.pageThumbnailSrcs[pageId]) return false; // already assigned
+    const src = this._thumbnailIntendedSrcs[pageId];
+    if (!src) {
+      this.thumbnailsLoading[pageId] = false;
+      return true;
+    }
+    // Skeleton stays until the <img> (load) event fires via onThumbnailLoad().
+    this.pageThumbnailSrcs[pageId] = src;
+    return true;
   }
 
   onThumbnailLoad(pageId: number) {
@@ -1619,75 +1756,54 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     if (section.imageUrl) {
       return section.imageUrl;
     }
-    // Check if we have a cached crop for this section
+    // Auto-crop sections: load the crop straight from the server-side endpoint
+    // (generated + disk-cached on first view). The browser fetches just the
+    // cropped rectangle — no full-page re-download, no canvas, no data-URL.
+    const url = this.buildSectionCropUrl(section);
+    if (url) return url;
+    // Fallback (endpoint not usable — SSR, missing page/coords): any client crop
+    // computed previously this session.
     const cacheKey = `${section.pageId}:${section.id}`;
     return this.cropCache.get(cacheKey) ?? null;
   }
 
-  private cropLinkedSectionImage(section: NewsSection): void {
-    if (!this.isBrowser) return; // SSR guard: new Image() and canvas are browser-only APIs
-    if (!section.pageId || section.imageUrl) return;
+  /**
+   * Build the URL of the server-side section-crop endpoint for an auto-crop
+   * section. Returns '' when a crop can't be requested (no page image, zero-area
+   * section, or SSR). The source is the page's display image (matching the prior
+   * client-crop source); the endpoint crops the x/y/w/h percentage rectangle.
+   */
+  private buildSectionCropUrl(section: NewsSection): string {
+    if (!this.isBrowser) return '';
+    const page = section.pageId === this.currentPage?.id
+      ? this.currentPage
+      : this.pages.find(p => p.id === section.pageId) ?? null;
+    // Prefer the hi-res original so the cropped rectangle is sharp (the 700px
+    // display image would yield a low-res crop). Falls back to fullImage when no
+    // hi-res copy exists. Matches the admin crop tool's source preference.
+    const srcRaw = (page?.fullImageHiRes ?? '').trim() || (page?.fullImage ?? '').trim();
+    if (!srcRaw || !(section.width > 0) || !(section.height > 0)) return '';
+    const src = this.resolveImageUrl(srcRaw);
+    if (!src) return '';
+    const params = new URLSearchParams({
+      src,
+      x: String(section.x ?? 0),
+      y: String(section.y ?? 0),
+      w: String(section.width ?? 0),
+      h: String(section.height ?? 0),
+      id: section.id,
+    });
+    return `${this.dataService.getApiBaseUrl()}/wp-json/digital-newspaper/v1/section-crop?${params.toString()}`;
+  }
 
-    const cacheKey = `${section.pageId}:${section.id}`;
-    if (this.cropCache.has(cacheKey)) {
-      this.cdr.detectChanges();
-      return;
-    }
-
-    const page = this.pages.find(p => p.id === section.pageId);
-    const fullImageUrl = page?.fullImage;
-    if (!fullImageUrl) return;
-
-    const isExternalUrl = fullImageUrl.startsWith('http://') || fullImageUrl.startsWith('https://');
-    const wpBaseUrl = this.dataService.getApiBaseUrl();
-    const srcUrl = isExternalUrl
-      ? `${wpBaseUrl}/wp-json/digital-newspaper/v1/proxy?url=${encodeURIComponent(fullImageUrl)}`
-      : fullImageUrl;
-
-    const img = new Image();
-    if (isExternalUrl) img.crossOrigin = 'anonymous';
-
-    img.onload = () => {
-      const cropX = Math.round((section.x / 100) * img.naturalWidth);
-      const cropY = Math.round((section.y / 100) * img.naturalHeight);
-      const cropWidth = Math.round((section.width / 100) * img.naturalWidth);
-      const cropHeight = Math.round((section.height / 100) * img.naturalHeight);
-
-      if (cropWidth <= 0 || cropHeight <= 0) return;
-
-      const canvas = this.document.createElement('canvas');
-      canvas.width = cropWidth;
-      canvas.height = cropHeight;
-      const ctx = canvas.getContext('2d', { willReadFrequently: false });
-      if (!ctx) return;
-
-      // Disable image smoothing to preserve source pixel fidelity
-      ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(img, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
-      try {
-        // JPEG at quality 0.85: ~5–10× smaller data URL than PNG for photographic
-        // newspaper pages (PNG was lossless but produced huge in-memory strings).
-        // Source images are WebP; JPEG is chosen over WebP output because
-        // canvas.toDataURL('image/webp') is unsupported in Firefox/Safari (falls
-        // back to PNG silently), whereas JPEG is universally supported.
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-        this.cropCache.set(cacheKey, dataUrl);
-        if (!this._viewDestroyed) this.cdr.detectChanges();
-      } catch (error) {
-        console.error('Failed to crop linked section image:', error);
-      }
-    };
-
-    // Without an onerror handler the linked-section panel would be permanently
-    // stuck in a loading/empty state if the page image fails to fetch. Logging
-    // the failure and triggering CD lets the UI gracefully show "no image" for
-    // this linked section instead of hanging forever.
-    img.onerror = () => {
-      console.warn('[NewspaperComponent] Failed to load linked section image for crop:', srcUrl);
-      if (!this._viewDestroyed) this.cdr.detectChanges();
-    };
-
-    img.src = srcUrl;
+  /**
+   * No-op since linked-section crops moved server-side: the template binds
+   * `getCroppedImageForSection(linkedSection)` directly, which now returns the
+   * section-crop endpoint URL. Kept as a stub so existing call sites (e.g.
+   * loadLinkedSections) don't need to change.
+   */
+  private cropLinkedSectionImage(_section: NewsSection): void {
+    /* server-side crop endpoint handles this — see getCroppedImageForSection() */
   }
 
   private cropSectionImage() {
@@ -1706,112 +1822,34 @@ export class NewspaperComponent implements OnInit, OnDestroy {
       return;
     }
 
+    // Auto-crop: point the <img> at the server-side section-crop endpoint. The
+    // browser fetches only the cropped rectangle (generated + disk-cached on the
+    // server on first view) — no full-page re-download, no <canvas>, no in-memory
+    // data-URL. sectionImageLoading was set true by selectSection(); the <img>
+    // (load) handler onSectionImageLoad() clears it (onSectionImageError on fail).
     const section = this.selectedSection;
-    const fullImageUrl = this.currentPage.fullImage;
-    if (!fullImageUrl) return;
-
-    // Return a previously computed crop immediately without re-fetching the image.
-    const cacheKey = `${this.currentPage.id}:${section.id}`;
-    const cachedCrop = this.cropCache.get(cacheKey);
-    if (cachedCrop) {
-      this.croppedSectionImage = cachedCrop;
-      this.sectionImageLoading = false;
-      this.cdr.detectChanges();
-      if (this.pendingMobileModal) {
-        this.pendingMobileModal = false;
-        setTimeout(() => this.openImageModal(), 0);
-      }
-      return;
-    }
-
-    // For cross-origin images (WP media), fetch via proxy so canvas.toDataURL() doesn't
-    // throw a tainted-canvas error. The display <img> tag has no crossorigin attribute
-    // so it loads fine; we only need CORS for the canvas crop operation.
-    const isExternalUrl = fullImageUrl.startsWith('http://') || fullImageUrl.startsWith('https://');
-    const wpBaseUrl = this.dataService.getApiBaseUrl();
-    const srcUrl = isExternalUrl
-      ? `${wpBaseUrl}/wp-json/digital-newspaper/v1/proxy?url=${encodeURIComponent(fullImageUrl)}`
-      : fullImageUrl;
-
-    const sectionAtStart = this.selectedSection;
-
-    const img = new Image();
-    if (isExternalUrl) {
-      img.crossOrigin = 'anonymous';
-    }
-
-    img.onload = () => {
-      // Discard result if the user switched to a different section while loading
-      if (this.selectedSection !== sectionAtStart) return;
-
-      const naturalWidth = img.naturalWidth;
-      const naturalHeight = img.naturalHeight;
-
-      const cropX = Math.round((section.x / 100) * naturalWidth);
-      const cropY = Math.round((section.y / 100) * naturalHeight);
-      const cropWidth = Math.round((section.width / 100) * naturalWidth);
-      const cropHeight = Math.round((section.height / 100) * naturalHeight);
-
-      const canvas = this.document.createElement('canvas');
-      canvas.width = cropWidth;
-      canvas.height = cropHeight;
-
-      const ctx = canvas.getContext('2d', { willReadFrequently: false });
-      if (!ctx) return;
-
-      // Disable image smoothing to preserve source pixel fidelity
-      ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(img, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
-
-      try {
-        // JPEG at quality 0.85: ~5–10× smaller data URL than PNG.
-        // Source images are WebP; JPEG output is chosen for universal browser
-        // support (canvas.toDataURL('image/webp') silently falls back to PNG in Firefox/Safari).
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-        this.cropCache.set(cacheKey, dataUrl);
-        this.croppedSectionImage = dataUrl;
-        this.sectionImageLoading = false;
-        if (!this._viewDestroyed) this.cdr.detectChanges();
-        if (this.pendingMobileModal) {
-          this.pendingMobileModal = false;
-          setTimeout(() => this.openImageModal(), 0);
-        }
-      } catch (error) {
-        this.croppedSectionImage = null;
-        this.sectionImageError = true;
-        this.sectionImageLoading = false;
-        if (!this._viewDestroyed) this.cdr.detectChanges();
-        console.error('Failed to crop section image due to canvas security restrictions:', error);
-        if (this.pendingMobileModal) {
-          this.pendingMobileModal = false;
-          if (this.selectedSection && this.currentPage) {
-            this.modalImage = null;
-            this.modalImageTitle = this.selectedSection.title;
-            this.modalLinkedSections = [...this.linkedSections];
-            this.showImageModal = true;
-          }
-        }
-      }
-    };
-
-    img.onerror = () => {
-      if (this.selectedSection !== sectionAtStart) return;
+    const url = this.buildSectionCropUrl(section);
+    if (!url) {
+      this.croppedSectionImage = null;
       this.sectionImageError = true;
       this.sectionImageLoading = false;
       if (!this._viewDestroyed) this.cdr.detectChanges();
-      console.error('Failed to load image for cropping:', srcUrl);
-      if (this.pendingMobileModal) {
-        this.pendingMobileModal = false;
-        if (this.selectedSection && this.currentPage) {
-          this.modalImage = null;
-          this.modalImageTitle = this.selectedSection.title;
-          this.modalLinkedSections = [...this.linkedSections];
-          this.showImageModal = true;
+      return;
+    }
+    this.croppedSectionImage = url;
+    if (!this._viewDestroyed) this.cdr.detectChanges();
+
+    // Safety net: a browser-cached crop may not re-fire (load), which would leave
+    // the skeleton up. After the next CD pass, clear it if the <img> is complete.
+    const sectionAtStart = section;
+    setTimeout(() => {
+      if (this.sectionImageLoading && this.selectedSection === sectionAtStart) {
+        const imgEl = this.document.querySelector('.section-full-image') as HTMLImageElement | null;
+        if (imgEl && imgEl.complete && imgEl.naturalWidth > 0) {
+          this.onSectionImageLoad();
         }
       }
-    };
-
-    img.src = srcUrl;
+    }, 0);
   }
 
   private updateUrl() {

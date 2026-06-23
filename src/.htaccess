@@ -108,6 +108,20 @@
   RewriteRule ^ /index.csr.html [L]
 </IfModule>
 
+# The SPA HTML shell must NEVER be stale-cached. index.html / index.csr.html
+# reference HASHED JS/CSS bundles that change on every deploy. If a browser keeps
+# an old shell (LiteSpeed serves it with max-age=3600 by default), it points at a
+# bundle hash that no longer exists after a deploy → the SPA fallback returns HTML
+# in the script's place → the browser can't execute it → BLANK PAGE for up to an
+# hour. Forcing revalidation makes every load pick up the current shell, while the
+# hashed assets below keep their 1-year cache. `Header always set` is used because
+# LiteSpeed overrides mod_expires for static HTML.
+<IfModule mod_headers.c>
+  <FilesMatch "^index(\.csr)?\.html$">
+    Header always set Cache-Control "no-cache, must-revalidate"
+  </FilesMatch>
+</IfModule>
+
 # Long-term caching for hashed Angular assets (JS, CSS, images)
 <IfModule mod_expires.c>
   ExpiresActive On

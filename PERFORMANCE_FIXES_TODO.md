@@ -21,6 +21,21 @@ Legend: 🔴 critical · 🟠 high · 🟢 optional · ⏱ rough effort
 ---
 
 ## 🔴 Task 1 — Server-side pre-cropped section images
+
+> **STATUS (implemented).** Used an on-demand endpoint rather than baking URLs
+> into snapshots (chosen for shared-LiteSpeed safety + zero data-model change):
+> - PHP: new public `GET /section-crop?src&x&y&w&h&id` — SSRF-guarded (uploads
+>   only), reuses the existing `dn_crop_section_from_page()` (disk-cached), then
+>   302-redirects to the static crop with `immutable` cache so repeat views skip
+>   PHP. First view per crop generates + caches.
+> - Angular: `getCroppedImageForSection()` / `cropSectionImage()` now point the
+>   `<img>` at that endpoint (built from the page's `fullImage` + section coords);
+>   `cropLinkedSectionImage()` is a no-op. Removed the client `new Image()` +
+>   `<canvas>` + data-URL path. `ng build` clean.
+> - Net: each section view fetches only the cropped rectangle (cached, lazy)
+>   instead of re-downloading the full page via `/proxy` and cropping on-thread.
+> - Deploy plugin + Angular together; needs live verification.
+
 **Problem:** every section click + every linked section re-downloads the full page via `/proxy` and crops it on a `<canvas>` (`cropSectionImage` / `cropLinkedSectionImage`, newspaper.component.ts ~1526–1660). Heavy bandwidth, main-thread decode jank, large base64 data URLs in memory.
 
 **Approach:** generate the crop once on the server using the GD/Imagick path already used for `/social-thumb`, store its URL on the section, and let the viewer use a plain `<img src>`.
@@ -77,6 +92,18 @@ Legend: 🔴 critical · 🟠 high · 🟢 optional · ⏱ rough effort
 ---
 
 ## 🟠 Task 3 — IntersectionObserver-driven thumbnail loading
+
+> **STATUS (implemented).** newspaper.component: thumbnail srcs are now computed
+> into `_thumbnailIntendedSrcs` but only assigned (triggering fetch) when the
+> item scrolls into the `.left-panel` via an IntersectionObserver rooted on the
+> panel (`observeLazyThumbnails`). Top `EAGER_THUMB_COUNT` (2) + cross-date
+> cache hits load eagerly so the panel is never blank; `fetchpriority="low"` on
+> thumbnails lets the high-priority main image win the network. Full fallbacks:
+> SSR / no-IO / panel-absent → load everything (no permanent skeleton); retries
+> if the panel isn't painted yet. Bonus: on mobile the panel is `display:none`,
+> so thumbnails never fetch there. Observer disconnected in ngOnDestroy.
+> **`ng build` clean.** Needs live verification after deploy.
+
 **Problem:** all 12–16 thumbnails load eagerly (lazy was correctly removed because native lazy-load measures the window, not the scroll panel) and compete with the main image for the 6-connection pool.
 
 - [ ] **Angular — observe the scroll panel.** Add an `IntersectionObserver` with `root` = the `.left-panel` / `.thumbnail-list` scroll container; set each thumbnail's real `src` only when it intersects.
