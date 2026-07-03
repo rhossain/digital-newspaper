@@ -10,7 +10,7 @@ import { clearHttpCache, evictEditionCache, evictSettingsCache, markForBrowserCa
 import { SettingsService } from './settings.service';
 import { DateIndexService } from './date-index.service';
 import { EditionCacheService } from './edition-cache.service';
-import { BootstrapStateService } from './bootstrap-state.service';
+import { BootstrapStateService, InlineBootstrapState } from './bootstrap-state.service';
 
 export interface NewsSection {
   id: string;
@@ -338,6 +338,9 @@ export class NewspaperDataService {
 
   private versionPollSub?: Subscription;
   private readonly versionUrl = `${WP_BASE_URL}/wp-json/digital-newspaper/v1/data/version`;
+  /** Static snapshot of the version probe (Apache-served, no PHP). Public boot
+   *  reads this first and falls back to versionUrl on miss/error. */
+  private readonly versionStaticUrl = `${WP_BASE_URL}/wp-content/dn-static/version.json`;
   
   // WordPress REST API base
   private assetsUrl = '/assets/newspaper-data.json';
@@ -345,6 +348,17 @@ export class NewspaperDataService {
   private readonly apiUrl = `${WP_BASE_URL}/wp-json/digital-newspaper/v1/data`;
   private readonly mediaApiUrl = `${WP_BASE_URL}/wp-json/wp/v2/media`;
   private dataRecoveredFromMediaLibrary = false;
+
+  /**
+   * Publish-time inlined bootstrap state, retained ONLY when it is complete
+   * enough to render the first paint without any network call (settings + full
+   * editions + numeric dataVersion). Set in the constructor; consumed once by
+   * the public `loadDataFromGranular()` gate, then cleared so later reloads use
+   * the normal network path. Null when inlining is disabled/absent (the default).
+   */
+  private _freshInlineState: InlineBootstrapState | null = null;
+  /** Guard so the one-shot post-paint inline revalidation runs at most once. */
+  private _inlineRevalidated = false;
 
   private readonly platformId = inject(PLATFORM_ID);
   private get isBrowser(): boolean { return isPlatformBrowser(this.platformId); }
@@ -374,6 +388,26 @@ export class NewspaperDataService {
         this.dateIndexService.syncFromEditions(inlineState.editions);
         this.editionCacheService.seedFromLoadedData(inlineState.editions);
       }
+      // Seed the FULL available-dates list (not just the latest edition's date)
+      // so the date picker is complete on the inline-gated first paint, which
+      // otherwise skips the network /data/dates fetch. syncFromEditions unions,
+      // so this never shrinks an existing list.
+      if (Array.isArray(inlineState.dates) && inlineState.dates.length) {
+        this.dateIndexService.syncFromEditions(
+          inlineState.dates.filter(d => typeof d === 'string').map(d => ({ date: d })),
+        );
+      }
+      // Capture a fully-formed inline state so the public initial load can skip
+      // the blocking network batch entirely (see loadDataFromGranular). Only
+      // retained when it carries everything needed to render — settings, full
+      // editions, and a numeric dataVersion — so partial blobs fall through to
+      // the normal network path. initial-state.json carries FULL article content
+      // (not the light variant), so the emitted data is never marked _partial.
+      const hasAll =
+        !!inlineState.settings &&
+        Array.isArray(inlineState.editions) && inlineState.editions.length > 0 &&
+        typeof inlineState.dataVersion === 'number';
+      this._freshInlineState = hasAll ? inlineState : null;
     }
 
     const cachedSettings = inlineState?.settings ?? NewspaperDataService._readCachedSettings();
@@ -636,6 +670,75 @@ export class NewspaperDataService {
   }
 
   /**
+   * One-shot, post-paint revalidation of the inlined bootstrap state.
+   *
+   * Runs only in the browser, at most once, during idle time. Fetches the
+   * (static-first) version probe and, when the server's dataVersion is newer
+   * than the inlined one, refreshes the current date through the authoritative
+   * reload path — so a stale inline blob (e.g. an index.html cached before a
+   * later publish) is corrected well before the 5-minute version poll would.
+   * Best-effort: never throws, never blocks the first paint.
+   */
+  private scheduleInlineRevalidation(inlineVersion: number): void {
+    if (!this.isBrowser || this._inlineRevalidated) return;
+    this._inlineRevalidated = true;
+
+    const run = () => {
+      this.http.get<{ dataVersion: number }>(this.versionStaticUrl).pipe(
+        catchError(() => this.http.get<{ dataVersion: number }>(this.versionUrl)),
+        catchError(() => of({ dataVersion: 0 })),
+      ).subscribe(res => {
+        const remote = res?.dataVersion ?? 0;
+        if (remote > inlineVersion) {
+          // Authoritative refresh of the currently-shown date (settings + dates
+          // via REST, edition via the cache path). Emits through data$ exactly
+          // like the version-poll reload, so the UI updates automatically.
+          //
+          // After the reload, also advance currentDateSubject to the newly-
+          // published latestDate when running in 'current' mode. Without this,
+          // a stale inline bootstrap blob (initial-state.json baked into
+          // index.html on the previous deploy) keeps the reader on the old date
+          // indefinitely: reloadCurrentDateOnly() correctly updates
+          // dateIndexService.latestDate() via its inner fetch() call, but
+          // nobody moves currentDateSubject forward, so the UI stays stuck.
+          //
+          // Capture the date BEFORE the async reload so we can detect whether
+          // the user manually navigated during the 3–6 s window between the
+          // page load and the tap() callback. If they did, currentDateSubject
+          // will have a different value by the time tap() runs, and we must
+          // NOT override their explicit choice.
+          const dateAtRevalidationStart = this.currentDateSubject.value;
+          this.reloadCurrentDateOnly(dateAtRevalidationStart).pipe(
+            tap(() => {
+              const settings = this.getSettings();
+              if (settings.defaultDateMode !== 'specific') {
+                const newDefault = this.getDefaultDate();
+                // Guard: only advance if (a) there is a newer date to show AND
+                // (b) the user has not navigated away since we started the reload.
+                if (
+                  newDefault !== this.currentDateSubject.value &&
+                  this.currentDateSubject.value === dateAtRevalidationStart
+                ) {
+                  this.currentDateSubject.next(newDefault);
+                  // Hydrate the new date's editions so the data$ subscriber in
+                  // the component renders the correct date when currentDate$ fires.
+                  this.hydrateDateIfMissing(newDefault).subscribe();
+                }
+              }
+            }),
+          ).subscribe();
+        }
+      });
+    };
+
+    const ric = (window as unknown as {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+    }).requestIdleCallback;
+    if (typeof ric === 'function') ric(run, { timeout: 3000 });
+    else setTimeout(run, 1200);
+  }
+
+  /**
    * Fast granular load via the per-resource cacheable endpoints.
    *
    * Fetches settings + dates + the expected initial edition all in parallel,
@@ -661,6 +764,29 @@ export class NewspaperDataService {
    * Throws on any error so `loadData()` can fall back to the legacy path.
    */
   private loadDataFromGranular(lightFirst = false): Observable<NewspaperData> {
+    // ── Zero-API initial load gate (public viewer only) ──────────────────────
+    // When the served index.html carried a complete inline bootstrap blob, the
+    // synchronous caches were already seeded in the constructor. Emit that data
+    // directly and SKIP the blocking settings/dates/version/edition network
+    // batch — the first paint then makes zero API calls. A one-shot post-paint
+    // revalidation (and the 5-min version poll) corrects any staleness.
+    //
+    // Consumed once: `_freshInlineState` is nulled so later reloads (after a
+    // detected version change) take the normal authoritative network path. The
+    // admin editor never reaches here with lightFirst=true, so it is unaffected.
+    if (lightFirst && this._freshInlineState) {
+      const inline = this._freshInlineState;
+      this._freshInlineState = null;
+      const data: NewspaperData = {
+        settings: inline.settings!,
+        editions: inline.editions!,
+        dataVersion: inline.dataVersion ?? 0,
+        // NOT _partial: initial-state.json carries full article content.
+      };
+      this.scheduleInlineRevalidation(inline.dataVersion ?? 0);
+      return of(data);
+    }
+
     // Determine the expected initial date from synchronous caches so we can
     // start the edition fetch in the same parallel batch as settings/dates/version.
     const speculativeDate = this.getDefaultDate();
@@ -679,12 +805,23 @@ export class NewspaperDataService {
     // must be included here so the local dataVersion is NEVER reset to 0
     // (resetting to 0 causes the version poll to immediately fire
     // remoteDataChanged$ and show a false "content updated" toast).
+    // Public viewer (lightFirst) reads the Apache-served static snapshots first
+    // (settings.json / dates.json / version.json) with REST fallback — no PHP on
+    // the initial paint. The admin editor (lightFirst=false) always reads the
+    // authoritative REST endpoints so it can never save from a stale snapshot.
+    const preferStatic = lightFirst;
+    const version$ = preferStatic
+      ? this.http.get<{ dataVersion: number }>(this.versionStaticUrl).pipe(
+          catchError(() => this.http.get<{ dataVersion: number }>(this.versionUrl)),
+          catchError(() => of({ dataVersion: 0 })),
+        )
+      : this.http.get<{ dataVersion: number }>(this.versionUrl)
+          .pipe(catchError(() => of({ dataVersion: 0 })));
+
     return forkJoin({
-      settings:            this.settingsService.fetch(),
-      dates:               this.dateIndexService.fetch(),
-      version:             this.http
-                             .get<{ dataVersion: number }>(this.versionUrl)
-                             .pipe(catchError(() => of({ dataVersion: 0 }))),
+      settings:            this.settingsService.fetch(preferStatic),
+      dates:               this.dateIndexService.fetch(preferStatic),
+      version:             version$,
       speculativeEditions: speculative$
                              .pipe(catchError(() => of({ editions: [] as NewspaperEdition[], light: false }))),
     }).pipe(

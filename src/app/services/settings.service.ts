@@ -37,6 +37,16 @@ export class SettingsService {
   private readonly _endpoint =
     `${WP_BASE_URL}/wp-json/digital-newspaper/v1/data/settings`;
 
+  /**
+   * Static snapshot of the same payload, written by the WordPress plugin on
+   * every publish and served by Apache with NO PHP. Public readers fetch this
+   * first (see `fetch(preferStatic=true)`) and fall back to the authoritative
+   * REST endpoint above on any miss/empty/error. Same `{ settings, dataVersion }`
+   * shape as the REST endpoint, so parsing is identical.
+   */
+  private readonly _staticUrl =
+    `${WP_BASE_URL}/wp-content/dn-static/settings.json`;
+
   // ── State ──────────────────────────────────────────────────────────────────
 
   private readonly _settings = signal<GlobalSettings>(
@@ -60,11 +70,40 @@ export class SettingsService {
    * so this method hits the network only when the cache is cold or evicted.
    * On network failure the signal retains its current (cached) value.
    *
+   * @param preferStatic When true (public viewer), try the static snapshot
+   *   first and fall back to REST on miss/error. When false (admin editor), go
+   *   straight to the authoritative REST endpoint so the editor never reads —
+   *   and therefore never saves from — a possibly-stale snapshot.
    * @returns Observable<GlobalSettings> for callers that need to chain work.
    */
-  fetch(): Observable<GlobalSettings> {
+  fetch(preferStatic = false): Observable<GlobalSettings> {
+    // Authoritative REST read, with the original cached-fallback behaviour.
+    const rest$ = this._get(this._endpoint).pipe(
+      catchError(err => {
+        console.warn(
+          '[SettingsService] fetch failed — serving cached settings. Reason:',
+          err?.message ?? err
+        );
+        return of(this._settings());
+      })
+    );
+
+    if (!preferStatic) return rest$;
+
+    // Static-first: a 404 / empty / timeout on the snapshot throws and falls
+    // through to the identical REST read above. The static file shares the exact
+    // `{ settings, dataVersion }` shape, so no special-casing is needed.
+    return this._get(this._staticUrl).pipe(catchError(() => rest$));
+  }
+
+  /**
+   * Low-level GET that fetches, normalises, and persists settings.
+   * Errors propagate (no catchError here) so `fetch()` can decide whether to
+   * fall back from the static snapshot to REST, or serve the cached value.
+   */
+  private _get(url: string): Observable<GlobalSettings> {
     return this.http
-      .get<{ settings: GlobalSettings; dataVersion: number }>(this._endpoint)
+      .get<{ settings: GlobalSettings; dataVersion: number }>(url)
       .pipe(
         // Per-request timeout: fail fast so a single slow endpoint doesn't
         // exhaust the 20 s granular-chain budget in NewspaperDataService.
@@ -73,13 +112,6 @@ export class SettingsService {
         tap(settings => {
           this._settings.set(settings);
           SettingsService._persist(settings);
-        }),
-        catchError(err => {
-          console.warn(
-            '[SettingsService] fetch failed — serving cached settings. Reason:',
-            err?.message ?? err
-          );
-          return of(this._settings());
         })
       );
   }

@@ -55,6 +55,58 @@ class Digital_Newspaper_API {
   /** Directory (under wp-content) where snapshots are written. */
   const STATIC_SNAPSHOT_DIR = 'dn-static';
 
+  /**
+   * Feature flag: on every publish, rewrite the served index.html so the
+   * `<script id="dn-initial-state">` placeholder carries initial-state.json.
+   * This lets the PUBLIC first paint render with ZERO API calls (the inline
+   * blob seeds the app's caches before any request fires).
+   *
+   * OFF by default — until enabled it is a complete no-op and the app boots via
+   * the normal network path, exactly as today. Requires a writable, Apache-served
+   * index.html, located via OPTION_INDEX_HTML_PATH or auto-detection.
+   *
+   * Note: returning visitors are served the service-worker-cached index.html,
+   * so this primarily benefits first-time / SW-cold loads. Enable on staging
+   * first. Toggle with: update_option('dn_inline_index_enabled', true);
+   */
+  const OPTION_INLINE_INDEX = 'dn_inline_index_enabled';
+  /**
+   * Absolute filesystem path to the served index.html. Empty → auto-detect from
+   * common docroot locations. Set explicitly when the Angular app is served from
+   * a non-standard path. Filterable via 'dn_index_html_path'.
+   */
+  const OPTION_INDEX_HTML_PATH = 'dn_index_html_path';
+
+  /**
+   * Feature flag: on every publish, inject a `<link rel="preload" as="image">`
+   * for the first page's image into the served index.html so the largest-
+   * contentful-paint image starts downloading during HTML parse (in parallel
+   * with the JS bundle), instead of waiting for Angular to boot and render the
+   * <img>. Independent of OPTION_INLINE_INDEX — either, both, or neither may be
+   * enabled. Shares the same writable index.html requirement and, like inlining,
+   * only fires while Static JSON Snapshots is on (the injection runs in the
+   * snapshot-regeneration path). OFF by default — a complete no-op until enabled.
+   * Toggle with: update_option('dn_preload_lcp_enabled', true);
+   */
+  const OPTION_PRELOAD_LCP = 'dn_preload_lcp_enabled';
+
+  /**
+   * Feature flag: write a long-lived (1-year, immutable) Cache-Control header
+   * for image files into wp-content/uploads/.htaccess, so repeat visits (and the
+   * service worker's revalidation) can skip re-downloading edition images.
+   *
+   * Safe because upload filenames are unique per attachment — a re-upload yields
+   * a new URL, so an immutable cache can never serve wrong content; this mirrors
+   * the header the plugin already sets on its own image responses. The block is
+   * added via insert_with_markers(), preserving any other rules already in that
+   * file, and is removed again when the flag is turned off.
+   *
+   * OFF by default. Because immutable caching is "sticky" on already-served
+   * clients, enable on staging first. Toggle with:
+   * update_option('dn_uploads_cache_headers_enabled', true);
+   */
+  const OPTION_UPLOADS_CACHE = 'dn_uploads_cache_headers_enabled';
+
   public function __construct() {
     add_action('init', [$this, 'handle_cors_preflight'], 1);
     add_action('init', [$this, 'register_section_post_type']);
@@ -71,6 +123,12 @@ class Digital_Newspaper_API {
     add_action('add_option_' . self::OPTION_STATIC_SNAPSHOTS, function ($name, $value) {
       $this->on_static_snapshots_toggled(true, $value);
     }, 10, 2);
+    // When index inlining is turned OFF, blank the inlined blob so no stale
+    // bootstrap state is served. Fires only on an actual value change.
+    add_action('update_option_' . self::OPTION_INLINE_INDEX, [$this, 'on_inline_index_toggled'], 10, 2);
+    // When the first-page image preload is turned OFF, strip the injected
+    // <link rel="preload"> block so a stale preload is not left behind.
+    add_action('update_option_' . self::OPTION_PRELOAD_LCP, [$this, 'on_preload_lcp_toggled'], 10, 2);
     // Ensure the activity-log DB table exists on every admin load (handles the
     // case where the plugin file was updated via FTP without re-activating it).
     add_action('admin_init', [$this, 'maybe_create_activity_table']);
@@ -78,6 +136,11 @@ class Digital_Newspaper_API {
     // Ensure ModSecurity bypass rules are in .htaccess so the REST API is not
     // blocked by host-level WAF (e.g. Imunify360 on Hostinger shared hosting).
     add_action('admin_init', [$this, 'ensure_htaccess_rules']);
+    // Keep wp-content/uploads/.htaccess in sync with the image-cache flag: add
+    // the long-lived cache block when enabled, remove it when disabled. Runs on
+    // every admin load so a settings change (which redirects through admin_init)
+    // takes effect immediately and self-heals if the file is edited.
+    add_action('admin_init', [$this, 'ensure_uploads_cache_htaccess']);
     register_activation_hook(__FILE__, [$this, 'ensure_htaccess_rules']);
     // Emit Content-Security-Policy-Report-Only on front-end page loads only
     // (not on REST API or wp-admin responses — those have their own headers).
@@ -166,6 +229,58 @@ class Digital_Newspaper_API {
     insert_with_markers($htaccess, 'Digital Newspaper API', $rules);
   }
 
+  /**
+   * Add or remove the long-lived image cache block in wp-content/uploads/.htaccess,
+   * gated behind OPTION_UPLOADS_CACHE. Uses insert_with_markers() so ONLY our
+   * marked section is touched — any other rules in that file (e.g. security
+   * directives from other plugins) are preserved. The block is scoped to image
+   * extensions so non-image uploads are unaffected. Best-effort; never throws.
+   */
+  public function ensure_uploads_cache_htaccess(): void {
+    try {
+      if (!function_exists('insert_with_markers')) {
+        require_once ABSPATH . 'wp-admin/includes/misc.php';
+      }
+
+      $upload = wp_get_upload_dir();
+      if (empty($upload['basedir']) || !is_dir($upload['basedir'])) return;
+      $htaccess = trailingslashit($upload['basedir']) . '.htaccess';
+
+      $enabled = (bool) get_option(self::OPTION_UPLOADS_CACHE, false);
+
+      // Disabled: remove our block, but only if the file already exists and is
+      // writable. Never create a file just to write an empty block.
+      if (!$enabled) {
+        if (is_file($htaccess) && is_writable($htaccess)) {
+          insert_with_markers($htaccess, 'Digital Newspaper Image Cache', []);
+        }
+        return;
+      }
+
+      // Enabled: the existing file must be writable, or (if absent) the uploads
+      // directory must be writable so insert_with_markers can create it.
+      $writable = is_file($htaccess) ? is_writable($htaccess) : is_writable($upload['basedir']);
+      if (!$writable) {
+        // Skip silently — the admin can add the rules manually.
+        return;
+      }
+
+      $rules = [
+        '# Long-lived cache for newspaper images. Upload filenames are unique per',
+        '# attachment, so a 1-year immutable cache is safe (a re-upload produces a',
+        '# new URL). Scoped to image types so other uploads are unaffected.',
+        '<IfModule mod_headers.c>',
+        '  <FilesMatch "\.(webp|avif|jpe?g|png|gif)$">',
+        '    Header set Cache-Control "public, max-age=31536000, immutable"',
+        '  </FilesMatch>',
+        '</IfModule>',
+      ];
+      insert_with_markers($htaccess, 'Digital Newspaper Image Cache', $rules);
+    } catch (\Throwable $e) {
+      error_log('[DigitalNewspaper] uploads cache .htaccess update failed: ' . $e->getMessage());
+    }
+  }
+
   public function handle_cors_preflight(): void {
     $origin = isset($_SERVER['HTTP_ORIGIN']) ? sanitize_text_field($_SERVER['HTTP_ORIGIN']) : '';
     if (!$origin) return;
@@ -246,6 +361,26 @@ class Digital_Newspaper_API {
       'sanitize_callback' => fn($v) => (bool) $v,
       'default'           => false,
     ]);
+    register_setting('digital_newspaper_settings', self::OPTION_INLINE_INDEX, [
+      'type'              => 'boolean',
+      'sanitize_callback' => fn($v) => (bool) $v,
+      'default'           => false,
+    ]);
+    register_setting('digital_newspaper_settings', self::OPTION_PRELOAD_LCP, [
+      'type'              => 'boolean',
+      'sanitize_callback' => fn($v) => (bool) $v,
+      'default'           => false,
+    ]);
+    register_setting('digital_newspaper_settings', self::OPTION_UPLOADS_CACHE, [
+      'type'              => 'boolean',
+      'sanitize_callback' => fn($v) => (bool) $v,
+      'default'           => false,
+    ]);
+    register_setting('digital_newspaper_settings', self::OPTION_INDEX_HTML_PATH, [
+      'type'              => 'string',
+      'sanitize_callback' => fn($v) => is_string($v) ? trim($v) : '',
+      'default'           => '',
+    ]);
   }
 
   public function render_settings_page(): void {
@@ -257,6 +392,11 @@ class Digital_Newspaper_API {
     $allow_credentials = (bool) get_option(self::OPTION_ALLOW_CREDENTIALS, true);
     $gam_enabled       = (bool) get_option(self::OPTION_GAM_ENABLED, false);
     $static_snapshots  = (bool) get_option(self::OPTION_STATIC_SNAPSHOTS, false);
+    $inline_index      = (bool) get_option(self::OPTION_INLINE_INDEX, false);
+    $preload_lcp       = (bool) get_option(self::OPTION_PRELOAD_LCP, false);
+    $uploads_cache     = (bool) get_option(self::OPTION_UPLOADS_CACHE, false);
+    $index_html_path   = (string) get_option(self::OPTION_INDEX_HTML_PATH, '');
+    $resolved_index    = $this->resolve_index_html_path();
 
     // Diagnostic: does the snapshot directory already exist, and what's in it?
     $snapshot_dir      = trailingslashit(WP_CONTENT_DIR) . self::STATIC_SNAPSHOT_DIR;
@@ -327,6 +467,82 @@ class Digital_Newspaper_API {
                   <span style="color:#b91c1c;">not created yet</span>
                   — appears after the first publish/save while this box is checked.
                 <?php endif; ?>
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <th scope="row">Inline Bootstrap State</th>
+            <td>
+              <label>
+                <input type="checkbox" name="<?php echo esc_attr(self::OPTION_INLINE_INDEX); ?>" value="1" <?php checked($inline_index); ?> />
+                Inline today's content into <code>index.html</code> on every publish (zero-API first paint)
+              </label>
+              <p class="description">
+                Requires <strong>Static JSON Snapshots</strong> above. On each publish the plugin rewrites the
+                <code>&lt;script id="dn-initial-state"&gt;</code> tag in the served <code>index.html</code> with
+                <code>initial-state.json</code>, so a first-time visitor's initial paint needs <em>no</em> API calls.
+                Returning visitors are served the service-worker-cached shell, so this mainly speeds up cold loads.
+                <strong>Enable on staging first.</strong>
+                <br>
+                <strong>index.html status:</strong>
+                <?php if ($resolved_index !== ''): ?>
+                  <span style="color:#15803d;">✓ writable placeholder found</span> — <code><?php echo esc_html($resolved_index); ?></code>
+                <?php else: ?>
+                  <span style="color:#b91c1c;">not found</span> — set the absolute path below (must contain the
+                  <code>dn-initial-state</code> placeholder and be writable by PHP).
+                <?php endif; ?>
+              </p>
+              <p>
+                <label for="dn_index_html_path"><strong>index.html path</strong> (optional override):</label><br>
+                <input type="text" id="dn_index_html_path" class="large-text code"
+                       name="<?php echo esc_attr(self::OPTION_INDEX_HTML_PATH); ?>"
+                       value="<?php echo esc_attr($index_html_path); ?>"
+                       placeholder="/home/site/public_html/index.html" />
+                <span class="description">Leave blank to auto-detect from the document root / WordPress install.</span>
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <th scope="row">Preload First-Page Image</th>
+            <td>
+              <label>
+                <input type="checkbox" name="<?php echo esc_attr(self::OPTION_PRELOAD_LCP); ?>" value="1" <?php checked($preload_lcp); ?> />
+                Inject <code>&lt;link rel="preload" as="image"&gt;</code> for the first page's image on every publish
+              </label>
+              <p class="description">
+                Requires <strong>Static JSON Snapshots</strong> above and a writable <code>index.html</code> (same as
+                inlining; uses the path resolved below). <em>Independent</em> of <strong>Inline Bootstrap State</strong> —
+                enable either or both. On each publish the plugin injects a high-priority preload for the first page's
+                image (and its thumbnail) so the largest image starts downloading during HTML parse, in parallel with the
+                app bundle, turning the cold-load image skeleton into a near-instant paint. The bytes come from the existing
+                <code>wp-content/uploads</code> file — nothing is duplicated. <strong>Enable on staging first.</strong>
+                <br>
+                <strong>index.html status:</strong>
+                <?php if ($resolved_index !== ''): ?>
+                  <span style="color:#15803d;">✓ writable placeholder found</span> — <code><?php echo esc_html($resolved_index); ?></code>
+                <?php else: ?>
+                  <span style="color:#b91c1c;">not found</span> — set the absolute path above (must contain the
+                  <code>dn-initial-state</code> placeholder and be writable by PHP).
+                <?php endif; ?>
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <th scope="row">Image Cache Headers</th>
+            <td>
+              <label>
+                <input type="checkbox" name="<?php echo esc_attr(self::OPTION_UPLOADS_CACHE); ?>" value="1" <?php checked($uploads_cache); ?> />
+                Add a 1-year <code>immutable</code> <code>Cache-Control</code> header to images in <code>wp-content/uploads</code>
+              </label>
+              <p class="description">
+                Writes an image-only cache block into <code>wp-content/uploads/.htaccess</code> (via
+                <code>insert_with_markers</code>, so any existing rules in that file are preserved). Lets repeat
+                visitors — and the service worker's revalidation — skip re-downloading edition images. Safe because
+                upload filenames are unique per attachment, so a 1-year immutable cache never serves wrong content.
+                Requires Apache <code>mod_headers</code> and a writable uploads directory.
+                <strong>Note:</strong> immutable caching is "sticky" on clients that already loaded an image —
+                <strong>enable on staging first.</strong> Turning this off removes the block (already-cached browsers
+                keep it until expiry).
               </p>
             </td>
           </tr>
@@ -1475,6 +1691,65 @@ googletag.cmd.push(function() {
   }
 
   /**
+   * Fires when the index-inlining option changes. When turned OFF, blank the
+   * `<script id="dn-initial-state">` contents in the served index.html so no
+   * stale bootstrap state is delivered — the app then boots via the normal
+   * network path. Best-effort; never throws.
+   *
+   * @param mixed $old_value Previous option value (unused).
+   * @param mixed $new_value New option value.
+   */
+  public function on_inline_index_toggled($old_value, $new_value): void {
+    if ($new_value) return; // turned ON — next publish fills the blob
+    try {
+      $path = $this->resolve_index_html_path();
+      if ($path === '') return;
+      $html = @file_get_contents($path);
+      if (!is_string($html) || $html === '') return;
+      $cleared = preg_replace(
+        '#<script id="dn-initial-state"[^>]*>.*?</script>#s',
+        '<script id="dn-initial-state" type="application/json"></script>',
+        $html,
+        1,
+        $count
+      );
+      // Only blank the inline blob — the first-page preload is an independent
+      // feature with its own flag and its own clear-on-disable handler, so it
+      // must not be touched here.
+      if (is_string($cleared) && $count > 0 && $cleared !== $html) {
+        $this->atomic_write($path, $cleared);
+      }
+    } catch (\Throwable $e) {
+      error_log('[DigitalNewspaper] inline index clear-on-disable failed: ' . $e->getMessage());
+    }
+  }
+
+  /**
+   * Fires when the first-page-preload option changes. When turned OFF, strip the
+   * injected `<!--dn-preload-->…<!--/dn-preload-->` block from the served
+   * index.html so no stale preload remains. Independent of the inline-state
+   * blob, which is left untouched. Best-effort; never throws.
+   *
+   * @param mixed $old_value Previous option value (unused).
+   * @param mixed $new_value New option value.
+   */
+  public function on_preload_lcp_toggled($old_value, $new_value): void {
+    if ($new_value) return; // turned ON — next publish injects the preload
+    try {
+      $path = $this->resolve_index_html_path();
+      if ($path === '') return;
+      $html = @file_get_contents($path);
+      if (!is_string($html) || $html === '') return;
+      $cleared = preg_replace('#\s*<!--dn-preload-->.*?<!--/dn-preload-->#s', '', $html, 1, $count);
+      if (is_string($cleared) && $count > 0 && $cleared !== $html) {
+        $this->atomic_write($path, $cleared);
+      }
+    } catch (\Throwable $e) {
+      error_log('[DigitalNewspaper] preload clear-on-disable failed: ' . $e->getMessage());
+    }
+  }
+
+  /**
    * Recursively delete the wp-content/dn-static directory. Best-effort; never
    * throws. Used when the feature is disabled.
    */
@@ -1626,96 +1901,330 @@ HTACCESS;
    */
   private function regenerate_static_snapshots(?string $only_date, $dataVersion): int {
     $written = 0;
+    // Names of the "index" files (settings/dates/version/initial-state) that
+    // failed to write this run.  These must stay mutually consistent — a stale
+    // dates.json paired with a fresh initial-state.json is the exact bug this
+    // method guards against — so any failure here is logged loudly for ops.
+    $indexFailures = [];
     try {
       $base = $this->static_snapshot_path();
       if ($base === '') return 0;
 
       // settings.json
       $granularSettings = $this->get_settings_granular();
-      $this->atomic_write(
+      if (!$this->atomic_write(
         $this->static_snapshot_path('settings.json'),
         wp_json_encode([
           'settings'    => $granularSettings['settings'],
           'dataVersion' => $granularSettings['dataVersion'],
         ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
-      );
+      )) {
+        $indexFailures[] = 'settings.json';
+      }
 
-      // dates.json
+      // dates.json — derived from the authoritative union in get_dates_granular().
+      // Computed once and reused for initial-state.json below so the two files
+      // can never disagree about the available dates / latest date.
       $granularDates = $this->get_dates_granular();
       $dates = array_values($granularDates['dates']);
-      $this->atomic_write(
+      if (!$this->atomic_write(
         $this->static_snapshot_path('dates.json'),
         wp_json_encode([
           'dates'      => $dates,
           'latestDate' => $granularDates['latestDate'],
         ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
-      );
+      )) {
+        $indexFailures[] = 'dates.json';
+      }
 
       // version.json
-      $this->atomic_write(
+      if (!$this->atomic_write(
         $this->static_snapshot_path('version.json'),
         wp_json_encode(['dataVersion' => $dataVersion], JSON_UNESCAPED_SLASHES)
-      );
+      )) {
+        $indexFailures[] = 'version.json';
+      }
 
       // editions/<date>.json — scoped (one date) or all dates on a full write.
+      // Each date is isolated in its own try/catch so that a single malformed
+      // edition (e.g. get_edition_for_date_granular or dn_attach_page_dimensions
+      // throwing) can NEVER abort the whole regeneration. Before this guard a
+      // mid-loop throw left the files written AFTER the loop (initial-state.json)
+      // stale relative to the files written before it (dates.json) — the root
+      // cause of the observed dates.json/initial-state.json inconsistency.
       $datesToWrite = ($only_date !== null) ? [$only_date] : $dates;
       foreach ($datesToWrite as $d) {
         if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', (string) $d)) continue;
-        $granularEd = $this->get_edition_for_date_granular($d);
-        // Attach intrinsic image dimensions (imageVariants.{width,height}) so the
-        // STATIC SNAPSHOTS carry them. When snapshots are enabled the public
-        // viewer reads these files instead of the REST endpoint, so the CLS-fix
-        // dimensions must be baked in here too (not only in the REST handler).
-        // Best-effort/cached — see dn_attach_page_dimensions().
-        $editionsWithDims = $this->dn_attach_page_dimensions($granularEd['editions']);
-        if ($this->atomic_write(
-          $this->static_snapshot_path('editions/' . $d . '.json'),
-          wp_json_encode([
-            'date'        => $d,
-            'editions'    => $editionsWithDims,
-            'dataVersion' => $granularEd['dataVersion'],
-          ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
-        )) {
-          $written++;
-        }
+        try {
+          $granularEd = $this->get_edition_for_date_granular($d);
+          // Attach intrinsic image dimensions (imageVariants.{width,height}) so the
+          // STATIC SNAPSHOTS carry them. When snapshots are enabled the public
+          // viewer reads these files instead of the REST endpoint, so the CLS-fix
+          // dimensions must be baked in here too (not only in the REST handler).
+          // Best-effort/cached — see dn_attach_page_dimensions().
+          $editionsWithDims = $this->dn_attach_page_dimensions($granularEd['editions']);
+          if ($this->atomic_write(
+            $this->static_snapshot_path('editions/' . $d . '.json'),
+            wp_json_encode([
+              'date'        => $d,
+              'editions'    => $editionsWithDims,
+              'dataVersion' => $granularEd['dataVersion'],
+            ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
+          )) {
+            $written++;
+          }
 
-        // Light first-paint variant: identical structure, but the heavy section
-        // `content` HTML is kept only for the FIRST page of each edition and
-        // stripped from the rest. The Angular app loads this first for an
-        // instant render, then upgrades to the full payload in the background.
-        // This shrinks the initial transfer dramatically even when the host
-        // does not compress JSON.
-        $this->atomic_write(
-          $this->static_snapshot_path('editions/' . $d . '.light.json'),
-          wp_json_encode([
-            'date'        => $d,
-            'editions'    => $this->build_light_editions($editionsWithDims),
-            'dataVersion' => $granularEd['dataVersion'],
-            'light'       => true,
-          ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
-        );
+          // Light first-paint variant: identical structure, but the heavy section
+          // `content` HTML is kept only for the FIRST page of each edition and
+          // stripped from the rest. The Angular app loads this first for an
+          // instant render, then upgrades to the full payload in the background.
+          // This shrinks the initial transfer dramatically even when the host
+          // does not compress JSON.
+          $this->atomic_write(
+            $this->static_snapshot_path('editions/' . $d . '.light.json'),
+            wp_json_encode([
+              'date'        => $d,
+              'editions'    => $this->build_light_editions($editionsWithDims),
+              'dataVersion' => $granularEd['dataVersion'],
+              'light'       => true,
+            ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
+          );
+        } catch (\Throwable $ed) {
+          // One bad date must not stop the others or the index files below.
+          error_log('[DigitalNewspaper] static snapshot: edition ' . $d . ' failed: ' . $ed->getMessage());
+        }
       }
 
       // initial-state.json — the inlining payload (latest published date).
+      // Reuses $dates / $granularDates from above so it stays consistent with
+      // dates.json. Isolated so a failure here is recorded, not silently lost.
       $latest = $granularDates['latestDate'];
       if (is_string($latest) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $latest)) {
-        $latestEd = $this->get_edition_for_date_granular($latest);
-        $this->atomic_write(
-          $this->static_snapshot_path('initial-state.json'),
-          wp_json_encode([
+        try {
+          $latestEd = $this->get_edition_for_date_granular($latest);
+          $initialStateJson = wp_json_encode([
             'settings'    => $granularSettings['settings'],
             'dates'       => $dates,
             'editions'    => $this->dn_attach_page_dimensions($latestEd['editions']),
             'dataVersion' => $latestEd['dataVersion'],
             'generatedAt' => gmdate('c'),
-          ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
-        );
+          ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+          if (!$this->atomic_write(
+            $this->static_snapshot_path('initial-state.json'),
+            $initialStateJson
+          )) {
+            $indexFailures[] = 'initial-state.json';
+          }
+          // Rewrite the served index.html with whichever first-paint
+          // optimisations are enabled: inline bootstrap state (zero-API paint)
+          // and/or a first-page image preload. Passing the (already
+          // domain-normalised) editions lets the preload href match the URL the
+          // Angular viewer resolves, so the image is fetched exactly once. No-op
+          // unless an operator enabled OPTION_INLINE_INDEX or OPTION_PRELOAD_LCP;
+          // never throws.
+          $this->maybe_rewrite_index_html($initialStateJson, $latestEd['editions']);
+        } catch (\Throwable $is) {
+          $indexFailures[] = 'initial-state.json';
+          error_log('[DigitalNewspaper] static snapshot: initial-state.json failed: ' . $is->getMessage());
+        }
       }
     } catch (\Throwable $e) {
       // Snapshots are an optimisation, never a correctness requirement.
       error_log('[DigitalNewspaper] static snapshot regeneration failed: ' . $e->getMessage());
     }
+    if (!empty($indexFailures)) {
+      // These four files must move together; a partial write risks a stale
+      // index served alongside fresh editions. Surface it so ops can re-run
+      // "Regenerate snapshots now".
+      error_log('[DigitalNewspaper] static snapshot: index file(s) failed to write: ' . implode(', ', $indexFailures));
+    }
     return $written;
+  }
+
+  /**
+   * Resolve the absolute path to the served entry HTML, or '' if none is found
+   * or writable. Honours OPTION_INDEX_HTML_PATH (and the 'dn_index_html_path'
+   * filter) first, then tries a few common docroot locations. The file must
+   * already exist and be writable — we never create it.
+   *
+   * Two file names are checked in each directory: a classic Angular build emits
+   * `index.html`, while an SSR/CSR build (Angular 17+) emits `index.csr.html` as
+   * the client shell and ships NO `index.html` on a static deploy. We prefer
+   * `index.html` when present and fall back to `index.csr.html`.
+   */
+  private function resolve_index_html_path(): string {
+    $configured = (string) get_option(self::OPTION_INDEX_HTML_PATH, '');
+    /** Allow ops/code to point at a non-standard location. */
+    $configured = (string) apply_filters('dn_index_html_path', $configured);
+
+    $candidates = [];
+    // An explicit override is used exactly as given (any file name).
+    if ($configured !== '') $candidates[] = $configured;
+
+    // Directories that may hold the served entry file. Common layouts: Angular
+    // app served from the docroot, WordPress installed in /wp.
+    $dirs = [];
+    if (defined('ABSPATH')) {
+      $dirs[] = rtrim(ABSPATH, '/\\');                 // WP root
+      $dirs[] = dirname(rtrim(ABSPATH, '/\\'));        // parent of WP (/wp → docroot)
+    }
+    if (!empty($_SERVER['DOCUMENT_ROOT'])) {
+      $dirs[] = rtrim($_SERVER['DOCUMENT_ROOT'], '/\\');
+    }
+    // index.html first (classic build), then index.csr.html (SSR/CSR build).
+    foreach ($dirs as $dir) {
+      $candidates[] = $dir . '/index.html';
+      $candidates[] = $dir . '/index.csr.html';
+    }
+
+    foreach (array_unique($candidates) as $path) {
+      // Only accept a file that exists, is writable, and actually contains our
+      // placeholder — so we never clobber an unrelated HTML file.
+      if ($path !== '' && @is_file($path) && @is_writable($path)) {
+        $head = @file_get_contents($path, false, null, 0, 65536);
+        if (is_string($head) && strpos($head, 'id="dn-initial-state"') !== false) {
+          return $path;
+        }
+      }
+    }
+    return '';
+  }
+
+  /**
+   * Rewrite the served index.html on publish to apply two INDEPENDENT, opt-in
+   * optimisations in a single atomic write:
+   *
+   *   1. OPTION_INLINE_INDEX  — inline the initial-state.json payload into the
+   *      `<script id="dn-initial-state">` tag (zero-API first paint).
+   *   2. OPTION_PRELOAD_LCP   — inject a `<link rel="preload" as="image">` for
+   *      the first page's image so the LCP download starts during HTML parse.
+   *
+   * Either, both, or neither may be enabled. The method is a complete no-op
+   * (and never throws) when both flags are off or no writable index.html with
+   * the placeholder is found. Each enabled feature touches only its own region,
+   * and the disabled feature's region is left exactly as-is (its own
+   * clear-on-disable handler removes stale content), so the two never interfere.
+   *
+   * @param string $payloadJson Already-encoded initial-state.json string.
+   * @param array  $editions    Latest edition list (domain-normalised) for the
+   *                            preload builder. Ignored unless preload is on.
+   */
+  private function maybe_rewrite_index_html(string $payloadJson, array $editions = []): void {
+    try {
+      $inlineOn  = (bool) get_option(self::OPTION_INLINE_INDEX, false);
+      $preloadOn = (bool) get_option(self::OPTION_PRELOAD_LCP, false);
+      if (!$inlineOn && !$preloadOn) return; // both off — nothing to do
+
+      $path = $this->resolve_index_html_path();
+      if ($path === '') return;
+
+      $html = @file_get_contents($path);
+      if (!is_string($html) || $html === '') return;
+
+      $newHtml = $html;
+
+      // ── 1. Inline bootstrap state (independent) ──────────────────────────
+      if ($inlineOn && $payloadJson !== '') {
+        // Neutralise any "</script>" that could otherwise close the tag early.
+        // Standard JSON-in-HTML escaping; the browser's JSON parser reverses it.
+        $safe = str_replace('</', '<\/', $payloadJson);
+        // Replace the CONTENTS of the existing placeholder tag, preserving its
+        // attributes. 's' lets .*? span newlines; non-greedy stops at the first
+        // closing tag. If the placeholder is somehow absent the block is a no-op
+        // (resolve_index_html_path() guarantees it is present), so we never bail
+        // out of the preload step below on its account.
+        $replacement = '<script id="dn-initial-state" type="application/json">' . $safe . '</script>';
+        $pattern     = '#<script id="dn-initial-state"[^>]*>.*?</script>#s';
+        $tmp         = preg_replace($pattern, $replacement, $newHtml, 1, $count);
+        if ($tmp !== null && $count > 0) {
+          $newHtml = $tmp;
+        }
+      }
+
+      // ── 2. First-page image preload (independent) ────────────────────────
+      // Always strip any existing block first so a stale/duplicate preload can
+      // never accumulate; re-add a fresh one only when the feature is enabled.
+      // The bytes come from the existing wp-content/uploads file — nothing is
+      // duplicated; this only starts the fetch earlier (during HTML parse, in
+      // parallel with the app bundle) than Angular rendering the <img> would.
+      $newHtml = preg_replace('#\s*<!--dn-preload-->.*?<!--/dn-preload-->#s', '', $newHtml, 1) ?? $newHtml;
+      if ($preloadOn) {
+        $preloadBlock = $this->build_first_page_preload_block($editions);
+        if ($preloadBlock !== '') {
+          $injected = preg_replace('#</head>#i', $preloadBlock . '</head>', $newHtml, 1, $hc);
+          if ($injected !== null && $hc > 0) {
+            $newHtml = $injected;
+          }
+        }
+      }
+
+      if ($newHtml === $html) return; // already identical — skip the write
+
+      // Reuse the atomic temp-file+rename writer (no .gz siblings for .html).
+      $this->atomic_write($path, $newHtml);
+    } catch (\Throwable $e) {
+      // These are optimisations, never a correctness requirement.
+      error_log('[DigitalNewspaper] index.html rewrite failed: ' . $e->getMessage());
+    }
+  }
+
+  /**
+   * Build the `<link rel="preload">` markup (wrapped in <!--dn-preload--> markers)
+   * for the first page the public viewer displays: the page with the LOWEST id in
+   * edition 1 (falling back to the first edition present), matching the viewer's
+   * default selection. Returns '' when no usable image URL is found.
+   */
+  private function build_first_page_preload_block(array $editions): string {
+    if (empty($editions)) return '';
+
+    // Prefer edition number 1; fall back to the first edition present.
+    $chosen = null;
+    foreach ($editions as $ed) {
+      if (is_array($ed) && isset($ed['edition']) && (int) $ed['edition'] === 1) { $chosen = $ed; break; }
+    }
+    if ($chosen === null) $chosen = is_array($editions[0] ?? null) ? $editions[0] : null;
+    if (!$chosen || empty($chosen['pages']) || !is_array($chosen['pages'])) return '';
+
+    // Lowest page id = the page shown first.
+    $pages = $chosen['pages'];
+    usort($pages, static function ($a, $b) {
+      return ((int) ($a['id'] ?? 0)) <=> ((int) ($b['id'] ?? 0));
+    });
+    $first = $pages[0];
+
+    $fullImage = isset($first['fullImage']) ? trim((string) $first['fullImage']) : '';
+    $thumb     = isset($first['thumbnail']) ? trim((string) $first['thumbnail']) : '';
+    $fullOk    = $fullImage !== '' && $this->is_safe_preload_url($fullImage);
+    $thumbOk   = $thumb !== '' && $this->is_safe_preload_url($thumb);
+
+    // The viewer shows the thumbnail as an instant low-res placeholder, then
+    // crossfades in the full image. So preload the THUMBNAIL first at high
+    // priority (it is the first paint) and the full image right after at default
+    // priority. With no thumbnail, the full image is the first paint → high.
+    $links = '';
+    if ($thumbOk) {
+      $links .= '<link rel="preload" as="image" fetchpriority="high" href="' . esc_url($thumb) . '">';
+      if ($fullOk) {
+        $links .= '<link rel="preload" as="image" href="' . esc_url($fullImage) . '">';
+      }
+    } elseif ($fullOk) {
+      $links .= '<link rel="preload" as="image" fetchpriority="high" href="' . esc_url($fullImage) . '">';
+    }
+    return $links === '' ? '' : '<!--dn-preload-->' . $links . '<!--/dn-preload-->';
+  }
+
+  /**
+   * Defence-in-depth allow-list for URLs placed into a <head> preload href.
+   * Image URLs originate from admin-entered newspaper data (already normalised
+   * to the canonical origin by normalize_domain_urls()); this rejects any
+   * non-http(s) scheme (data:, blob:, javascript:, protocol-relative "//host")
+   * before it can reach the served index.html. esc_url() still encodes the
+   * value — this is an additional gate, not a replacement for it.
+   */
+  private function is_safe_preload_url($url): bool {
+    if (!is_string($url)) return false;
+    $url = trim($url);
+    return $url !== '' && (stripos($url, 'http://') === 0 || stripos($url, 'https://') === 0);
   }
 
   /**
@@ -4118,6 +4627,10 @@ HTML;
       'showPagePagination', 'showBetaBadge',
       'underMaintenance', 'maintenanceMessage',
       'headScripts', 'othersPageTitle',
+      // Persist the WebP/format preference so it survives a settings save and
+      // can be enforced server-side in upload_media(). Without this key the
+      // PATCH stripped imageFormat and it only ever lived in browser storage.
+      'imageFormat',
     ];
     $settings = array_intersect_key($incoming, array_flip($allowed_keys));
 
@@ -7071,6 +7584,28 @@ HTML;
     }
     // Use the server-verified type, not the client-supplied one
     $file['type'] = $allowed_ext_map[$detected_ext];
+
+    // ── Enforce the site's WebP image-format preference (server-side) ─────────
+    // The "WebP" Global Setting was previously enforced only in the Angular
+    // admin (canvas re-encode + an `accept` hint), so an authenticated editor
+    // could bypass it by POSTing a JPEG/PNG/GIF straight to this endpoint. When
+    // the stored setting is explicitly 'webp', reject non-WebP uploads here too.
+    //
+    // Exemption: the hi-res crop SOURCE (filenames marked `-hires`) is uploaded
+    // by the admin in its ORIGINAL format on purpose, to avoid double re-encoding
+    // and preserve maximum detail for cropping (see handleFullImageUpload). In
+    // WebP mode the admin already encodes the display/thumbnail/section/logo
+    // images as WebP, so this check never rejects a legitimate UI upload — it
+    // only blocks a direct-API bypass. Defaults to permissive ('all') when the
+    // option is absent, so a site that never opted into WebP is never affected.
+    $dn_settings    = $this->get_settings_granular();
+    $dn_imageFormat = $dn_settings['settings']['imageFormat'] ?? 'all';
+    $dn_isHiRes     = (strpos($file['name'], '-hires') !== false);
+    if ($dn_imageFormat === 'webp' && $detected_ext !== 'webp' && !$dn_isHiRes) {
+      return new WP_REST_Response([
+        'error' => 'This site is configured to accept WebP images only. Please upload a .webp file.'
+      ], 415);
+    }
 
     $overrides = ['test_form' => false];
     $uploaded   = wp_handle_upload($file, $overrides);

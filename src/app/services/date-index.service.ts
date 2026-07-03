@@ -25,6 +25,15 @@ export class DateIndexService {
     `${WP_BASE_URL}/wp-json/digital-newspaper/v1/data/dates`;
 
   /**
+   * Static snapshot of the same `{ dates, latestDate }` payload, written by the
+   * WordPress plugin on every publish and served by Apache with NO PHP. Public
+   * readers fetch this first (see `fetch(preferStatic=true)`) and fall back to
+   * the authoritative REST endpoint above on any miss/empty/error.
+   */
+  private readonly _staticUrl =
+    `${WP_BASE_URL}/wp-content/dn-static/dates.json`;
+
+  /**
    * localStorage key for the most-recently-published date.
    *
    * Persisting latestDate lets NewspaperDataService initialize
@@ -74,11 +83,39 @@ export class DateIndexService {
    * load) and the error is logged — callers should fall back to
    * `NewspaperDataService.getAvailableDates()` for now.
    *
+   * @param preferStatic When true (public viewer), try the static snapshot
+   *   first and fall back to REST on miss/error. When false (admin editor), go
+   *   straight to authoritative REST so the editor's date picker can never lag
+   *   the real data.
    * @returns Observable<string[]> — the sorted list of available dates.
    */
-  fetch(): Observable<string[]> {
+  fetch(preferStatic = false): Observable<string[]> {
+    // Authoritative REST read, with the original "list unchanged" fallback.
+    const rest$ = this._get(this._endpoint).pipe(
+      catchError(err => {
+        console.warn(
+          '[DateIndexService] fetch failed — dates list unchanged. Reason:',
+          err?.message ?? err
+        );
+        return of(this._availableDates());
+      })
+    );
+
+    if (!preferStatic) return rest$;
+
+    // Static-first: a 404 / empty / timeout on the snapshot throws and falls
+    // through to the identical REST read above. Same `{ dates, latestDate }` shape.
+    return this._get(this._staticUrl).pipe(catchError(() => rest$));
+  }
+
+  /**
+   * Low-level GET that fetches dates, updates both signals, and persists
+   * latestDate. Errors propagate (no catchError here) so `fetch()` can decide
+   * whether to fall back from the static snapshot to REST.
+   */
+  private _get(url: string): Observable<string[]> {
     return this.http
-      .get<{ dates: string[]; latestDate: string }>(this._endpoint)
+      .get<{ dates: string[]; latestDate: string }>(url)
       .pipe(
         // Per-request timeout: fail fast so a single slow endpoint doesn't
         // exhaust the 20 s granular-chain budget in NewspaperDataService.
@@ -95,13 +132,6 @@ export class DateIndexService {
           }
         }),
         map(res => (Array.isArray(res.dates) ? [...res.dates].sort().reverse() : [])),
-        catchError(err => {
-          console.warn(
-            '[DateIndexService] fetch failed — dates list unchanged. Reason:',
-            err?.message ?? err
-          );
-          return of(this._availableDates());
-        })
       );
   }
 
@@ -133,7 +163,12 @@ export class DateIndexService {
       .sort()
       .reverse();
     this._availableDates.set(merged);
-    if (merged.length > 0 && !this._latestDate()) {
+    // Update latestDate whenever the merged list has a newer date than the
+    // currently-cached value (not just when the cache is empty).  This covers
+    // the case where a stale inline bootstrap blob was loaded — its editions
+    // only span up to the build date, so the cached latestDate can lag behind
+    // a freshly-fetched edition list.
+    if (merged.length > 0 && merged[0] > (this._latestDate() ?? '')) {
       const latest = merged[0];
       this._latestDate.set(latest);
       DateIndexService._persistLatestDate(latest);

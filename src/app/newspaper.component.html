@@ -603,8 +603,24 @@
           }
           <div class="image-wrapper">
             <div class="image-inner">
-              @if (!imageLoaded) {
+              @if (!imageLoaded && !mainThumbSrc) {
                 <div class="skeleton-loader main-image-skeleton"></div>
+              }
+              <!-- Progressive blur-up: the lightweight thumbnail paints instantly
+                   as a low-res placeholder, then the full image (below) crossfades
+                   over it once loaded. aria-hidden + pointer-events:none so it is
+                   purely decorative and never blocks the sections overlay. -->
+              @if (mainThumbSrc) {
+                <img
+                  class="main-page-thumb-placeholder"
+                  [class.is-faded]="imageLoaded"
+                  [src]="mainThumbSrc"
+                  alt=""
+                  aria-hidden="true"
+                  decoding="async"
+                  fetchpriority="high"
+                  (error)="onMainThumbError()"
+                  />
               }
               @if (showSlowConnectionWarning && !imageLoaded) {
                 <div class="slow-connection-notice" role="alert">
@@ -639,10 +655,11 @@
                 }
                 <img
                   #mainImage
-                  [src]="resolveImageUrl(currentPage.fullImage)"
+                  [src]="mainImageSrc"
                   [alt]="ts.t('viewer.page') + ' ' + ts.toLocaleDigits(currentPage.id)"
                   class="main-page-image"
-                  fetchpriority="high"
+                  [class.is-unavailable]="mainImageFailed"
+                  [attr.fetchpriority]="mainThumbSrc ? 'auto' : 'high'"
                   decoding="async"
                   [attr.width]="mainImgWidth"
                   [attr.height]="mainImgHeight"

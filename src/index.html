@@ -105,6 +105,15 @@
     <span id="splash-fallback-text" class="splash-text" style="display:none">Loading</span>
     <div class="splash-spinner"></div>
   </div>
+  <!--
+    Publish-time inlined bootstrap state. Empty by default and completely inert
+    (type="application/json" is not executed). When the WordPress plugin's
+    "inline index" option is enabled it rewrites the contents of this exact tag
+    with initial-state.json on every publish, so the first paint needs ZERO API
+    calls. BootstrapStateService reads it by id; if it stays empty the app boots
+    via the normal network path, unchanged.
+  -->
+  <script id="dn-initial-state" type="application/json"></script>
   <app-root></app-root>
 </body>
 </html>

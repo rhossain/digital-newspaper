@@ -376,6 +376,24 @@ async function deployWithSFTP() {
       files: files.length
     }, null, 2);
     await sftp.put(Buffer.from(markerContent), `${REMOTE}/deploy-info.json`);
+
+    // Keep the Angular entry shell writable by the PHP/web user. The WordPress
+    // plugin injects the first-paint <link rel="preload"> and inline bootstrap
+    // state into this exact file on the next publish; a fresh upload can land as
+    // 0644, so 0664 keeps it group-writable when PHP shares the file's group.
+    // (Angular 17 SSR/CSR builds ship index.csr.html and no index.html, so we
+    // try both.) Best-effort — never fail the deploy over a chmod.
+    for (const name of ['index.csr.html', 'index.html']) {
+      const remoteEntry = `${REMOTE}/${name}`;
+      try {
+        if (await sftp.exists(remoteEntry)) {
+          await sftp.chmod(remoteEntry, 0o664);
+          log(`✓ chmod 664 ${name} (keeps preload/inline injection writable)`, colors.green);
+        }
+      } catch (e) {
+        log(`chmod ${name} skipped: ${e.message}`, colors.yellow);
+      }
+    }
   }
 
   await sftp.end();
@@ -588,7 +606,16 @@ async function deploy() {
     log(`✓ Release branch updated`, colors.green);
     log(`✓ Files deployed via ${USE_SFTP ? 'SFTP' : 'FTP'}`, colors.green);
     log(`✓ Total time: ${duration}s\n`, colors.green);
-    
+
+    // The fresh upload replaced the entry shell (index.csr.html) with the
+    // un-injected build. If the first-paint optimisations are enabled
+    // (Inline Bootstrap State / Preload First-Page Image), re-run the injection:
+    if (!dryRun) {
+      log(`ℹ Reminder: in WP Admin → Digital Newspaper Settings, click`, colors.yellow);
+      log(`  "Regenerate snapshots now" to re-inject preload/inline into the`, colors.yellow);
+      log(`  new index.csr.html (otherwise it self-heals on the next publish).`, colors.yellow);
+    }
+
   } catch (error) {
     console.log(`\n${colors.red}╔════════════════════════════════════════════╗${colors.reset}`);
     console.log(`${colors.red}║          ✗ DEPLOYMENT FAILED ✗             ║${colors.reset}`);

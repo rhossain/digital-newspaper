@@ -2629,7 +2629,7 @@ export class AdminComponent implements OnInit, OnDestroy {
         const fileName = this.buildSectionImageFilename(ext);
         this.uploadImageFile(imageData, fileName);
       };
-      reader.onerror = () => this.toaster.error('Failed to read image file');
+      reader.onerror = () => this.toaster.error('Could not read the image file. Please pick the file again and try once more.', 7000);
       reader.readAsDataURL(file);
       return;
     }
@@ -2677,7 +2677,7 @@ export class AdminComponent implements OnInit, OnDestroy {
       })
       .catch((error) => {
         console.error('Error uploading image:', error);
-        this.toaster.error('Failed to upload image: ' + error.message);
+        this.toaster.error(this.friendlyUploadError('Image upload', error), 7000);
       })
       .finally(() => this.loader.hide());
   }
@@ -2753,6 +2753,41 @@ export class AdminComponent implements OnInit, OnDestroy {
     }
   }
 
+  /**
+   * Build a clear, user-facing message for a failed media upload.
+   *
+   * Connection failures during an upload (e.g. ERR_HTTP2_PROTOCOL_ERROR /
+   * connection reset on a large or slow upload) surface in `fetch` as a bare
+   * `TypeError: Failed to fetch`, which is meaningless to an editor. We detect
+   * those and explain them plainly; every message ends by inviting a retry so
+   * the user always knows the action is safe to repeat.
+   */
+  private friendlyUploadError(label: string, error: unknown): string {
+    const raw = error instanceof Error ? error.message : String(error ?? '');
+    const isNetwork =
+      error instanceof TypeError ||
+      /failed to fetch|networkerror|network error|load failed|connection|socket|timed?\s?out|err_/i.test(raw);
+    if (isNetwork) {
+      return `${label} failed — the connection to the server dropped (common with a large or slow upload). Please check your connection and try again.`;
+    }
+    return `${label} failed${raw ? ': ' + raw : ''}. Please try again.`;
+  }
+
+  /** Promise-based delay used to space out upload retries. */
+  private delay(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /**
+   * HTTP statuses worth retrying — transient server/proxy conditions only.
+   * Client errors (400/401/403/404/413 …) are NOT retried: re-sending an
+   * identical request cannot fix them.
+   */
+  private isTransientStatus(status: number): boolean {
+    return status === 408 || status === 425 || status === 429 ||
+           status === 500 || status === 502 || status === 503 || status === 504;
+  }
+
   private async uploadMediaFile(
     file: File,
     filename: string,
@@ -2776,18 +2811,49 @@ export class AdminComponent implements OnInit, OnDestroy {
       }
     }
 
-    const formData = new FormData();
-    formData.append('file', file, finalName);
+    // POST the file with automatic retry on TRANSIENT failures. The connection
+    // drops seen during large uploads (ERR_HTTP2_PROTOCOL_ERROR / reset, which
+    // reject fetch with a TypeError) and transient 5xx/timeout/429 responses are
+    // retried with backoff so the editor doesn't have to redo the work. The
+    // overwrite confirmation and name resolution above run ONCE, not per attempt.
+    const maxAttempts = 3;
+    const backoffMs = [800, 2200];
+    let response!: Response;
 
-    const response = await this.wafBypassFetch(url, {
-      method: 'POST',
-      headers,
-      body: formData
-    });
+    for (let attempt = 1; ; attempt++) {
+      try {
+        // Fresh FormData per attempt — a consumed body cannot be re-sent.
+        const formData = new FormData();
+        formData.append('file', file, finalName);
+
+        response = await this.wafBypassFetch(url, {
+          method: 'POST',
+          headers,
+          body: formData,
+        });
+
+        // Retry transient server states; fail fast on client errors (401/403/
+        // 413 etc.) where retrying cannot help.
+        if (!response.ok && this.isTransientStatus(response.status) && attempt < maxAttempts) {
+          this.loader.setMessage(`Upload interrupted (HTTP ${response.status}) — retrying… (${attempt + 1}/${maxAttempts})`);
+          await this.delay(backoffMs[attempt - 1] ?? 2200);
+          continue;
+        }
+        break; // success, or a non-retryable response handled below
+      } catch (err) {
+        // Network-layer failure (connection reset / dropped). Retry if attempts remain.
+        if (attempt < maxAttempts) {
+          this.loader.setMessage(`Connection dropped — retrying upload… (${attempt + 1}/${maxAttempts})`);
+          await this.delay(backoffMs[attempt - 1] ?? 2200);
+          continue;
+        }
+        throw err; // exhausted — surfaces as a friendly toast in the caller
+      }
+    }
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(errorText || 'Upload failed');
+      throw new Error(errorText || `Upload failed (HTTP ${response.status})`);
     }
 
     const contentType = response.headers.get('content-type') ?? '';
@@ -3962,7 +4028,7 @@ export class AdminComponent implements OnInit, OnDestroy {
       this.toaster.success('Full image uploaded');
     } catch (error) {
       console.error('Error uploading full image:', error);
-      this.toaster.error('Failed to upload full image: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      this.toaster.error(this.friendlyUploadError('Full image upload', error), 7000);
     } finally {
       this.loader.hide();
       // Reset the input so re-selecting the SAME file (e.g. picking the
@@ -3993,7 +4059,7 @@ export class AdminComponent implements OnInit, OnDestroy {
         })
         .catch((error) => {
           console.error('Error uploading high-res image:', error);
-          this.toaster.error('Failed to upload high-res image');
+          this.toaster.error(this.friendlyUploadError('High-res image upload', error), 7000);
         })
         .finally(() => {
           this.loader.hide();
@@ -4039,7 +4105,7 @@ export class AdminComponent implements OnInit, OnDestroy {
       this.toaster.success('Thumbnail uploaded');
     } catch (error) {
       console.error('Error uploading thumbnail:', error);
-      this.toaster.error('Failed to upload thumbnail: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      this.toaster.error(this.friendlyUploadError('Thumbnail upload', error), 7000);
     } finally {
       this.loader.hide();
       input.value = ''; // allow re-selecting the same file
@@ -4268,7 +4334,7 @@ export class AdminComponent implements OnInit, OnDestroy {
           })
           .catch((error) => {
             console.error('Error uploading logo:', error);
-            this.toaster.error('Failed to upload logo');
+            this.toaster.error(this.friendlyUploadError('Logo upload', error), 7000);
           })
           .finally(() => this.loader.hide());
         return;
@@ -4305,7 +4371,7 @@ export class AdminComponent implements OnInit, OnDestroy {
           })
           .catch((error) => {
             console.error('Error uploading logo:', error);
-            this.toaster.error('Failed to upload logo');
+            this.toaster.error(this.friendlyUploadError('Logo upload', error), 7000);
           })
           .finally(() => this.loader.hide());
       };

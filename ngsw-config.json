@@ -20,6 +20,7 @@
         "files": [
           "/favicon.ico",
           "/assets/favicon.png",
+          "/assets/image-unavailable.svg",
           "/index.html",
           "/index.csr.html",
           "/manifest.webmanifest",
@@ -91,6 +92,78 @@
         "maxSize": 5,
         "maxAge": "30s",
         "timeout": "3s"
+      }
+    },
+    {
+      "name": "static-settings",
+      "urls": [
+        "/**/wp-content/dn-static/settings.json"
+      ],
+      "cacheConfig": {
+        "strategy": "freshness",
+        "maxSize": 4,
+        "maxAge": "1h",
+        "timeout": "3s"
+      }
+    },
+    {
+      "name": "static-dates",
+      "urls": [
+        "/**/wp-content/dn-static/dates.json"
+      ],
+      "cacheConfig": {
+        "strategy": "freshness",
+        "maxSize": 4,
+        "maxAge": "5m",
+        "timeout": "3s"
+      }
+    },
+    {
+      "name": "static-version",
+      "urls": [
+        "/**/wp-content/dn-static/version.json"
+      ],
+      "cacheConfig": {
+        "strategy": "freshness",
+        "maxSize": 4,
+        "maxAge": "30s",
+        "timeout": "3s"
+      }
+    },
+    {
+      "name": "static-initial-state",
+      "urls": [
+        "/**/wp-content/dn-static/initial-state.json"
+      ],
+      "cacheConfig": {
+        "strategy": "freshness",
+        "maxSize": 4,
+        "maxAge": "5m",
+        "timeout": "3s"
+      }
+    },
+    {
+      "name": "static-editions",
+      "urls": [
+        "/**/wp-content/dn-static/editions/**"
+      ],
+      "cacheConfig": {
+        "strategy": "freshness",
+        "maxSize": 400,
+        "maxAge": "24h",
+        "timeout": "3s"
+      }
+    },
+    {
+      "name": "wp-edition-images",
+      "urls": [
+        "/**/wp-content/uploads/**"
+      ],
+      "cacheConfig": {
+        "strategy": "performance",
+        "maxSize": 300,
+        "maxAge": "30d",
+        "timeout": "10s"
       }
     }
   ]

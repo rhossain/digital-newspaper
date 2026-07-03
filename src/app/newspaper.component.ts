@@ -101,6 +101,32 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   mainImgWidth: number | null = null;
   mainImgHeight: number | null = null;
   /**
+   * Resolved thumbnail URL for the CURRENT main page, shown as an instant
+   * low-res placeholder behind the main image until the full-resolution image
+   * finishes loading (progressive "blur-up" / LQIP). Empty when the page has no
+   * distinct thumbnail — the skeleton loader is shown instead. Set in
+   * updateMainImageSources() alongside the <picture> sources.
+   */
+  mainThumbSrc = '';
+  /**
+   * Actual src rendered for the main page image. Normally the resolved full
+   * image; on a load failure it becomes a one-time cache-busted retry URL and,
+   * if that also fails, the bundled "image unavailable" placeholder. Bound
+   * directly in the template (already resolved — NOT passed through
+   * resolveImageUrl again).
+   */
+  mainImageSrc = '';
+  /** True once the main image has fallen back to the bundled placeholder. */
+  mainImageFailed = false;
+  /** One-shot guard so the main image is retried at most once per page. */
+  private _mainImageRetried = false;
+  /**
+   * Bundled, app-shipped last-resort image shown when a page image or thumbnail
+   * cannot load. Lives in src/assets (precached by the service-worker app-shell,
+   * works offline). An app-relative path — never run through resolveImageUrl().
+   */
+  readonly IMAGE_UNAVAILABLE_SRC = 'assets/image-unavailable.svg';
+  /**
    * Cross-date thumbnail source cache — keyed by page ID scoped to a date.
    * Key format: `${date}:${pageId}` — survives date navigation so that
    * returning to a previously-visited date can skip the skeleton for URLs
@@ -874,6 +900,18 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     this.mainImgWidth = null;
     this.mainImgHeight = null;
 
+    // Thumbnail placeholder for the progressive blur-up. Resolved here (not gated
+    // on variants) so it works for all pages; empty → skeleton loader is shown.
+    const thumb = typeof page?.thumbnail === 'string' ? page.thumbnail.trim() : '';
+    this.mainThumbSrc = thumb ? this.resolveImageUrl(thumb) : '';
+
+    // Main image src + reset the per-page failure/retry state for the fallback
+    // chain (retry-once → bundled placeholder) handled in onImageError().
+    const full = typeof page?.fullImage === 'string' ? page.fullImage.trim() : '';
+    this.mainImageSrc = full ? this.resolveImageUrl(full) : '';
+    this.mainImageFailed = false;
+    this._mainImageRetried = false;
+
     const variants = page?.imageVariants;
     if (!variants) return;
 
@@ -1045,10 +1083,26 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   }
 
   onThumbnailError(pageId: number) {
-    // Clear the skeleton on image load failure, but do NOT cache the URL.
-    // Caching a failed src in _thumbnailSrcCache would cause every future
-    // visit to this date to skip the skeleton but show a permanently broken
-    // image — the cache hit logic assumes the URL was successfully loaded.
+    // Do NOT cache a failed src in _thumbnailSrcCache — the cache-hit path
+    // assumes the URL loaded successfully, so caching a failure would show a
+    // permanently broken thumbnail on every future visit to this date.
+    const current = this.pageThumbnailSrcs[pageId];
+
+    // Step 1 — the thumbnail failed: fall back to the full page image (often a
+    // distinct file that is present even when the thumbnail is missing).
+    const page = this.pages.find(p => p.id === pageId);
+    const full = page ? this.resolveImageUrl((page.fullImage ?? '').trim()) : '';
+    if (full && current !== full && current !== this.IMAGE_UNAVAILABLE_SRC) {
+      this.pageThumbnailSrcs[pageId] = full;
+      this.thumbnailsLoading[pageId] = true; // keep skeleton until the full image loads
+      this.cdr.markForCheck();
+      return;
+    }
+
+    // Step 2 — the full image also failed (or none exists): bundled placeholder.
+    if (current !== this.IMAGE_UNAVAILABLE_SRC) {
+      this.pageThumbnailSrcs[pageId] = this.IMAGE_UNAVAILABLE_SRC;
+    }
     this.thumbnailsLoading[pageId] = false;
     this.cdr.markForCheck();
   }
@@ -1079,8 +1133,46 @@ export class NewspaperComponent implements OnInit, OnDestroy {
 
   onImageError() {
     this.clearSlowConnectionTimer();
+
+    // Already on the bundled placeholder — nothing more to try.
+    if (this.mainImageFailed) {
+      this.imageLoaded = true;
+      this.cdr.markForCheck();
+      return;
+    }
+
+    // Step 1 — one cache-busted retry to ride out a transient failure (the
+    // distinct query string also bypasses any stale service-worker cache entry).
+    if (!this._mainImageRetried) {
+      this._mainImageRetried = true;
+      const base = this.resolveImageUrl((this.currentPage?.fullImage ?? '').trim());
+      if (base) {
+        this.mainImageSrc = base + (base.includes('?') ? '&' : '?') + 'dnretry=' + Date.now();
+        // Keep the skeleton up while the retry loads.
+        this.cdr.markForCheck();
+        return;
+      }
+    }
+
+    // Step 2 — give up: show the bundled placeholder. Clear the next-gen
+    // <source> srcsets too, otherwise the <picture> would keep trying a failed
+    // variant instead of falling through to this <img>.
+    this.mainImageFailed = true;
+    this.mainAvifSrcset = '';
+    this.mainWebpSrcset = '';
+    this.mainImageSrc = this.IMAGE_UNAVAILABLE_SRC;
     this.imageLoaded = true;
-    this.cdr.markForCheck(); // same reason as onImageLoad()
+    this.cdr.markForCheck();
+  }
+
+  /**
+   * The main-view blur-up thumbnail failed to load. It's purely decorative and
+   * the full image is loading independently, so just hide the placeholder (the
+   * skeleton shows until the full image arrives).
+   */
+  onMainThumbError() {
+    this.mainThumbSrc = '';
+    this.cdr.markForCheck();
   }
 
   /** Reload the entire page when the user requests it from the slow-connection notice. */
