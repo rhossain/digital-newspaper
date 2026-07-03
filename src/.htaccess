@@ -1,7 +1,42 @@
-# Redirect all routes to index.html for Angular HTML5 pushState routing
+# Redirect all Angular routes to index.csr.html (the Angular SSR browser shell)
+
+# ── Social bot cache bypass ──────────────────────────────────────────────────
+# LiteSpeed page cache and Cloudflare/CDN layers can serve a cached Angular
+# shell to social crawlers, completely bypassing the mod_rewrite rules below.
+# This block runs before mod_rewrite and signals both layers to skip the cache.
+#
+# IS_SOCIAL_BOT — used by the mod_headers block at the bottom to emit
+#   Cache-Control: no-store on the PHP /social endpoint response so CDNs
+#   (Cloudflare, etc.) do not cache it and serve it to regular visitors.
+#
+# no-cache — LiteSpeed Page Cache's built-in env var: when set, LiteSpeed
+#   skips its cache lookup entirely for this request so mod_rewrite fires.
+#   Reference: https://www.litespeedtech.com/support/wiki/doku.php/litespeed_wiki:cache:lscache:no-cache
+<IfModule mod_setenvif.c>
+  SetEnvIfNoCase User-Agent "facebookexternalhit|Facebot|Twitterbot|Xbot|LinkedInBot|WhatsApp|Slackbot|Slackbot-LinkExpanding|TelegramBot|Discordbot|Pinterest|vkShare|W3C_Validator|Googlebot-Image" IS_SOCIAL_BOT=1
+  SetEnvIfNoCase User-Agent "facebookexternalhit|Facebot|Twitterbot|Xbot|LinkedInBot|WhatsApp|Slackbot|Slackbot-LinkExpanding|TelegramBot|Discordbot|Pinterest|vkShare|W3C_Validator|Googlebot-Image" no-cache=1
+</IfModule>
+# ─────────────────────────────────────────────────────────────────────────────
+
 <IfModule mod_rewrite.c>
   RewriteEngine On
   RewriteBase /
+
+  # ---------------------------------------------------------------
+  # Serve PRE-COMPRESSED static assets (Brotli/Gzip)
+  # On this LiteSpeed host, the mod_deflate / mod_brotli AddOutputFilterByType
+  # directives below are ignored for static files, so JS/CSS/JSON would ship
+  # uncompressed. The build (`npm run build` → scripts/compress-dist.js) writes
+  # <file>.br and <file>.gz siblings; these rules serve them by negotiation.
+  # The -f guards only rewrite when a sibling exists, so a missing compressed
+  # file falls back to the original uncompressed asset exactly as before.
+  # ---------------------------------------------------------------
+  RewriteCond %{HTTP:Accept-Encoding} br
+  RewriteCond %{REQUEST_FILENAME}\.br -f
+  RewriteRule ^(.+\.(?:js|mjs|css|json|svg|webmanifest))$ $1.br [L]
+  RewriteCond %{HTTP:Accept-Encoding} gzip
+  RewriteCond %{REQUEST_FILENAME}\.gz -f
+  RewriteRule ^(.+\.(?:js|mjs|css|json|svg|webmanifest))$ $1.gz [L]
 
   # ---------------------------------------------------------------
   # Social media crawler detection
@@ -34,13 +69,57 @@
   RewriteCond %{HTTP_USER_AGENT} "facebookexternalhit|Facebot|Twitterbot|Xbot|LinkedInBot|WhatsApp|Slackbot|Slackbot-LinkExpanding|TelegramBot|Discordbot|Pinterest|vkShare|W3C_Validator|Googlebot-Image" [NC]
   RewriteRule ^([0-9]{4}-[0-9]{2}-[0-9]{2})/([^/?]+)/?$ /wp/index.php?rest_route=/digital-newspaper/v1/social&date=$1&slug=$2 [NE,L,QSA]
 
+  # ── Root URL explicit rewrite ────────────────────────────────────────────────
+  # / is a real directory on disk. The !-d catch-all at the bottom never fires
+  # for it. DirectoryIndex in .htaccess only works if AllowOverride includes
+  # "Indexes" — most shared hosts omit this, making DirectoryIndex silently
+  # ignored. This rule handles the root request via mod_rewrite directly.
+  # Crawler bots (handled above) have already exited with [L] before reaching here.
+  #
+  # Prefer the prerendered homepage (index.html) when it exists — users see
+  # full newspaper content immediately with no blank page or loading spinner.
+  # Fall back to index.csr.html (the CSR app shell) when prerendering failed
+  # or was skipped during build (e.g. WordPress API unreachable at build time).
+  RewriteCond %{DOCUMENT_ROOT}/index.html -f
+  RewriteRule ^$ /index.html [L]
+  RewriteRule ^$ /index.csr.html [L]
+
   # Serve existing files and directories directly
+  # Prerendered homepage shell
   RewriteRule ^index\.html$ - [L]
+  # Angular SSR builds rename the browser shell to index.csr.html
+  RewriteRule ^index\.csr\.html$ - [L]
+  # Compatibility redirects: if anyone hits root-level WP paths, forward to /wp.
+  RewriteRule ^wp-admin/?$ /wp/wp-admin/ [R=302,L,NC]
+  RewriteRule ^wp-login\.php$ /wp/wp-login.php [R=302,L,NC]
+  RewriteRule ^xmlrpc\.php$ /wp/xmlrpc.php [R=302,L,NC]
+  # Never route WordPress/admin/auth URLs through the Angular SPA.
+  RewriteRule ^wp(?:/|$) - [L,NC]
+  RewriteRule ^wp-admin(?:/|$) - [L,NC]
+  RewriteRule ^wp-login\.php$ - [L,NC]
+  RewriteRule ^xmlrpc\.php$ - [L,NC]
   RewriteCond %{REQUEST_FILENAME} !-f
   RewriteCond %{REQUEST_FILENAME} !-d
-  RewriteCond %{REQUEST_URI}      !^/wp/ [NC]
-  # Catch-all: send everything else (including /admin/, /2026-01-01/, etc.) to index.html
-  RewriteRule ^ /index.html [L]
+  RewriteCond %{REQUEST_URI}      !^/(wp|wp-admin)(?:/|$) [NC]
+  RewriteCond %{REQUEST_URI}      !^/wp-login\.php$ [NC]
+  RewriteCond %{REQUEST_URI}      !^/xmlrpc\.php$ [NC]
+  # Catch-all: send everything else (including /admin/, /2026-01-01/, etc.) to index.csr.html
+  # (Angular SSR builds rename the app shell from index.html → index.csr.html)
+  RewriteRule ^ /index.csr.html [L]
+</IfModule>
+
+# The SPA HTML shell must NEVER be stale-cached. index.html / index.csr.html
+# reference HASHED JS/CSS bundles that change on every deploy. If a browser keeps
+# an old shell (LiteSpeed serves it with max-age=3600 by default), it points at a
+# bundle hash that no longer exists after a deploy → the SPA fallback returns HTML
+# in the script's place → the browser can't execute it → BLANK PAGE for up to an
+# hour. Forcing revalidation makes every load pick up the current shell, while the
+# hashed assets below keep their 1-year cache. `Header always set` is used because
+# LiteSpeed overrides mod_expires for static HTML.
+<IfModule mod_headers.c>
+  <FilesMatch "^index(\.csr)?\.html$">
+    Header always set Cache-Control "no-cache, must-revalidate"
+  </FilesMatch>
 </IfModule>
 
 # Long-term caching for hashed Angular assets (JS, CSS, images)
@@ -57,4 +136,90 @@
   ExpiresByType image/x-icon              "access plus 1 year"
   ExpiresByType font/woff2                "access plus 1 year"
   ExpiresByType font/woff                 "access plus 1 year"
+</IfModule>
+
+# Gzip compression — reduces JS/CSS/JSON/HTML transfer sizes by ~60–70%.
+# Guarded by IfModule so the file is safe on hosts without mod_deflate.
+<IfModule mod_deflate.c>
+  AddOutputFilterByType DEFLATE text/html
+  AddOutputFilterByType DEFLATE text/plain
+  AddOutputFilterByType DEFLATE text/css
+  AddOutputFilterByType DEFLATE text/javascript
+  AddOutputFilterByType DEFLATE application/javascript
+  AddOutputFilterByType DEFLATE application/json
+  AddOutputFilterByType DEFLATE application/xml
+  AddOutputFilterByType DEFLATE image/svg+xml
+  AddOutputFilterByType DEFLATE font/woff2
+  AddOutputFilterByType DEFLATE font/woff
+</IfModule>
+
+# Brotli compression — ~15–20% smaller than gzip on JS/CSS/JSON. When mod_brotli
+# is present it takes precedence over mod_deflate via content negotiation; when
+# absent this block is silently ignored and gzip above still applies. Fully
+# additive and safe: woff2/png/webp are already compressed and are not listed.
+<IfModule mod_brotli.c>
+  AddOutputFilterByType BROTLI_COMPRESS text/html
+  AddOutputFilterByType BROTLI_COMPRESS text/plain
+  AddOutputFilterByType BROTLI_COMPRESS text/css
+  AddOutputFilterByType BROTLI_COMPRESS text/javascript
+  AddOutputFilterByType BROTLI_COMPRESS application/javascript
+  AddOutputFilterByType BROTLI_COMPRESS application/json
+  AddOutputFilterByType BROTLI_COMPRESS application/xml
+  AddOutputFilterByType BROTLI_COMPRESS image/svg+xml
+</IfModule>
+
+# ---- Encoding + content-type tags for the PRE-COMPRESSED static assets ----
+# These pair with the rewrite-to-.br/.gz rules at the top. Without them the
+# browser would receive the compressed bytes mislabelled (wrong encoding/type).
+<IfModule mod_headers.c>
+  <FilesMatch "\.(?:js|mjs|css|json|svg|webmanifest)\.br$">
+    Header set Content-Encoding br
+    Header append Vary Accept-Encoding
+  </FilesMatch>
+  <FilesMatch "\.(?:js|mjs|css|json|svg|webmanifest)\.gz$">
+    Header set Content-Encoding gzip
+    Header append Vary Accept-Encoding
+  </FilesMatch>
+  <FilesMatch "\.(?:js|mjs)\.(?:br|gz)$">
+    Header set Content-Type "application/javascript; charset=UTF-8"
+  </FilesMatch>
+  <FilesMatch "\.css\.(?:br|gz)$">
+    Header set Content-Type "text/css; charset=UTF-8"
+  </FilesMatch>
+  <FilesMatch "\.json\.(?:br|gz)$">
+    Header set Content-Type "application/json; charset=UTF-8"
+  </FilesMatch>
+  <FilesMatch "\.svg\.(?:br|gz)$">
+    Header set Content-Type "image/svg+xml"
+  </FilesMatch>
+  <FilesMatch "\.webmanifest\.(?:br|gz)$">
+    Header set Content-Type "application/manifest+json; charset=UTF-8"
+  </FilesMatch>
+</IfModule>
+
+# Safety: never let the server try to (re)compress the already-compressed files.
+<IfModule mod_setenvif.c>
+  SetEnvIfNoCase Request_URI "\.(?:br|gz)$" no-gzip dont-vary
+</IfModule>
+
+# Service worker manifest must never be cached — browsers must always fetch the
+# latest ngsw.json to detect updates and switch to the new service worker.
+# Without this, a CDN or browser cache could serve a stale ngsw.json indefinitely,
+# preventing the SW update cycle and leaving users on old CSS/font URLs.
+<IfModule mod_headers.c>
+  # The optional (\.(?:br|gz))? suffix keeps these no-cache headers applied even
+  # when the file is served as its pre-compressed .br/.gz sibling (see the
+  # compression rules above) — otherwise the service-worker update cycle breaks.
+  <FilesMatch "^(ngsw\.json|ngsw-worker\.js|safety-worker\.js)(\.(?:br|gz))?$">
+    Header set Cache-Control "no-cache, no-store, must-revalidate"
+    Header set Pragma "no-cache"
+    Header set Expires "0"
+  </FilesMatch>
+
+  # Ensure the PHP /social endpoint response is never cached by CDNs (Cloudflare,
+  # etc.) and is never served back to regular visitors.  IS_SOCIAL_BOT is set by
+  # the mod_setenvif block above — this only fires for social-crawler requests.
+  Header always set Cache-Control "no-store, no-cache, must-revalidate" env=IS_SOCIAL_BOT
+  Header always set Pragma "no-cache" env=IS_SOCIAL_BOT
+  Header always set Vary "User-Agent" env=IS_SOCIAL_BOT
 </IfModule>

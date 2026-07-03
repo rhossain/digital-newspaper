@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy, ViewChild, ElementRef, ChangeDetectorRef, HostListener } from '@angular/core';
+import { Component, OnInit, OnDestroy, ViewChild, ElementRef, ChangeDetectorRef, HostListener, ViewEncapsulation } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
@@ -9,6 +9,7 @@ import { ToasterService } from '../services/toaster.service';
 import { LoaderService } from '../services/loader.service';
 import { LockService, LockInfo } from '../services/lock.service';
 import { ActivityLogService, ActivityLogEntry, ActivityLogFilters, ACTION_LABELS, ACTION_COLOR } from '../services/activity-log.service';
+import { AdService, AdSlot } from '../services/ad.service';
 import { ActionTrackerDirective } from '../directives/action-tracker.directive';
 import { TranslationService } from '../i18n/translation.service';
 import { ADMIN_THEME } from './themes.config';
@@ -22,7 +23,14 @@ import { resizeImageToWidth } from '../shared/utils/image-resize.util';
   standalone: true,
   imports: [CommonModule, FormsModule, QuillModule, BulkXmlImportComponent, ActionTrackerDirective],
   templateUrl: './admin.component.html',
-  styleUrls: ['./admin.component.css']
+  styleUrls: ['./admin.component.css'],
+  // ViewEncapsulation.None is required so that Quill's dynamically-generated DOM
+  // (which carries no Angular attribute) can be styled by the Quill CSS imported
+  // via admin.component.css.  The admin CSS uses only class-based selectors so
+  // there is no risk of these styles leaking onto the viewer.
+  // The Quill styles are bundled with the admin lazy chunk rather than the main
+  // bundle, so first-load visitors never download them.
+  encapsulation: ViewEncapsulation.None,
 })
 export class AdminComponent implements OnInit, OnDestroy {
   /** Active theme — set in themes.config.ts */
@@ -50,7 +58,7 @@ export class AdminComponent implements OnInit, OnDestroy {
   
   // UI State
   activeTab: 'pages' | 'sections' = 'pages';
-  activeMainTab: 'content' | 'settings' | 'logs' = 'content';
+  activeMainTab: 'content' | 'settings' | 'ads' | 'logs' = 'content';
   isEditingPage = false;
   isEditingSection = false;
   showImageCropper = false;
@@ -117,6 +125,32 @@ export class AdminComponent implements OnInit, OnDestroy {
   fullImageHiResFile: File | null = null;
   thumbnailFile: File | null = null;
   previewLoading: boolean = false;
+  /**
+   * Cache-busted src for the full-image PREVIEW only.
+   *
+   * Page image filenames are deterministic (page+edition+date), so re-uploading
+   * to the same page — e.g. after cancelling a wrong upload — overwrites the
+   * same URL on the server. The browser, having cached the previous bytes for
+   * that identical URL, would otherwise keep showing the OLD image in the
+   * preview. We append a one-shot cache-buster here so the preview always
+   * reflects the freshly uploaded file. The clean URL is still what is stored
+   * in pageForm.fullImage and saved — only the preview <img> uses this. Null
+   * means "no override; show pageForm.fullImage as-is" (the normal edit case).
+   */
+  fullImagePreviewSrc: string | null = null;
+
+  /**
+   * Page-image media uploaded during the CURRENT add/edit-page session
+   * (display, hi-res, thumbnail). Tracked so we can remove orphans:
+   *   - Cancel → every entry is deleted (none was ever saved).
+   *   - Save   → entries NOT referenced by the saved page are deleted (e.g. a
+   *              wrong image uploaded, then replaced before saving); the saved
+   *              image is kept.
+   * Pre-existing images (present before this edit began) are never auto-deleted
+   * — only media this session uploaded. Cleanup is best-effort and never blocks
+   * or fails a save.
+   */
+  private sessionUploadedMedia: { id: number; url: string }[] = [];
 
   // Global Settings
   settingsForm: GlobalSettings = {
@@ -147,10 +181,21 @@ export class AdminComponent implements OnInit, OnDestroy {
     headScripts: '',
     underMaintenance: false,
     maintenanceMessage: '',
-    othersPageTitle: ''
+    othersPageTitle: '',
+    imageFormat: 'webp' as 'webp' | 'all'
   };
   logoInputMode: 'url' | 'file' = 'url';
   logoFile: File | null = null;
+
+  // ─── Ad Manager state ─────────────────────────────────────────────────────
+  adManagerForm: { enabled: boolean; slotStates: Record<string, boolean> } = {
+    enabled: false,
+    slotStates: {},
+  };
+  adManagerSlots: AdSlot[] = [];
+  isSavingAdManager = false;
+  /** Handle for the slot-polling interval so it can be cleared on destroy. */
+  private _adManagerPollInterval: ReturnType<typeof setInterval> | null = null;
 
   // Predefined page name options (paired BN / EN)
   readonly predefinedPageNames: { bn: string; en: string }[] = [
@@ -224,7 +269,10 @@ export class AdminComponent implements OnInit, OnDestroy {
   onBulkXmlImportCompleted(event: { firstDate: string }): void {
     this.showBulkXmlImport = false;
     this.toaster.success('Bulk import complete!');
-    // Reload data and navigate to the first imported date
+    // Clear all cache layers before reloading so newly imported editions
+    // (which may be past dates already stored in IDB / localStorage) are
+    // fetched fresh from the server instead of returning stale cached data.
+    this.dataService.clearAllCaches();
     this.dataService.loadData().subscribe({
       next: () => {
         if (event.firstDate) {
@@ -351,9 +399,23 @@ export class AdminComponent implements OnInit, OnDestroy {
     this.cdr.detectChanges();
     // Atomic server delete
     this.dataService.deleteSectionAtomically(previewPageId, sec.id, this.selectedDate, this.selectedEditionNumber).subscribe({
+      next: () => {
+        // Reload from server on success; re-sync previewPage to the fresh
+        // page reference so the preview modal reflects confirmed server state.
+        this.dataService.reloadDate(this.selectedDate).subscribe({
+          next: () => {
+            this.loadCurrentEdition();
+            if (this.previewPage) {
+              this.previewPage = this.pages.find((p: any) => p.id === previewPageId) ?? null;
+              if (!this.previewPage) this.closePagePreview();
+              this.cdr.detectChanges();
+            }
+          },
+        });
+      },
       error: () => {
         this.markUnsavedChanges();
-        this.toaster.warning('Section deletion could not sync to server — click Save All to retry.');
+        this.toaster.warning('Section deletion could not sync to server. Please try deleting again.');
       }
     });
   }
@@ -367,8 +429,44 @@ export class AdminComponent implements OnInit, OnDestroy {
     private translationService: TranslationService,
     private loader: LoaderService,
     private lockService: LockService,
-    private activityLog: ActivityLogService
+    private activityLog: ActivityLogService,
+    private adService: AdService
   ) {}
+
+  // ── Image format helpers ─────────────────────────────────────────────────
+  // Read the active imageFormat setting at the moment of each upload so that
+  // changing the setting mid-session takes effect on the very next upload.
+
+  /**
+   * `accept` attribute value for image file inputs.
+   * Reads from the live settings form (not yet saved) so the restriction
+   * takes effect as soon as the user toggles the radio button.
+   */
+  get imageAccept(): string {
+    return this.settingsForm.imageFormat === 'webp' ? 'image/webp' : 'image/*';
+  }
+
+  /** MIME type to use when encoding new images via Canvas or FileReader. */
+  private get imageMime(): 'image/webp' | 'image/jpeg' {
+    return (this.dataService.getSettings()?.imageFormat || 'webp') === 'webp'
+      ? 'image/webp'
+      : 'image/jpeg';
+  }
+
+  /** File extension (no dot) matching the current image format. */
+  private get imageExt(): string {
+    return this.imageMime === 'image/webp' ? 'webp' : 'jpg';
+  }
+
+  /**
+   * Canvas encoding quality.
+   * WebP uses 0.88 — visually equivalent to JPEG 0.92 thanks to better
+   * codec efficiency, while producing a smaller file.
+   */
+  private get imageQuality(): number {
+    return this.imageMime === 'image/webp' ? 0.88 : 0.92;
+  }
+  // ────────────────────────────────────────────────────────────────────────
 
   ngOnInit() {
     this.todayDate = this.dataService.getTodayDate();
@@ -389,6 +487,11 @@ export class AdminComponent implements OnInit, OnDestroy {
     // Tear down all long-lived subscriptions (version poll listener, etc.)
     this.destroy$.next();
     this.destroy$.complete();
+    // Clear the ad-manager slot-polling interval if it's still running.
+    if (this._adManagerPollInterval !== null) {
+      clearInterval(this._adManagerPollInterval);
+      this._adManagerPollInterval = null;
+    }
   }
 
   private markUnsavedChanges(): void {
@@ -453,7 +556,13 @@ export class AdminComponent implements OnInit, OnDestroy {
         const isParseError = err.error instanceof SyntaxError || (err.status === 200 && err.name === 'HttpErrorResponse');
         const msg: string = err?.message ?? '';
         if (err.status === 0) {
-          this.authError = 'Cannot reach WordPress. Verify the WordPress site is online and CORS "Allowed Origins" includes this app\'s URL.';
+          // Status 0 means the browser got no HTTP response — caused by a
+          // brief network drop, a CORS preflight rejection, or the server
+          // being momentarily unreachable.  The auth service already retried
+          // once, so if we're here the problem persisted.
+          this.authError = 'Could not reach the server. Please check your internet connection and try again. '  
+            + 'If the problem persists, ask the site administrator to verify: '  
+            + '(1) WordPress is online, (2) CORS \'Allowed Origins\' in the Digital Newspaper plugin settings includes this site\'s URL.';
         } else if (err.status === 401 || err.status === 400) {
           this.authError = 'Invalid username or password. Please try again.';
         } else if (err.status === 403) {
@@ -507,6 +616,20 @@ export class AdminComponent implements OnInit, OnDestroy {
         if (!this.availableDates.includes(this.selectedDate)) {
           this.availableDates.unshift(this.selectedDate);
         }
+
+        // After a refresh the admin resets to today's date (set in ngOnInit).
+        // If today has no pages yet, auto-switch to the most recent date that
+        // does so the user doesn't see an empty grid and think data was lost.
+        const todayEditions = this.dataService.getEditionsByDate(this.selectedDate);
+        const todayHasPages = todayEditions.some(e => e.pages && e.pages.length > 0);
+        if (!todayHasPages) {
+          const latestWithContent = this.dataService.getAvailableDates()[0];
+          if (latestWithContent && latestWithContent !== this.selectedDate) {
+            this.selectedDate = latestWithContent;
+            this.dataService.setCurrentDate(latestWithContent);
+          }
+        }
+
         this.loadCurrentEdition();
         this.loadSettings();
         this.markSaved();
@@ -527,7 +650,11 @@ export class AdminComponent implements OnInit, OnDestroy {
   private startVersionPoll(): void {
     this.dataService.stopVersionPoll();
     this.dataService.startVersionPoll(30_000);
-    this.dataService.remoteDataChanged$.pipe(takeUntil(this.destroy$)).subscribe(() => {
+    this.dataService.remoteDataChanged$.pipe(takeUntil(this.destroy$)).subscribe((newVersion: number) => {
+      // Immediately adopt the emitted version so the next poll tick (which
+      // fires 30 s later) sees local == server and does NOT fire again while
+      // loadData() is still in flight.
+      this.dataService.patchDataVersionPublic(newVersion);
       if (!this.heldLockResource && !this.isEditingPage && !this.isEditingSection) {
         // Not mid-edit — reload silently then refresh UI
         this.dataService.loadData().subscribe({
@@ -858,6 +985,17 @@ export class AdminComponent implements OnInit, OnDestroy {
 
   // ── trackBy helpers (prevent unnecessary DOM re-creation on *ngFor) ──────
   trackByPageId(_: number, page: NewspaperPage): number { return page.id; }
+
+  /**
+   * Pages sorted by ascending page id, for the admin page grids. Pages can be
+   * uploaded in any order (4, 5, 7, 1, …); the grid should always read 1, 3, 4,
+   * … like the public viewer. Returns a sorted COPY so the underlying `pages`
+   * order (and any index-based logic) is untouched. trackByPageId keeps the DOM
+   * stable across re-sorts.
+   */
+  get sortedPages(): NewspaperPage[] {
+    return [...this.pages].sort((a, b) => a.id - b.id);
+  }
   trackBySectionId(_: number, sec: NewsSection): string { return sec.id; }
   trackByEditionNum(_: number, ed: NewspaperEdition): number { return ed.edition ?? 1; }
   trackByDate(_: number, date: string): string { return date; }
@@ -866,7 +1004,23 @@ export class AdminComponent implements OnInit, OnDestroy {
   loadCurrentEdition() {
     this.isLoadingEdition = true;
     this.dataService.setCurrentDate(this.selectedDate);
-    
+
+    // LAZY HYDRATION: loadDataFromGranular() only hydrates editions for
+    // latestDate + today.  When the user picks an older date the in-memory
+    // editions array won't include it, so getEditionsByDate() would return
+    // [] and the user would see "no data" even though the server has it
+    // (in dn_edition_{date} options or rebuilt from section posts).
+    //
+    // hydrateDateIfMissing() is a no-op when the date is already loaded,
+    // otherwise it fetches /data/editions/:date through the 4-layer cache
+    // and merges the result into the data subject before we read it.
+    this.dataService.hydrateDateIfMissing(this.selectedDate).subscribe({
+      next: () => this.applyEditionFromMemory(),
+      error: () => this.applyEditionFromMemory(), // already swallowed inside the helper
+    });
+  }
+
+  private applyEditionFromMemory(): void {
     // Populate edition tabs for this date
     this.editionsForDate = this.dataService.getEditionsByDate(this.selectedDate);
 
@@ -881,6 +1035,16 @@ export class AdminComponent implements OnInit, OnDestroy {
       }
       this.pages = [];
     }
+
+    // Re-sync selectedPage to the freshly-resolved page objects so that
+    // selectedPage.sections always reflects current state regardless of what
+    // triggered this reload (version poll, save/delete success, date change).
+    // This is the single authoritative place that fixes the stale-reference
+    // issue for ALL callers of loadCurrentEdition().
+    if (this.selectedPage != null) {
+      this.selectedPage = this.pages.find(p => p.id === this.selectedPage!.id) ?? null;
+    }
+
     this.isLoadingEdition = false;
     this.cdr.detectChanges();
   }
@@ -919,13 +1083,22 @@ export class AdminComponent implements OnInit, OnDestroy {
     this.dataService.getOrCreateEdition(this.selectedDate, nextEditionNumber);
     this.markUnsavedChanges();
     this.selectedEditionNumber = nextEditionNumber;
-    this.loadCurrentEdition();
-    this.toaster.success(`Edition ${nextEditionNumber} created!`);
+    if (this.adminTheme !== 'vintage') {
+      this.loadCurrentEdition();
+      this.toaster.success(`Edition ${nextEditionNumber} created!`);
+      const newEd = this.editionsForDate.find(e => (e.edition || 1) === nextEditionNumber);
+      if (newEd) this.openEditionLabelEditor(newEd);
+      return;
+    }
 
-    // Open label editor immediately for the new edition
-    const newEd = this.editionsForDate.find(e => (e.edition || 1) === nextEditionNumber);
-    if (newEd) this.openEditionLabelEditor(newEd);
-    this.autoSaveForVintage();
+    this.syncCurrentDateStructure(
+      'Creating edition and syncing...',
+      `Edition ${nextEditionNumber} created!`,
+      () => {
+        const newEd = this.editionsForDate.find(e => (e.edition || 1) === nextEditionNumber);
+        if (newEd) this.openEditionLabelEditor(newEd);
+      }
+    );
   }
 
   openEditionLabelEditor(ed: NewspaperEdition) {
@@ -948,9 +1121,16 @@ export class AdminComponent implements OnInit, OnDestroy {
     this.dataService.updateEditions(editions);
     this.markUnsavedChanges();
     this.editingEditionLabel = null;
-    this.loadCurrentEdition();
-    this.toaster.success('Edition labels saved!');
-    this.autoSaveForVintage();
+    if (this.adminTheme !== 'vintage') {
+      this.loadCurrentEdition();
+      this.toaster.success('Edition labels saved!');
+      return;
+    }
+
+    this.syncCurrentDateStructure(
+      'Saving edition labels and syncing...',
+      'Edition labels saved!'
+    );
   }
 
   /** Display label for the admin UI (always shows EN / BN side-by-side if custom labels are set). */
@@ -1077,9 +1257,103 @@ export class AdminComponent implements OnInit, OnDestroy {
       this.availableDates.unshift(newDate);
       this.availableDates.sort().reverse();
     }
-    this.onDateChange();
-    this.autoSaveForVintage();
+
+    // Optimized date change: for a brand-new empty date, skip the full loadCurrentEdition()
+    // which would trigger hydrateDateIfMissing() and subscription overhead.
+    // The date was just created in memory, so we already have everything we need.
+    this.releaseCurrentLock();
+    this.activityLog.track('date_change', { date: this.selectedDate });
+    this.selectedEditionNumber = 1;
+    
+    // Load the edition data directly from memory without hydration
+    this.editionsForDate = this.dataService.getEditionsByDate(this.selectedDate);
+    const edition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);
+    this.pages = edition?.pages || [];
+    
+    // Reset UI state
+    this.selectedPage = null;
+    this.selectedSection = null;
+    this.isEditingPage = false;
+    this.isEditingSection = false;
+    this.vintageView = 'pages';
+    this.vintageSelectedSection = null;
+
+    this.cdr.detectChanges();
+    this.persistNewDateAndRefresh();
     this.cancelNewDateDialog();
+  }
+
+  /** Persist a just-created date and keep loading state until it is reloaded from server/index. */
+  private persistNewDateAndRefresh(): void {
+    if (this.adminTheme !== 'vintage') {
+      this.isLoadingEdition = false;
+      this.cdr.detectChanges();
+      return;
+    }
+
+    this.syncCurrentDateStructure(
+      'Creating and syncing date...',
+      'Date created and visible now.'
+    );
+  }
+
+  /** Persist current date structural changes and keep loading until UI re-renders from fresh server data. */
+  private syncCurrentDateStructure(
+    pendingMessage: string,
+    successMessage: string,
+    onSynced?: () => void
+  ): void {
+    const date = this.selectedDate;
+    const applySyncedUi = () => {
+      this.availableDates = this.dataService.getAllEditionDates();
+      if (!this.availableDates.includes(date)) {
+        this.availableDates.unshift(date);
+      }
+      this.availableDates = [...new Set(this.availableDates)].sort().reverse();
+
+      this.editionsForDate = this.dataService.getEditionsByDate(this.selectedDate);
+      const edition = this.dataService.getEditionByDateAndNumber(this.selectedDate, this.selectedEditionNumber);
+      this.pages = edition?.pages || [];
+      this.isLoadingEdition = false;
+      this.markSaved();
+      if (onSynced) onSynced();
+      this.cdr.detectChanges();
+      this.toaster.success(successMessage, 4500);
+    };
+
+    this.isLoadingEdition = true;
+    this.toaster.info(pendingMessage, 7000);
+
+    this.dataService.saveEditionsForDateAtomically(date).pipe(
+      switchMap(() => this.dataService.reloadCurrentDateOnly(date))
+    ).subscribe({
+      next: () => applySyncedUi(),
+      error: (err: any) => {
+        // Backward compatibility: older plugin versions may not expose the atomic endpoint.
+        const status = err?.status;
+        if (status === 404 || status === 405) {
+          this.dataService.saveData(this.dataService.getData()).pipe(
+            switchMap(() => this.dataService.reloadCurrentDateOnly(date))
+          ).subscribe({
+            next: () => applySyncedUi(),
+            error: (fallbackErr: any) => {
+              this.isLoadingEdition = false;
+              this.markUnsavedChanges();
+              const msg = fallbackErr?.error?.message || fallbackErr?.message || 'Unknown error';
+              this.toaster.warning(`Changes saved locally but sync is delayed: ${msg}`, 6000);
+              this.cdr.detectChanges();
+            }
+          });
+          return;
+        }
+
+        this.isLoadingEdition = false;
+        this.markUnsavedChanges();
+        const msg = err?.error?.message || err?.message || `HTTP ${status}`;
+        this.toaster.warning(`Sync failed: ${msg}. Please retry Save All.`, 6000);
+        this.cdr.detectChanges();
+      }
+    });
   }
 
   /** Closes the Add New Date modal without making any changes. */
@@ -1149,6 +1423,9 @@ export class AdminComponent implements OnInit, OnDestroy {
     this.fullImageFile = null;
     this.fullImageHiResFile = null;
     this.thumbnailFile = null;
+    this.fullImagePreviewSrc = null;
+    this.previewLoading = false;
+    this.sessionUploadedMedia = [];
   }
 
   editPage(page: NewspaperPage) {
@@ -1168,6 +1445,10 @@ export class AdminComponent implements OnInit, OnDestroy {
       this.fullImageFile = null;
       this.fullImageHiResFile = null;
       this.thumbnailFile = null;
+      // Show the existing stored image as-is (no cache-buster) when editing.
+      this.fullImagePreviewSrc = null;
+      this.previewLoading = false;
+      this.sessionUploadedMedia = [];
       this.activityLog.track('page_edit', { pageId: String(page.id), pageLabel: this.getPageLabel(page) });
       this.cdr.detectChanges();
     });
@@ -1224,15 +1505,78 @@ export class AdminComponent implements OnInit, OnDestroy {
         this.selectedPage = this.pages.find(p => p.id === page.id) || null;
       }
 
+      // Remove any page images uploaded THIS session that the saved page no
+      // longer references (e.g. a wrong image uploaded, then replaced before
+      // saving). The saved image's URLs are kept. Best-effort; runs before
+      // cancelPageEdit so the latter's "delete all" finds an already-empty list.
+      void this.cleanupSessionMedia([page.fullImage, page.fullImageHiRes ?? '', page.thumbnail]);
+
       this.cancelPageEdit();
       this.toaster.success('Page saved successfully!');
       this.activityLog.track('page_save', { pageId: String(page.id), date: this.selectedDate, edition: String(this.selectedEditionNumber) });
 
       // Atomic server save — only updates THIS page; other users' pages are untouched.
-      this.dataService.savePageAtomically(page, this.selectedDate, this.selectedEditionNumber).subscribe({
-        error: () => {
-          this.markUnsavedChanges(); // flag for Save All fallback
-          this.toaster.warning('Page could not sync to server — click Save All to retry.');
+      const savedDate = this.selectedDate;
+      const savedEditionNumber = this.selectedEditionNumber;
+      this.dataService.savePageAtomically(page, savedDate, savedEditionNumber).subscribe({
+        next: () => {
+          // Reload from server on success so the grid always reflects what
+          // was actually persisted — guards against stale ETag / cache issues.
+          // applyEditionFromMemory() (called inside loadCurrentEdition) re-syncs
+          // selectedPage centrally, so no manual re-sync is needed here.
+          this.dataService.reloadDate(savedDate).subscribe({
+            next: () => {
+              this.loadCurrentEdition();
+              this.cdr.detectChanges();
+            },
+          });
+        },
+        error: (err: any) => {
+          // Re-fetch from server: the save likely succeeded but the response was
+          // lost (e.g. sync step timed out after update_option committed).
+          // reloadDate() drops the in-memory edition and re-fetches so both the
+          // admin view and the viewer reflect the server's actual stored state.
+          this.dataService.reloadDate(savedDate).subscribe({
+            next: () => this.loadCurrentEdition(),
+          });
+
+          // Surface the actual server error (PHP fatal, validation, etc.) so
+          // we don't mis-attribute every failure to a timeout.  Falls back to
+          // the original message when the error is genuinely a timeout or a
+          // network-level failure with no response body.
+          const body = err?.error;
+          let serverMsg = '';
+          if (body && typeof body === 'object') {
+            // Newer backend returns { error, code, message, file, line, ... }.
+            serverMsg = String(body.message || body.error || '');
+          } else if (typeof body === 'string' && body.trim().length) {
+            // Older backend (or fatals before the shutdown handler is reached)
+            // returns the WordPress critical-error HTML page.  Don't dump raw
+            // HTML into a toast — collapse it to a single readable line.
+            serverMsg = /critical error/i.test(body)
+              ? 'WordPress reported a critical PHP error (likely out-of-memory or timeout). Check ?dn_diag=last-fatal for details.'
+              : body.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+          }
+          // Strip HTML tags from JSON-bodied messages too, just in case the
+          // backend embeds any markup in $e->getMessage().
+          if (/<[a-z][^>]*>/i.test(serverMsg)) {
+            serverMsg = serverMsg.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+          }
+
+          const status = err?.status;
+          if (status === 500 && serverMsg) {
+            this.toaster.error(`Save failed (server error): ${serverMsg}`);
+          } else if (status === 500) {
+            this.toaster.error('Save failed: WordPress PHP fatal (no body). Check ?dn_diag=last-fatal for the captured error.');
+          } else if (status === 422 && serverMsg) {
+            this.toaster.error(`Save rejected: ${serverMsg}`);
+          } else if (status === 0 || err?.name === 'TimeoutError') {
+            this.toaster.warning('Server response timed out — refreshing data from server. Your page should appear shortly.');
+          } else if (status) {
+            this.toaster.error(`Save failed (HTTP ${status}). Refreshing from server.`);
+          } else {
+            this.toaster.warning('Server response timed out — refreshing data from server. Your page should appear shortly.');
+          }
         }
       });
     }
@@ -1256,9 +1600,15 @@ export class AdminComponent implements OnInit, OnDestroy {
 
       // Atomic server delete — only removes THIS page.
       this.dataService.deletePageAtomically(page.id, this.selectedDate, this.selectedEditionNumber).subscribe({
+        next: () => {
+          // Reload from server on success to confirm the deletion persisted.
+          this.dataService.reloadDate(this.selectedDate).subscribe({
+            next: () => this.loadCurrentEdition(),
+          });
+        },
         error: () => {
           this.markUnsavedChanges();
-          this.toaster.warning('Page deletion could not sync to server — click Save All to retry.');
+          this.toaster.warning('Page deletion could not sync to server. Please try deleting again.');
         }
       });
     }
@@ -1269,6 +1619,15 @@ export class AdminComponent implements OnInit, OnDestroy {
     this.pageForm = { id: 0, thumbnail: '', fullImage: '', fullImageHiRes: '', sections: [], pageLabels: { en: '', bn: '' } };
     this.pageNameSelect = '';
     this.pageFormErrors = {};
+    // Clear the preview override so a cancelled upload never bleeds into the
+    // next page's form.
+    this.fullImagePreviewSrc = null;
+    this.previewLoading = false;
+    // Delete any page images uploaded during this session — a cancel means none
+    // of them were saved, so they would otherwise be orphaned in the media
+    // library. Best-effort; never throws. (After a save this list is already
+    // empty because savePage ran cleanup first, so nothing is double-deleted.)
+    void this.cleanupSessionMedia([]);
     // Only release if we're not staying on the page (e.g. sections still selected)
     if (!this.selectedPage) {
       this.releaseCurrentLock();
@@ -1470,19 +1829,38 @@ export class AdminComponent implements OnInit, OnDestroy {
           );
         })
       ).subscribe({
+        next: () => {
+          // Reload from server on success so the sections grid always reflects
+          // what was actually persisted — guards against stale cache issues.
+          // applyEditionFromMemory() (called inside loadCurrentEdition) re-syncs
+          // selectedPage centrally, so no manual re-sync is needed here.
+          this.dataService.reloadDate(saveDate).subscribe({
+            next: () => {
+              this.loadCurrentEdition();
+              this.cdr.detectChanges();
+            },
+          });
+        },
         error: () => {
-          this.toaster.warning('Failed to save section to server.');
+          this.toaster.warning('Section sync response failed. The section may have been saved — reload to confirm, or try saving again.');
           this.markUnsavedChanges();
         }
       });
-    } else {
-      console.error('Missing required fields:', {
-        hasPage: !!this.selectedPage,
-        hasId: !!this.sectionForm.id,
-        hasTitle: !!this.sectionForm.title,
-        sectionForm: this.sectionForm
-      });
+    } else if (closeForm) {
+      // Explicit save (user pressed Save) with something missing → give clear
+      // feedback instead of a silent, alarming console error.
+      if (!this.sectionForm.title) {
+        this.toaster.error('Section title is required before saving.');
+      } else {
+        // Page/id missing is a genuine unexpected state — keep a quiet log.
+        console.warn('[admin] Cannot save section — no page selected or missing id.', {
+          hasPage: !!this.selectedPage,
+          hasId: !!this.sectionForm.id,
+        });
+      }
     }
+    // Background auto-saves (closeForm === false) on an incomplete form — e.g.
+    // cropping an image before a title is entered — are expected; skip silently.
   }
 
   deleteSection(section: NewsSection) {
@@ -1507,6 +1885,13 @@ export class AdminComponent implements OnInit, OnDestroy {
 
       // Atomic server delete — only removes THIS section.
       this.dataService.deleteSectionAtomically(delPageId, section.id, delDate, delEdition).subscribe({
+        next: () => {
+          // Reload from server on success to confirm the deletion persisted.
+          // Prevents stale cache from restoring the deleted section on next reload.
+          this.dataService.reloadDate(delDate).subscribe({
+            next: () => this.loadCurrentEdition(),
+          });
+        },
         error: () => {
           this.markUnsavedChanges();
           this.toaster.warning('Section deletion could not sync to server. Please try again.');
@@ -1553,6 +1938,16 @@ export class AdminComponent implements OnInit, OnDestroy {
     this.cropperStartY = 0;
     this.cropperEndX = 0;
     this.cropperEndY = 0;
+
+    // Same-URL re-open fix: when the cropper is closed and reopened for the same
+    // page, [src] doesn't change so the browser never re-fires (load).
+    // Force-trigger onCropperImageLoad manually if the image is already decoded.
+    this.cdr.detectChanges(); // commit showImageCropper = true so @ViewChild resolves
+    const img = this.cropperImageRef?.nativeElement;
+    if (img && img.complete && img.naturalWidth > 0) {
+      // Image is already in browser cache — synthesise the load event.
+      this.onCropperImageLoad({ target: img } as unknown as Event);
+    }
   }
 
   onCropperImageLoad(event: Event) {
@@ -1580,6 +1975,15 @@ export class AdminComponent implements OnInit, OnDestroy {
         }
       }
     });
+  }
+
+  onCropperImageError() {
+    // Image failed to load (broken URL, network error, etc.).
+    // Set cropperImageLoaded = true so the crop UI still renders — the user
+    // can see the broken-image placeholder and the overlay controls rather than
+    // a blank, unresponsive panel with no indication of what went wrong.
+    this.cropperImageLoaded = true;
+    this.cdr.detectChanges();
   }
 
   onCropperMouseDown(event: MouseEvent) {
@@ -1966,9 +2370,15 @@ export class AdminComponent implements OnInit, OnDestroy {
 
     // Atomic server delete — keeps server in sync without a full-blob overwrite.
     this.dataService.deleteSectionAtomically(delPageId, section.id, delDate, delEdition).subscribe({
+      next: () => {
+        // Reload from server on success to confirm the deletion persisted.
+        this.dataService.reloadDate(delDate).subscribe({
+          next: () => this.loadCurrentEdition(),
+        });
+      },
       error: () => {
         this.markUnsavedChanges();
-        this.toaster.warning('Section deletion could not sync to server — click Save All to retry.');
+        this.toaster.warning('Section deletion could not sync to server. Please try deleting again.');
       }
     });
   }
@@ -2108,11 +2518,11 @@ export class AdminComponent implements OnInit, OnDestroy {
             cropHeight
           );
           
-          // Convert to data URL
-          const croppedImageData = canvas.toDataURL('image/jpeg', 0.9);
-          
-          const fileName = this.buildSectionImageFilename('jpg');
-          
+          // Convert to data URL using the admin-configured image format.
+          const croppedImageData = canvas.toDataURL(this.imageMime, this.imageQuality);
+
+          const fileName = this.buildSectionImageFilename(this.imageExt);
+
           // Upload to backend
           this.uploadCroppedImage(croppedImageData, fileName);
           
@@ -2158,10 +2568,21 @@ export class AdminComponent implements OnInit, OnDestroy {
         // Close the cropper panel but stay in the section edit form.
         this.showImageCropper = false;
         this.cdr.detectChanges();
-        // Persist the updated imageUrl to the in-memory store and backend
-        // without closing the section form — the user stays on the edit page.
-        this.saveSection(false);
-        this.saveAllData();
+        // Persist the section (with its new imageUrl) atomically — but ONLY when
+        // it has the required title. Two prior bugs lived here:
+        //   1. saveSection(false) ran with no title guard, so cropping before
+        //      typing a title logged "Missing required fields".
+        //   2. The extra saveAllData() (full POST /data) ran right after the
+        //      atomic saveSection, which had already advanced the server's
+        //      dataVersion — so the full save sent a stale version and got a
+        //      spurious 409 self-conflict. The atomic save alone is sufficient.
+        if (this.selectedPage && this.sectionForm.id && this.sectionForm.title) {
+          this.saveSection(false);
+        } else {
+          // No title yet — keep the cropped image staged in the form; it
+          // persists when the user saves the section.
+          this.markUnsavedChanges();
+        }
         this.deletePreviousGeneratedPostCrop(previousImageUrl, url);
         this.toaster.success('Cropped image saved!');
       })
@@ -2185,7 +2606,7 @@ export class AdminComponent implements OnInit, OnDestroy {
     }
 
     const file = input.files[0];
-    
+
     // Validate file type
     if (!file.type.startsWith('image/')) {
       this.toaster.error('Please select an image file');
@@ -2199,18 +2620,47 @@ export class AdminComponent implements OnInit, OnDestroy {
       return;
     }
 
-    // Read file and upload
-    const reader = new FileReader();
-    reader.onload = () => {
-      const imageData = reader.result as string;
-      const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
-      const fileName = this.buildSectionImageFilename(ext);
+    // Legacy mode — upload the file as-is, preserving its original format.
+    if (this.imageMime === 'image/jpeg') {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const imageData = reader.result as string;
+        const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
+        const fileName = this.buildSectionImageFilename(ext);
+        this.uploadImageFile(imageData, fileName);
+      };
+      reader.onerror = () => this.toaster.error('Could not read the image file. Please pick the file again and try once more.', 7000);
+      reader.readAsDataURL(file);
+      return;
+    }
+
+    // WebP mode — re-encode via Canvas before uploading.
+    this.loader.show('Converting to WebP…');
+    const objectUrl = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      const canvas = document.createElement('canvas');
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        this.loader.hide();
+        this.toaster.error('Failed to convert image to WebP');
+        return;
+      }
+      ctx.drawImage(img, 0, 0);
+      const imageData = canvas.toDataURL('image/webp', this.imageQuality);
+      const fileName = this.buildSectionImageFilename('webp');
+      this.loader.hide();
       this.uploadImageFile(imageData, fileName);
     };
-    reader.onerror = () => {
-      this.toaster.error('Failed to read image file');
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      this.loader.hide();
+      this.toaster.error('Failed to load image for conversion');
     };
-    reader.readAsDataURL(file);
+    img.src = objectUrl;
   }
 
   uploadImageFile(imageData: string, fileName: string) {
@@ -2227,7 +2677,7 @@ export class AdminComponent implements OnInit, OnDestroy {
       })
       .catch((error) => {
         console.error('Error uploading image:', error);
-        this.toaster.error('Failed to upload image: ' + error.message);
+        this.toaster.error(this.friendlyUploadError('Image upload', error), 7000);
       })
       .finally(() => this.loader.hide());
   }
@@ -2269,7 +2719,80 @@ export class AdminComponent implements OnInit, OnDestroy {
     });
   }
 
-  private async uploadMediaFile(file: File, filename: string): Promise<string> {
+  /**
+   * Short, collision-resistant token (time + randomness, base36) used to make
+   * each page-image upload filename unique. Unique names mean a re-upload never
+   * reuses a URL, so browsers/CDNs can't serve a previously-cached image for it
+   * — the root cause of "old image still showing after replacing it".
+   */
+  private shortToken(): string {
+    return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  }
+
+  /**
+   * Delete page-image media uploaded during this session that the saved page no
+   * longer references. Pass the URLs to KEEP (empty array = delete everything
+   * tracked, used on Cancel). Best-effort and fully guarded — clears the
+   * tracking list synchronously, then deletes in the background; a failed
+   * delete is logged, never thrown.
+   */
+  private async cleanupSessionMedia(keepUrls: string[]): Promise<void> {
+    const tracked = this.sessionUploadedMedia;
+    this.sessionUploadedMedia = []; // clear first so re-entrancy can't double-delete
+    if (!tracked.length) return;
+    const keep = new Set(keepUrls.filter((u): u is string => !!u));
+    const toDelete = tracked.filter(m => m.id > 0 && !keep.has(m.url));
+    if (!toDelete.length) return;
+    const headers = this.authService.getAuthHeaders();
+    for (const m of toDelete) {
+      try {
+        await this.deleteMedia(m.id, headers);
+      } catch (err) {
+        console.warn('[admin] Orphan media cleanup failed for', m.url, err);
+      }
+    }
+  }
+
+  /**
+   * Build a clear, user-facing message for a failed media upload.
+   *
+   * Connection failures during an upload (e.g. ERR_HTTP2_PROTOCOL_ERROR /
+   * connection reset on a large or slow upload) surface in `fetch` as a bare
+   * `TypeError: Failed to fetch`, which is meaningless to an editor. We detect
+   * those and explain them plainly; every message ends by inviting a retry so
+   * the user always knows the action is safe to repeat.
+   */
+  private friendlyUploadError(label: string, error: unknown): string {
+    const raw = error instanceof Error ? error.message : String(error ?? '');
+    const isNetwork =
+      error instanceof TypeError ||
+      /failed to fetch|networkerror|network error|load failed|connection|socket|timed?\s?out|err_/i.test(raw);
+    if (isNetwork) {
+      return `${label} failed — the connection to the server dropped (common with a large or slow upload). Please check your connection and try again.`;
+    }
+    return `${label} failed${raw ? ': ' + raw : ''}. Please try again.`;
+  }
+
+  /** Promise-based delay used to space out upload retries. */
+  private delay(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /**
+   * HTTP statuses worth retrying — transient server/proxy conditions only.
+   * Client errors (400/401/403/404/413 …) are NOT retried: re-sending an
+   * identical request cannot fix them.
+   */
+  private isTransientStatus(status: number): boolean {
+    return status === 408 || status === 425 || status === 429 ||
+           status === 500 || status === 502 || status === 503 || status === 504;
+  }
+
+  private async uploadMediaFile(
+    file: File,
+    filename: string,
+    onUploaded?: (media: { id: number; url: string }) => void
+  ): Promise<string> {
     const url = `${this.dataService.getApiBaseUrl()}/wp-json/digital-newspaper/v1/media`;
     const headers = this.authService.getAuthHeaders();
     const desiredName = this.normalizeFilename(filename);
@@ -2288,18 +2811,49 @@ export class AdminComponent implements OnInit, OnDestroy {
       }
     }
 
-    const formData = new FormData();
-    formData.append('file', file, finalName);
+    // POST the file with automatic retry on TRANSIENT failures. The connection
+    // drops seen during large uploads (ERR_HTTP2_PROTOCOL_ERROR / reset, which
+    // reject fetch with a TypeError) and transient 5xx/timeout/429 responses are
+    // retried with backoff so the editor doesn't have to redo the work. The
+    // overwrite confirmation and name resolution above run ONCE, not per attempt.
+    const maxAttempts = 3;
+    const backoffMs = [800, 2200];
+    let response!: Response;
 
-    const response = await this.wafBypassFetch(url, {
-      method: 'POST',
-      headers,
-      body: formData
-    });
+    for (let attempt = 1; ; attempt++) {
+      try {
+        // Fresh FormData per attempt — a consumed body cannot be re-sent.
+        const formData = new FormData();
+        formData.append('file', file, finalName);
+
+        response = await this.wafBypassFetch(url, {
+          method: 'POST',
+          headers,
+          body: formData,
+        });
+
+        // Retry transient server states; fail fast on client errors (401/403/
+        // 413 etc.) where retrying cannot help.
+        if (!response.ok && this.isTransientStatus(response.status) && attempt < maxAttempts) {
+          this.loader.setMessage(`Upload interrupted (HTTP ${response.status}) — retrying… (${attempt + 1}/${maxAttempts})`);
+          await this.delay(backoffMs[attempt - 1] ?? 2200);
+          continue;
+        }
+        break; // success, or a non-retryable response handled below
+      } catch (err) {
+        // Network-layer failure (connection reset / dropped). Retry if attempts remain.
+        if (attempt < maxAttempts) {
+          this.loader.setMessage(`Connection dropped — retrying upload… (${attempt + 1}/${maxAttempts})`);
+          await this.delay(backoffMs[attempt - 1] ?? 2200);
+          continue;
+        }
+        throw err; // exhausted — surfaces as a friendly toast in the caller
+      }
+    }
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(errorText || 'Upload failed');
+      throw new Error(errorText || `Upload failed (HTTP ${response.status})`);
     }
 
     const contentType = response.headers.get('content-type') ?? '';
@@ -2313,7 +2867,12 @@ export class AdminComponent implements OnInit, OnDestroy {
     }
 
     const data = await response.json();
-    return data.source_url || data.guid?.rendered || '';
+    const sourceUrl = data.source_url || data.guid?.rendered || '';
+    // Report the uploaded media so callers can track it for orphan cleanup.
+    if (onUploaded) {
+      onUploaded({ id: Number(data.id) || 0, url: sourceUrl });
+    }
+    return sourceUrl;
   }
 
   /** Convert YYYY-MM-DD → DD-MM-YYYY for use in media filenames. */
@@ -2323,12 +2882,16 @@ export class AdminComponent implements OnInit, OnDestroy {
     return `${parts[2]}-${parts[1]}-${parts[0]}`;
   }
 
-  private buildPageImageFilename(ext: string, variant: 'full' | 'hires' | 'thumb' = 'full'): string {
+  private buildPageImageFilename(ext: string, variant: 'full' | 'hires' | 'thumb' = 'full', token?: string): string {
     const pageNumber = this.pad2(this.pageForm.id || this.dataService.getNextPageId(this.selectedDate, this.selectedEditionNumber));
     const editionNumber = this.pad2(this.selectedEditionNumber || 1);
     const date = this.formatDateForFilename(this.selectedDate || this.dataService.getTodayDate());
     const suffix = variant === 'full' ? '' : `-${variant}`;
-    return `page-${pageNumber}-e-${editionNumber}-${date}${suffix}.${this.cleanExtension(ext)}`;
+    // Optional unique token keeps each upload's URL distinct so re-uploads never
+    // collide with a browser/CDN-cached copy of a previous image. The name still
+    // begins with the human-readable page/edition/date for easy identification.
+    const unique = token ? `-${token}` : '';
+    return `page-${pageNumber}-e-${editionNumber}-${date}${suffix}${unique}.${this.cleanExtension(ext)}`;
   }
 
   private buildSectionImageFilename(ext: string): string {
@@ -2603,6 +3166,17 @@ export class AdminComponent implements OnInit, OnDestroy {
             );
             return;
           }
+          // shrinking-overwrite guard — client has fewer dates than the server
+          // (common when granular per-date loading only hydrated recent dates).
+          if (body.conflictType === 'shrinking-overwrite') {
+            const missing: number = (body.currentDateCount ?? 0) - (body.incomingDateCount ?? 0);
+            this.toaster.error(
+              `Save rejected: your current view is missing ${missing} historical date(s) that exist on the server. ` +
+              `Use the atomic Save buttons on each page/section instead of Save All. ` +
+              `If you need to force-save, use the Admin → Rebuild from Sections action first.`
+            );
+            return;
+          }
         }
 
         if (this.isRecoveredDataSaveBlocked(error)) {
@@ -2726,6 +3300,46 @@ export class AdminComponent implements OnInit, OnDestroy {
 
   confirmExport() {
     const opts: ExportOptions = { ...this.exportOptions, currentDate: this.selectedDate };
+
+    // COMPLETENESS FIX: For full or editions-only exports, use the server-side
+    // /data/export-full endpoint.  It reads directly from authoritative per-date
+    // options (dn_edition_YYYY-MM-DD) so EVERY date is included — not just the
+    // 1-2 dates hydrated into browser memory at load time.  Atomic saves
+    // (PUT /data/page, PUT /data/section) write ONLY to per-date options and
+    // never update the in-memory Angular state or the legacy dn_data blob, so
+    // client-side export would silently miss any edits made via those endpoints.
+    //
+    // Settings-only, current-date, and date-range exports continue to use the
+    // in-memory path because the data needed is already loaded.
+    if (opts.exportType !== 'settings-only' && opts.exportScope === 'full') {
+      this.loader.show('Downloading full backup from server…');
+      this.dataService.downloadExportFull().subscribe({
+        next: ({ filename }) => {
+          this.loader.hide();
+          this.toaster.success(`Full backup downloaded: ${filename}`);
+          this.backupHistory = this.dataService.getBackupHistory();
+          this.showExportModal = false;
+          this.activityLog.logClientEvent('export_download', { filename, source: 'server-granular' });
+        },
+        error: (err: any) => {
+          this.loader.hide();
+          console.error('Server export-full failed:', err);
+          // Fall back to in-memory export with a warning about potential incompleteness.
+          this.toaster.warning(
+            'Server export unavailable — falling back to browser-cached data. '
+            + 'This may miss editions not loaded into memory. Error: '
+            + (err?.message || 'Unknown')
+          );
+          const { filename } = this.dataService.downloadExport(opts);
+          this.backupHistory = this.dataService.getBackupHistory();
+          this.showExportModal = false;
+          this.activityLog.logClientEvent('export_download', { filename, source: 'client-fallback' });
+        },
+      });
+      return;
+    }
+
+    // Settings-only / current-date / date-range: in-memory path is sufficient.
     const { filename } = this.dataService.downloadExport(opts);
     this.toaster.success(`Exported: ${filename}`);
     this.backupHistory = this.dataService.getBackupHistory();
@@ -2753,7 +3367,12 @@ export class AdminComponent implements OnInit, OnDestroy {
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
-        const raw = e.target?.result as string;
+        // BANGLA SAFETY: explicitly request UTF-8 decoding (same encoding the
+        // server used when writing the file).  Also strip the UTF-8 BOM
+        // (\uFEFF) — some editors/OS tools prepend it when saving UTF-8 files,
+        // which causes JSON.parse() to throw "Unexpected token \uFEFF" even
+        // though the rest of the file is valid JSON.
+        const raw = ((e.target?.result as string) ?? '').replace(/^\uFEFF/, '');
         const parsed = JSON.parse(raw);
         const validation = this.dataService.validateImportPayload(parsed);
         const preview = validation.valid ? this.dataService.buildImportPreview(parsed) : null;
@@ -2783,7 +3402,10 @@ export class AdminComponent implements OnInit, OnDestroy {
       this.loader.hide();
       this.toaster.error('Failed to read the backup file.');
     };
-    reader.readAsText(file);
+    // BANGLA SAFETY: explicit UTF-8 encoding prevents the browser from
+    // guessing a single-byte charset for files without a BOM, which would
+    // corrupt multi-byte Bangla codepoints before JSON.parse() even runs.
+    reader.readAsText(file, 'utf-8');
   }
 
   closeImportModal() {
@@ -2804,7 +3426,16 @@ export class AdminComponent implements OnInit, OnDestroy {
     this.toaster.info('Auto-backup downloaded. Starting import…');
 
     const mergedData = this.dataService.applyImport(this.importParsed, this.importOptions);
-    this.dataService.saveData(mergedData).subscribe({
+
+    // SAFETY: always pass forceEmptyOverwrite=true for user-initiated imports.
+    // The server's shrinking-overwrite guard exists to protect against
+    // ACCIDENTAL data truncation (e.g. a buggy save that sends fewer editions
+    // than are on the server).  An explicit import where the user has already
+    // seen the preview and clicked "Confirm Import" is intentional — blocking
+    // it with a 409 is the wrong behaviour and gives a confusing error.
+    // The pre-import auto-backup above ensures the user can recover if they
+    // chose the wrong file.
+    this.dataService.saveData(mergedData, { forceEmptyOverwrite: true }).subscribe({
       next: () => {
         this.isImporting = false;
         this.loader.hide();
@@ -2833,11 +3464,15 @@ export class AdminComponent implements OnInit, OnDestroy {
           error: (err) => console.error('Error reloading after import:', err)
         });
       },
-      error: (err) => {
+      error: (err: any) => {
         this.isImporting = false;
         this.loader.hide();
         console.error('Import failed:', err);
-        this.toaster.error('Failed to import: ' + (err.message || 'Unknown error'));
+        // Extract the most useful error message: prefer the server's 'error'
+        // or 'message' field (from the REST response body) over the generic
+        // Angular HttpErrorResponse message.
+        const serverMsg = err?.error?.error || err?.error?.message || err?.message || 'Unknown error';
+        this.toaster.error('Import failed: ' + serverMsg);
       }
     });
   }
@@ -2974,6 +3609,10 @@ export class AdminComponent implements OnInit, OnDestroy {
   }
 
   vintageBackToPages(): void {
+    // Auto-save any in-progress section edit before leaving the page.
+    if (this.isEditingSection && this.sectionForm.id && this.sectionForm.title) {
+      this.saveSection(false);
+    }
     // Release the lock for the page we're leaving before going back to the
     // pages grid. Without this, the lock lingers and the next DELETE (from
     // cancelPageEdit) fires while autoSaveForVintage is about to run,
@@ -2987,6 +3626,9 @@ export class AdminComponent implements OnInit, OnDestroy {
   }
 
   vintageBackToSections(): void {
+    if (this.isEditingSection && this.sectionForm.id && this.sectionForm.title) {
+      this.saveSection(false);
+    }
     this.vintageSelectedSection = null;
     this.vintageView = 'sections';
     this.isEditingSection = false;
@@ -3002,6 +3644,20 @@ export class AdminComponent implements OnInit, OnDestroy {
   menuGoToPages(): void {
     this.activeMainTab = 'content';
     this.activeTab = 'pages';
+    // Auto-save in-progress edits BEFORE clearing state (vintage theme).
+    // The vintage breadcrumbs are hidden during editing, so the header menu
+    // is the only exit path — state must be read here, before being cleared.
+    if (this.adminTheme === 'vintage') {
+      if (this.isEditingSection && this.sectionForm.id && this.sectionForm.title) {
+        this.saveSection(false);
+      } else if (
+        this.isEditingPage &&
+        this.pageForm.fullImage &&
+        (this.pageForm.pageLabels?.['en']?.trim() || this.pageForm.pageLabels?.['bn']?.trim())
+      ) {
+        this.savePage(); // savePage() calls cancelPageEdit() → sets isEditingPage = false
+      }
+    }
     this.isEditingPage = false;
     this.isEditingSection = false;
     if (this.adminTheme === 'vintage') {
@@ -3043,9 +3699,16 @@ export class AdminComponent implements OnInit, OnDestroy {
     if (this.selectedEditionNumber === targetNum) {
       this.selectedEditionNumber = 1;
     }
-    this.loadCurrentEdition();
-    this.toaster.success(`Edition "${label}" deleted.`);
-    this.autoSaveForVintage();
+    if (this.adminTheme !== 'vintage') {
+      this.loadCurrentEdition();
+      this.toaster.success(`Edition "${label}" deleted.`);
+      return;
+    }
+
+    this.syncCurrentDateStructure(
+      'Deleting edition and syncing...',
+      `Edition "${label}" deleted.`
+    );
   }
 
   private autoSaveForVintage(): void {
@@ -3056,8 +3719,32 @@ export class AdminComponent implements OnInit, OnDestroy {
     // overwrite newly-saved data from another user.
     if (this.adminTheme !== 'vintage') return;
     if (!this.hasUnsavedChanges) return;
-    if (this.loader.isSaving) return;   // guard defined below
-    this.saveAllData();
+    if (this.loader.isSaving) return;
+
+    // Use the targeted editions-for-date atomic endpoint instead of a full
+    // POST /data save.  The full save sends only the 1-2 dates held in
+    // memory (granular loading only hydrates recent dates) and is blocked by
+    // the server's shrinking-overwrite guard on any site with >5 historical
+    // dates.  The atomic endpoint writes ONLY the current date's edition
+    // array — no blob write, no shrinking-overwrite check.
+    this.dataService.saveEditionsForDateAtomically(this.selectedDate).subscribe({
+      next: () => {
+        this.markSaved();
+      },
+      error: (err: any) => {
+        // Atomic endpoint unavailable (old server without the new route) —
+        // fall back to the full save so older deployments keep working.
+        const status = err?.status;
+        if (status === 404 || status === 405) {
+          this.saveAllData();
+          return;
+        }
+        // Any other error: mark unsaved so the user knows to retry.
+        this.markUnsavedChanges();
+        const msg = err?.error?.message || err?.message || `HTTP ${status}`;
+        this.toaster.warning(`Auto-save failed: ${msg}. Changes are in memory — click Save All to retry.`);
+      }
+    });
   }
 
   menuGoToDates(): void {
@@ -3072,6 +3759,12 @@ export class AdminComponent implements OnInit, OnDestroy {
 
   menuGoToSettings(): void {
     this.activeMainTab = 'settings';
+    this.closeMenu();
+  }
+
+  menuGoToAdManager(): void {
+    this.activeMainTab = 'ads';
+    this.loadAdManagerSettings();
     this.closeMenu();
   }
 
@@ -3284,32 +3977,50 @@ export class AdminComponent implements OnInit, OnDestroy {
     this.loader.show('Resizing and uploading page image…');
 
     try {
+      // One unique token shared by this upload's display/hi-res/thumb files so
+      // their URLs are distinct from any previous upload (no cache collisions).
+      const uploadToken = this.shortToken();
+
       // Resize to 700px for the frontend center-panel display image.
-      const displayFile = await resizeImageToWidth(originalFile, 700, 0.92);
-      const displayFileName = this.buildPageImageFilename('jpg', 'full');
+      // Encode in the format chosen by the admin (WebP by default).
+      const displayFile = await resizeImageToWidth(originalFile, 700, this.imageQuality, this.imageMime);
+      const displayFileName = this.buildPageImageFilename(this.imageExt, 'full', uploadToken);
 
       // Keep the original at full resolution for the section crop tool.
+      // Hi-res is the crop source — preserve its original format to avoid
+      // quality loss from double re-encoding and to keep max detail for crops.
       const hiResExt = originalFile.name.split('.').pop()?.toLowerCase() || 'jpg';
-      const hiResFileName = this.buildPageImageFilename(hiResExt, 'hires');
+      const hiResFileName = this.buildPageImageFilename(hiResExt, 'hires', uploadToken);
 
       this.activityLog.track('image_upload_page', { fileName: displayFileName, pageId: String(this.pageForm.id ?? '') });
 
       // Upload the 700px display copy and the original hi-res copy in parallel.
+      // Both are tracked for orphan cleanup on cancel/replace.
+      const track = (m: { id: number; url: string }) => this.sessionUploadedMedia.push(m);
       const [displayUrl, hiResUrl] = await Promise.all([
-        this.uploadMediaFile(displayFile, displayFileName),
-        this.uploadMediaFile(originalFile, hiResFileName)
+        this.uploadMediaFile(displayFile, displayFileName, track),
+        this.uploadMediaFile(originalFile, hiResFileName, track)
       ]);
 
       this.pageForm.fullImage = displayUrl;
       this.pageForm.fullImageHiRes = hiResUrl;
+      // Cache-bust the PREVIEW only (stored URL stays clean). The filename is
+      // deterministic, so an overwrite re-uploads to the same URL; without a
+      // unique query the browser would serve the previously-cached bytes and
+      // the preview would show the old image. A fresh token guarantees the
+      // <img> fetches the just-uploaded file.
+      this.fullImagePreviewSrc = displayUrl
+        + (displayUrl.includes('?') ? '&' : '?') + '_cb=' + Date.now();
+      // The preview src is brand-new (the cache-buster differs every upload),
+      // so the <img> load event will fire — show the skeleton until it does.
       this.previewLoading = true;
 
-      // Auto-generate a 200px thumbnail from the original if none is set yet.
+      // Auto-generate a thumbnail from the original if none is set yet.
       if (!this.pageForm.thumbnail) {
         this.loader.setMessage('Generating thumbnail…');
-        const thumbFile = await resizeImageToWidth(originalFile, 300, 0.92);
-        const thumbFileName = this.buildPageImageFilename('jpg', 'thumb');
-        const thumbUrl = await this.uploadMediaFile(thumbFile, thumbFileName);
+        const thumbFile = await resizeImageToWidth(originalFile, 300, this.imageQuality, this.imageMime);
+        const thumbFileName = this.buildPageImageFilename(this.imageExt, 'thumb', uploadToken);
+        const thumbUrl = await this.uploadMediaFile(thumbFile, thumbFileName, track);
         this.pageForm.thumbnail = thumbUrl;
       }
 
@@ -3317,13 +4028,19 @@ export class AdminComponent implements OnInit, OnDestroy {
       this.toaster.success('Full image uploaded');
     } catch (error) {
       console.error('Error uploading full image:', error);
-      this.toaster.error('Failed to upload full image: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      this.toaster.error(this.friendlyUploadError('Full image upload', error), 7000);
     } finally {
       this.loader.hide();
+      // Reset the input so re-selecting the SAME file (e.g. picking the
+      // corrected image that happens to match a prior pick) still fires change.
+      input.value = '';
     }
   }
 
   onFullImageUrlChange(value: string) {
+    // A manually typed/pasted URL should display as-is; drop any cache-buster
+    // override left over from a previous file upload.
+    this.fullImagePreviewSrc = null;
     this.previewLoading = !!value;
   }
 
@@ -3332,9 +4049,9 @@ export class AdminComponent implements OnInit, OnDestroy {
     if (input.files && input.files[0]) {
       this.fullImageHiResFile = input.files[0];
       const ext = this.fullImageHiResFile.name.split('.').pop()?.toLowerCase() || 'jpg';
-      const fileName = this.buildPageImageFilename(ext, 'hires');
+      const fileName = this.buildPageImageFilename(ext, 'hires', this.shortToken());
       this.loader.show('Uploading high-res image…');
-      this.uploadMediaFile(this.fullImageHiResFile, fileName)
+      this.uploadMediaFile(this.fullImageHiResFile, fileName, (m) => this.sessionUploadedMedia.push(m))
         .then((url) => {
           this.pageForm.fullImageHiRes = url;
           this.cdr.detectChanges();
@@ -3342,18 +4059,23 @@ export class AdminComponent implements OnInit, OnDestroy {
         })
         .catch((error) => {
           console.error('Error uploading high-res image:', error);
-          this.toaster.error('Failed to upload high-res image');
+          this.toaster.error(this.friendlyUploadError('High-res image upload', error), 7000);
         })
-        .finally(() => this.loader.hide());
+        .finally(() => {
+          this.loader.hide();
+          input.value = ''; // allow re-selecting the same file
+        });
     }
   }
 
   onFullImagePreviewLoad() {
     this.previewLoading = false;
+    this.cdr.detectChanges();
   }
 
   onFullImagePreviewError() {
     this.previewLoading = false;
+    this.cdr.detectChanges();
   }
 
   async onThumbnailFileSelected(event: Event): Promise<void> {
@@ -3375,17 +4097,18 @@ export class AdminComponent implements OnInit, OnDestroy {
     this.loader.show('Resizing and uploading thumbnail…');
 
     try {
-      const thumbFile = await resizeImageToWidth(originalFile, 300, 0.92);
-      const fileName = this.buildPageImageFilename('jpg', 'thumb');
-      const url = await this.uploadMediaFile(thumbFile, fileName);
+      const thumbFile = await resizeImageToWidth(originalFile, 300, this.imageQuality, this.imageMime);
+      const fileName = this.buildPageImageFilename(this.imageExt, 'thumb', this.shortToken());
+      const url = await this.uploadMediaFile(thumbFile, fileName, (m) => this.sessionUploadedMedia.push(m));
       this.pageForm.thumbnail = url;
       this.cdr.detectChanges();
       this.toaster.success('Thumbnail uploaded');
     } catch (error) {
       console.error('Error uploading thumbnail:', error);
-      this.toaster.error('Failed to upload thumbnail: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      this.toaster.error(this.friendlyUploadError('Thumbnail upload', error), 7000);
     } finally {
       this.loader.hide();
+      input.value = ''; // allow re-selecting the same file
     }
   }
 
@@ -3424,7 +4147,8 @@ export class AdminComponent implements OnInit, OnDestroy {
       headScripts: settings.headScripts ?? '',
       underMaintenance: settings.underMaintenance === true,
       maintenanceMessage: settings.maintenanceMessage ?? '',
-      othersPageTitle: settings.othersPageTitle ?? ''
+      othersPageTitle: settings.othersPageTitle ?? '',
+      imageFormat: (settings.imageFormat || 'webp') as 'webp' | 'all'
     };
     this.hasUnsavedSettingsChanges = false;
   }
@@ -3467,7 +4191,8 @@ export class AdminComponent implements OnInit, OnDestroy {
       headScripts: this.settingsForm.headScripts || '',
       underMaintenance: this.settingsForm.underMaintenance === true,
       maintenanceMessage: this.settingsForm.maintenanceMessage || '',
-      othersPageTitle: this.settingsForm.othersPageTitle || ''
+      othersPageTitle: this.settingsForm.othersPageTitle || '',
+      imageFormat: this.settingsForm.imageFormat || 'webp'
     };
   }
 
@@ -3484,13 +4209,11 @@ export class AdminComponent implements OnInit, OnDestroy {
     this.activityLog.track('settings_save');
     const completeSettings = this.commitSettingsFormToData();
 
-    // Get the updated data after settings change
-    const currentData = this.dataService.getData();
     console.log('Saving settings:', completeSettings);
-    console.log('Complete data structure:', currentData);
-    
-    // Save to backend
-    this.dataService.saveData(currentData).subscribe({
+
+    // Use the dedicated PATCH /data/settings endpoint so the editions data is
+    // never included in the payload — prevents the shrinking-overwrite 409.
+    this.dataService.saveSettingsOnly(completeSettings).subscribe({
       next: () => {
         console.log('Settings saved successfully');
         this.markSaved();
@@ -3504,28 +4227,160 @@ export class AdminComponent implements OnInit, OnDestroy {
     });
   }
 
+  // ─── Ad Manager ───────────────────────────────────────────────────────────
+
+  /**
+   * Sync the adManagerForm from the AdService signal.
+   * Called when the user opens the Ad Manager tab to ensure the form
+   * reflects the latest value from the server.
+   */
+  loadAdManagerSettings(): void {
+    // Cancel any outstanding poll from a previous tab-open.
+    if (this._adManagerPollInterval !== null) {
+      clearInterval(this._adManagerPollInterval);
+      this._adManagerPollInterval = null;
+    }
+
+    const slots = this.adService.slots();
+    this.adManagerForm = {
+      enabled: this.adService.enabled(),
+      slotStates: Object.fromEntries(slots.map(s => [s.id, s.enabled])),
+    };
+    this.adManagerSlots = slots;
+
+    // If the service hasn't fetched yet (first open), poll until the HTTP
+    // response arrives. Cap at 15 × 200 ms = 3 s to avoid an infinite loop
+    // when the network request fails.
+    if (!this.adManagerSlots.length) {
+      let attempts = 0;
+      this._adManagerPollInterval = setInterval(() => {
+        attempts++;
+        const loaded = this.adService.slots();
+        if (loaded.length || attempts >= 15) {
+          this.adManagerSlots = loaded;
+          this.adManagerForm = {
+            enabled: this.adService.enabled(),
+            slotStates: Object.fromEntries(loaded.map(s => [s.id, s.enabled])),
+          };
+          clearInterval(this._adManagerPollInterval!);
+          this._adManagerPollInterval = null;
+          this.cdr.detectChanges();
+        }
+      }, 200);
+    }
+  }
+
+  /**
+   * Save the Ad Manager enabled flag via POST /ads/config.
+   * On success the AdService signal is updated and the UI reflects the
+   * persisted state without a page reload.
+   */
+  saveAdManagerSettings(): void {
+    this.isSavingAdManager = true;
+    this.cdr.detectChanges();
+
+    this.adService
+      .setEnabled(this.adManagerForm.enabled, this.adManagerForm.slotStates)
+      .subscribe({
+        next: () => {
+          this.isSavingAdManager = false;
+          this.toaster.success('Ad Manager settings saved successfully.');
+          this.cdr.detectChanges();
+        },
+        error: () => {
+          this.isSavingAdManager = false;
+          this.toaster.error('Failed to save Ad Manager settings. Please try again.');
+          this.cdr.detectChanges();
+        },
+      });
+  }
+
+  /** Human-readable placement description for each slot ID (allocated once). */
+  private static readonly SLOT_PLACEMENTS: Readonly<Record<string, string>> = {
+    desktop_page_left:           'Left sidebar — replaces page thumbnails',
+    desktop_page_right:          'Right panel — shown when no article is open',
+    desktop_post_preview_top:    'Post preview — above the section image',
+    desktop_post_preview_middle: 'Post preview — between image and linked sections',
+    desktop_post_top_image:      'Article modal — before main image (image panel)',
+    desktop_post_top_text:       'Article modal — before article title (text panel)',
+    desktop_post_middle:         'Article modal — before linked section images',
+    mobile_post_top:             'Mobile — top ad (placement coming soon)',
+    mobile_post_middle:          'Mobile — middle ad (placement coming soon)',
+  };
+
+  getSlotPlacement(id: string): string {
+    return AdminComponent.SLOT_PLACEMENTS[id] ?? id;
+  }
+
   onLogoFileSelected(event: Event): void {
     const input = event.target as HTMLInputElement;
     if (input.files && input.files[0]) {
       this.logoFile = input.files[0];
-      const ext = this.logoFile.name.split('.').pop()?.toLowerCase() || 'jpg';
-      const fileName = `logo_${Date.now()}.${ext}`;
-      this.loader.show('Uploading logo…');
-      this.activityLog.track('image_upload_logo', { fileName });
-      this.uploadMediaFile(this.logoFile, fileName)
-        .then((url) => {
-          if (this.settingsForm.logo) {
-            this.settingsForm.logo.url = url;
-          }
-          this.onSettingsFormChanged();
-          this.cdr.detectChanges();
-          this.toaster.success('Logo uploaded');
-        })
-        .catch((error) => {
-          console.error('Error uploading logo:', error);
-          this.toaster.error('Failed to upload logo');
-        })
-        .finally(() => this.loader.hide());
+
+      // Legacy mode — upload as-is, preserving original format
+      if (this.imageMime === 'image/jpeg') {
+        const ext = this.logoFile.name.split('.').pop()?.toLowerCase() || 'jpg';
+        const fileName = `logo_${Date.now()}.${ext}`;
+        this.loader.show('Uploading logo…');
+        this.activityLog.track('image_upload_logo', { fileName });
+        this.uploadMediaFile(this.logoFile, fileName)
+          .then((url) => {
+            if (this.settingsForm.logo) {
+              this.settingsForm.logo.url = url;
+            }
+            this.onSettingsFormChanged();
+            this.cdr.detectChanges();
+            this.toaster.success('Logo uploaded');
+          })
+          .catch((error) => {
+            console.error('Error uploading logo:', error);
+            this.toaster.error(this.friendlyUploadError('Logo upload', error), 7000);
+          })
+          .finally(() => this.loader.hide());
+        return;
+      }
+
+      // WebP mode — re-encode via Canvas (preserves PNG transparency)
+      this.loader.show('Converting logo to WebP…');
+      const objectUrl = URL.createObjectURL(this.logoFile);
+      const img = new Image();
+      img.onload = () => {
+        URL.revokeObjectURL(objectUrl);
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          this.loader.hide();
+          this.toaster.error('Failed to convert logo to WebP');
+          return;
+        }
+        ctx.drawImage(img, 0, 0);
+        const fileName = `logo_${Date.now()}.webp`;
+        const imageData = canvas.toDataURL('image/webp', this.imageQuality);
+        const file = this.dataUrlToFile(imageData, fileName);
+        this.activityLog.track('image_upload_logo', { fileName });
+        this.uploadMediaFile(file, fileName)
+          .then((url) => {
+            if (this.settingsForm.logo) {
+              this.settingsForm.logo.url = url;
+            }
+            this.onSettingsFormChanged();
+            this.cdr.detectChanges();
+            this.toaster.success('Logo uploaded');
+          })
+          .catch((error) => {
+            console.error('Error uploading logo:', error);
+            this.toaster.error(this.friendlyUploadError('Logo upload', error), 7000);
+          })
+          .finally(() => this.loader.hide());
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(objectUrl);
+        this.loader.hide();
+        this.toaster.error('Failed to load logo for conversion');
+      };
+      img.src = objectUrl;
     }
   }
 

@@ -1,4 +1,5 @@
-import { Injectable, OnDestroy } from '@angular/core';
+import { Injectable, OnDestroy, PLATFORM_ID, inject } from '@angular/core';
+import { isPlatformBrowser } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
 import { Observable, of } from 'rxjs';
 import { catchError } from 'rxjs/operators';
@@ -130,16 +131,22 @@ export class ActivityLogService implements OnDestroy {
   /** Bound reference so we can call removeEventListener in ngOnDestroy. */
   private readonly onUnload = () => this.flushSync();
 
-  constructor(private http: HttpClient, private auth: AuthService) {
-    // Auto-flush on a 30 s interval
-    this.flushTimer = setInterval(() => this.flush(), 30_000);
+  private readonly platformId = inject(PLATFORM_ID);
+  private get isBrowser(): boolean { return isPlatformBrowser(this.platformId); }
 
-    // Flush remaining events when the browser tab is closed
-    window.addEventListener('beforeunload', this.onUnload);
+  constructor(private http: HttpClient, private auth: AuthService) {
+    // Auto-flush on a 30 s interval (browser only — server has no persistent state)
+    if (this.isBrowser) {
+      this.flushTimer = setInterval(() => this.flush(), 30_000);
+      // Flush remaining events when the browser tab is closed
+      window.addEventListener('beforeunload', this.onUnload);
+    }
   }
 
   ngOnDestroy(): void {
-    window.removeEventListener('beforeunload', this.onUnload);
+    if (this.isBrowser) {
+      window.removeEventListener('beforeunload', this.onUnload);
+    }
     clearInterval(this.flushTimer);
     this.flush();   // flush any remaining queued events before the service is torn down
   }
@@ -249,6 +256,7 @@ export class ActivityLogService implements OnDestroy {
 
   /** Client-side CSV export of whatever is currently shown in the table. */
   exportCsv(entries: ActivityLogEntry[]): void {
+    if (!this.isBrowser) return;
     const cols = ['Date/Time', 'User', 'Role', 'Action', 'Details', 'IP'];
     const rows = entries.map(e => [
       e.createdAt,
@@ -280,6 +288,10 @@ export class ActivityLogService implements OnDestroy {
   }
 
   private makeSessionId(): string {
+    if (!isPlatformBrowser(inject(PLATFORM_ID))) {
+      // SSR — generate a throwaway ID; this service is not used server-side.
+      return Math.random().toString(36).slice(2);
+    }
     try {
       let id = sessionStorage.getItem('dn_sid');
       if (!id) {

@@ -1,35 +1,7 @@
 import { bootstrapApplication } from '@angular/platform-browser';
-import { provideHttpClient, withInterceptors } from '@angular/common/http';
-import { provideRouter, Routes, UrlSerializer, DefaultUrlSerializer, UrlTree } from '@angular/router';
 import { AppComponent } from './app/app.component';
-import { NewspaperComponent } from './app/newspaper.component';
-import { wpApiInterceptor } from './app/interceptors/wp-api.interceptor';
-import { loaderInterceptor } from './app/interceptors/loader.interceptor';
+import { appConfig } from './app/app.config';
 
-const routes: Routes = [
-  { path: '', component: NewspaperComponent },
-  { path: 'admin', loadComponent: () => import('./app/admin/admin.component').then(m => m.AdminComponent) },
-  { path: ':date/:page/:edition', component: NewspaperComponent },
-  { path: ':date/:page/:edition/:section', component: NewspaperComponent },
-  { path: '**', redirectTo: '' }
-];
-
-/** Ensure all URLs end with a trailing slash (e.g. /2026-02-07/ instead of /2026-02-07). */
-class TrailingSlashUrlSerializer extends DefaultUrlSerializer {
-  override serialize(tree: UrlTree): string {
-    const path = super.serialize(tree);
-    // Keep bare '/', don't double-slash query/fragment URLs
-    const [base, rest] = path.split('?');
-    const trailed = base === '/' ? base : base.replace(/\/?$/, '/');
-    return rest !== undefined ? trailed + '?' + rest : trailed;
-  }
-}
-
-bootstrapApplication(AppComponent, {
-  providers: [
-    provideHttpClient(withInterceptors([wpApiInterceptor, loaderInterceptor])),
-    provideRouter(routes),
-    { provide: UrlSerializer, useClass: TrailingSlashUrlSerializer },
-  ]
-})
-  .catch((err) => console.error(err));
+bootstrapApplication(AppComponent, appConfig).catch((err) =>
+  console.error(err),
+);

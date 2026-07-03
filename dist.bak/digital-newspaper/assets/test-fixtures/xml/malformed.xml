@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- malformed.xml — Broken XML structure.
+     Expected result: DOMParser returns a parsererror; the wizard shows a fatal error
+     in Step 1 and the "Next" button is disabled. No rows are parsed. -->
+<newspaper>
+  <post>
+    <title>Unclosed tag post</title>
+    <content><![CDATA[<p>This post's closing tag is missing.</p>]]></content>
+    <date>2026-06-04</date>
+    <edition>1</edition>
+    <page>1</page>
+  <!-- Missing </post> closing tag — this makes the document malformed XML -->
+  <post>
+    <title>Second Post After Malformed One</title>
+    <content><![CDATA[<p>This post comes after the unclosed one.</p>]]></content>
+    <date>2026-06-04</date>
+    <edition>1</edition>
+    <page>1</page>
+  </post>
+</newspaper>

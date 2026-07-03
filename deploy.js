@@ -155,14 +155,26 @@ log(`✓ Build safely copied outside repository`, colors.green);
 // Use the temp dist for all operations
 const distDir = TEMP_DIST_DIR;
 
-// Create .htaccess
+// Write .htaccess
 const htaccessPath = path.join(distDir, '.htaccess');
-if (!fs.existsSync(htaccessPath)) {
-  log('Creating .htaccess...', colors.blue);
-  const htaccessContent = `# Redirect all routes to index.html for Angular HTML5 pushState routing
+log('Writing .htaccess...', colors.blue);
+const htaccessContent = `# Redirect all routes to index.html for Angular HTML5 pushState routing
 <IfModule mod_rewrite.c>
   RewriteEngine On
   RewriteBase /
+
+  # ---- Serve pre-compressed static assets (Brotli/Gzip), built at deploy time ----
+  # LiteSpeed does not gzip/brotli JS/CSS/JSON on the fly on this host, so
+  # deploy.js writes <file>.br and <file>.gz siblings and these rules serve them
+  # by content negotiation. The original uncompressed file is the guaranteed
+  # fallback: the -f checks only rewrite when a sibling actually exists, so a
+  # missing .br/.gz simply serves the plain asset exactly as before.
+  RewriteCond %{HTTP:Accept-Encoding} br
+  RewriteCond %{REQUEST_FILENAME}\\.br -f
+  RewriteRule ^(.+\\.(?:js|mjs|css|json|svg|webmanifest))$ $1.br [L]
+  RewriteCond %{HTTP:Accept-Encoding} gzip
+  RewriteCond %{REQUEST_FILENAME}\\.gz -f
+  RewriteRule ^(.+\\.(?:js|mjs|css|json|svg|webmanifest))$ $1.gz [L]
 
   # Social crawler rewrites: serve OG/Twitter HTML from WordPress endpoint
   RewriteCond %{HTTP_USER_AGENT} "facebookexternalhit|Facebot|Twitterbot|LinkedInBot|WhatsApp|Slackbot|TelegramBot|Discordbot|Pinterest|vkShare|W3C_Validator|Googlebot-Image" [NC]
@@ -175,10 +187,69 @@ if (!fs.existsSync(htaccessPath)) {
   RewriteRule ^([0-9]{4}-[0-9]{2}-[0-9]{2})/([^/?]+)/?$ /wp/index.php?rest_route=/digital-newspaper/v1/social&date=$1&slug=$2 [NE,L,QSA]
 
   RewriteRule ^index\\.html$ - [L]
+  # Compatibility redirects: if anyone hits root-level WP paths, forward to /wp.
+  RewriteRule ^wp-admin/?$ /wp/wp-admin/ [R=302,L,NC]
+  RewriteRule ^wp-login\\.php$ /wp/wp-login.php [R=302,L,NC]
+  RewriteRule ^xmlrpc\\.php$ /wp/xmlrpc.php [R=302,L,NC]
+  # Never route WordPress/admin/auth URLs through the Angular SPA.
+  RewriteRule ^wp(?:/|$) - [L,NC]
+  RewriteRule ^wp-admin(?:/|$) - [L,NC]
+  RewriteRule ^wp-login\\.php$ - [L,NC]
+  RewriteRule ^xmlrpc\\.php$ - [L,NC]
   RewriteCond %{REQUEST_FILENAME} !-f
   RewriteCond %{REQUEST_FILENAME} !-d
-  RewriteCond %{REQUEST_URI} !^/wp/ [NC]
+  RewriteCond %{REQUEST_URI} !^/(wp|wp-admin)(?:/|$) [NC]
+  RewriteCond %{REQUEST_URI} !^/wp-login\\.php$ [NC]
+  RewriteCond %{REQUEST_URI} !^/xmlrpc\\.php$ [NC]
   RewriteRule ^ /index.html [L]
+</IfModule>
+
+# ---- Encoding + content-type tags for the pre-compressed static assets ----
+# The .br/.gz copies are served by the rewrite rules above; these headers tell
+# the browser to transparently decompress them and parse them as the right type
+# (without these, the .br/.gz extension would mislabel the MIME type).
+<IfModule mod_headers.c>
+  <FilesMatch "\\.(?:js|mjs|css|json|svg|webmanifest)\\.br$">
+    Header set Content-Encoding br
+    Header append Vary Accept-Encoding
+  </FilesMatch>
+  <FilesMatch "\\.(?:js|mjs|css|json|svg|webmanifest)\\.gz$">
+    Header set Content-Encoding gzip
+    Header append Vary Accept-Encoding
+  </FilesMatch>
+  <FilesMatch "\\.(?:js|mjs)\\.(?:br|gz)$">
+    Header set Content-Type "application/javascript; charset=UTF-8"
+  </FilesMatch>
+  <FilesMatch "\\.css\\.(?:br|gz)$">
+    Header set Content-Type "text/css; charset=UTF-8"
+  </FilesMatch>
+  <FilesMatch "\\.json\\.(?:br|gz)$">
+    Header set Content-Type "application/json; charset=UTF-8"
+  </FilesMatch>
+  <FilesMatch "\\.svg\\.(?:br|gz)$">
+    Header set Content-Type "image/svg+xml"
+  </FilesMatch>
+  <FilesMatch "\\.webmanifest\\.(?:br|gz)$">
+    Header set Content-Type "application/manifest+json; charset=UTF-8"
+  </FilesMatch>
+</IfModule>
+
+# Safety: never let the server try to (re)compress the already-compressed files.
+<IfModule mod_setenvif.c>
+  SetEnvIfNoCase Request_URI "\\.(?:br|gz)$" no-gzip dont-vary
+</IfModule>
+
+# The SPA HTML shell must NEVER be stale-cached. index.html / index.csr.html
+# reference HASHED JS/CSS bundles that change on every deploy. If a browser keeps
+# an old shell (LiteSpeed serves it with max-age=3600 by default), it points at a
+# bundle hash that no longer exists after a deploy → the SPA fallback returns HTML
+# in the script's place → the browser can't execute it → BLANK PAGE for up to an
+# hour. Forcing revalidation makes every load pick up the current shell, while the
+# hashed assets keep their long cache. "always set" overrides LiteSpeed's default.
+<IfModule mod_headers.c>
+  <FilesMatch "^index(\\.csr)?\\.html$">
+    Header always set Cache-Control "no-cache, must-revalidate"
+  </FilesMatch>
 </IfModule>
 
 # ---- Digital Newspaper: disable ModSecurity for the WordPress REST API ----
@@ -195,9 +266,8 @@ if (!fs.existsSync(htaccessPath)) {
   SecFilterScanPOST Off
 </IfModule>
 # ---- end Digital Newspaper WAF bypass ----`;
-  fs.writeFileSync(htaccessPath, htaccessContent);
-  log('✓ .htaccess created', colors.green);
-}
+fs.writeFileSync(htaccessPath, htaccessContent);
+log('✓ .htaccess written', colors.green);
 
 // Deployment strategy
 const isRelease = branch === 'release';
@@ -215,6 +285,42 @@ function walk(dir, base = dir) {
     return [{ full, rel }];
   });
 }
+// Pre-compress static assets (Brotli + Gzip) using Node's BUILT-IN zlib — no
+// extra dependency, no runtime service. LiteSpeed on this host won't compress
+// JS/CSS/JSON on the fly, so we ship the compressed bytes and let the .htaccess
+// above serve them by negotiation. Best-effort and fully additive: the original
+// uncompressed file is always kept, so a failed/missing sibling just serves the
+// plain asset. Runs before the upload walk so the new files are included.
+const zlib = require('zlib');
+const COMPRESSIBLE_EXT = new Set(['.js', '.mjs', '.css', '.json', '.svg', '.webmanifest']);
+function precompressStaticAssets(dir) {
+  let count = 0, savedBytes = 0;
+  for (const { full } of walk(dir)) {
+    if (full.endsWith('.br') || full.endsWith('.gz')) continue;
+    if (!COMPRESSIBLE_EXT.has(path.extname(full).toLowerCase())) continue;
+    let buf;
+    try { buf = fs.readFileSync(full); } catch { continue; }
+    if (buf.length < 1024) continue; // Too small to be worth a second request shape.
+    try {
+      const br = zlib.brotliCompressSync(buf, {
+        params: {
+          [zlib.constants.BROTLI_PARAM_QUALITY]: 11,
+          [zlib.constants.BROTLI_PARAM_SIZE_HINT]: buf.length,
+        },
+      });
+      const gz = zlib.gzipSync(buf, { level: 9 });
+      // Only keep a compressed sibling if it is actually smaller than the source.
+      if (br.length < buf.length) { fs.writeFileSync(full + '.br', br); savedBytes += buf.length - br.length; }
+      if (gz.length < buf.length) { fs.writeFileSync(full + '.gz', gz); }
+      count++;
+    } catch (_) { /* best-effort: skip this file, keep the original */ }
+  }
+  return { count, savedBytes };
+}
+log('Pre-compressing static assets (brotli + gzip)...', colors.blue);
+const { count: precompCount, savedBytes: precompSaved } = precompressStaticAssets(distDir);
+log(`✓ Pre-compressed ${precompCount} assets (brotli saves ~${(precompSaved / 1024).toFixed(0)} KB)`, colors.green);
+
 const files = walk(distDir);
 log(`Found ${files.length} build files.`, colors.blue);
 
@@ -270,6 +376,24 @@ async function deployWithSFTP() {
       files: files.length
     }, null, 2);
     await sftp.put(Buffer.from(markerContent), `${REMOTE}/deploy-info.json`);
+
+    // Keep the Angular entry shell writable by the PHP/web user. The WordPress
+    // plugin injects the first-paint <link rel="preload"> and inline bootstrap
+    // state into this exact file on the next publish; a fresh upload can land as
+    // 0644, so 0664 keeps it group-writable when PHP shares the file's group.
+    // (Angular 17 SSR/CSR builds ship index.csr.html and no index.html, so we
+    // try both.) Best-effort — never fail the deploy over a chmod.
+    for (const name of ['index.csr.html', 'index.html']) {
+      const remoteEntry = `${REMOTE}/${name}`;
+      try {
+        if (await sftp.exists(remoteEntry)) {
+          await sftp.chmod(remoteEntry, 0o664);
+          log(`✓ chmod 664 ${name} (keeps preload/inline injection writable)`, colors.green);
+        }
+      } catch (e) {
+        log(`chmod ${name} skipped: ${e.message}`, colors.yellow);
+      }
+    }
   }
 
   await sftp.end();
@@ -482,7 +606,16 @@ async function deploy() {
     log(`✓ Release branch updated`, colors.green);
     log(`✓ Files deployed via ${USE_SFTP ? 'SFTP' : 'FTP'}`, colors.green);
     log(`✓ Total time: ${duration}s\n`, colors.green);
-    
+
+    // The fresh upload replaced the entry shell (index.csr.html) with the
+    // un-injected build. If the first-paint optimisations are enabled
+    // (Inline Bootstrap State / Preload First-Page Image), re-run the injection:
+    if (!dryRun) {
+      log(`ℹ Reminder: in WP Admin → Digital Newspaper Settings, click`, colors.yellow);
+      log(`  "Regenerate snapshots now" to re-inject preload/inline into the`, colors.yellow);
+      log(`  new index.csr.html (otherwise it self-heals on the next publish).`, colors.yellow);
+    }
+
   } catch (error) {
     console.log(`\n${colors.red}╔════════════════════════════════════════════╗${colors.reset}`);
     console.log(`${colors.red}║          ✗ DEPLOYMENT FAILED ✗             ║${colors.reset}`);

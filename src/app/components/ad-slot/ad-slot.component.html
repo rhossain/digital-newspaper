@@ -1,0 +1,9 @@
+@if (slot() && slot()!.enabled) {
+  <div
+    #adContainer
+    [id]="slot()!.div"
+    [style.min-width.px]="slot()!.min_width"
+    [style.min-height.px]="slot()!.min_height"
+    class="dn-ad-container">
+  </div>
+}

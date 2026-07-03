@@ -10,51 +10,54 @@
     </svg>
     <span class="dp-trigger-label">{{ value | localeDate:'short' }}</span>
     <svg class="dp-caret" [class.dp-caret-open]="isOpen"
-         width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+      width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
       <polyline points="6 9 12 15 18 9"></polyline>
     </svg>
   </button>
 
   <!-- ── Calendar popup ── -->
-  <div class="dp-popup" *ngIf="isOpen" (click)="stopProp($event)">
-
-    <!-- Month navigation -->
-    <div class="dp-header">
-      <button class="dp-nav-btn" type="button" (click)="prevMonth()">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-          <polyline points="15 18 9 12 15 6"></polyline>
-        </svg>
-      </button>
-      <span class="dp-month-label">{{ monthLabel }}</span>
-      <button class="dp-nav-btn" type="button" (click)="nextMonth()" [disabled]="isNextMonthDisabled()">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-          <polyline points="9 18 15 12 9 6"></polyline>
-        </svg>
-      </button>
+  @if (isOpen) {
+    <div class="dp-popup" (click)="stopProp($event)">
+      <!-- Month navigation -->
+      <div class="dp-header">
+        <button class="dp-nav-btn" type="button" (click)="prevMonth()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <polyline points="15 18 9 12 15 6"></polyline>
+          </svg>
+        </button>
+        <span class="dp-month-label">{{ monthLabel }}</span>
+        <button class="dp-nav-btn" type="button" (click)="nextMonth()" [disabled]="isNextMonthDisabled()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <polyline points="9 18 15 12 9 6"></polyline>
+          </svg>
+        </button>
+      </div>
+      <!-- Weekday headers -->
+      <div class="dp-weekdays">
+        @for (d of weekDayHeaders; track d) {
+          <span class="dp-weekday">{{ d }}</span>
+        }
+      </div>
+      <!-- Day rows -->
+      @for (week of weeks; track week) {
+        <div class="dp-week">
+          @for (day of week; track day) {
+            <button
+              type="button"
+              class="dp-day"
+              [class.dp-other-month]="!day.inMonth"
+              [class.dp-today]="day.isToday && !day.isSelected"
+              [class.dp-selected]="day.isSelected"
+              [class.dp-available]="day.isAvailable && !day.isDisabled && !day.isSelected"
+              [class.dp-disabled]="day.isDisabled || !day.inMonth"
+              [disabled]="day.isDisabled || !day.inMonth"
+              (click)="selectDay(day)"
+              >
+              {{ ts.toLocaleDigits(day.day) }}
+            </button>
+          }
+        </div>
+      }
     </div>
-
-    <!-- Weekday headers -->
-    <div class="dp-weekdays">
-      <span class="dp-weekday" *ngFor="let d of weekDayHeaders">{{ d }}</span>
-    </div>
-
-    <!-- Day rows -->
-    <div class="dp-week" *ngFor="let week of weeks">
-      <button
-        *ngFor="let day of week"
-        type="button"
-        class="dp-day"
-        [class.dp-other-month]="!day.inMonth"
-        [class.dp-today]="day.isToday && !day.isSelected"
-        [class.dp-selected]="day.isSelected"
-        [class.dp-available]="day.isAvailable && !day.isDisabled && !day.isSelected"
-        [class.dp-disabled]="day.isDisabled || !day.inMonth"
-        [disabled]="day.isDisabled || !day.inMonth"
-        (click)="selectDay(day)"
-      >
-        {{ ts.toLocaleDigits(day.day) }}
-      </button>
-    </div>
-
-  </div>
+  }
 </div>

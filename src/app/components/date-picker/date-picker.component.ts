@@ -1,8 +1,9 @@
 import {
   Component, Input, Output, EventEmitter,
-  OnChanges, SimpleChanges, HostListener
+  OnChanges, SimpleChanges, HostListener,
+  ChangeDetectionStrategy,
 } from '@angular/core';
-import { CommonModule } from '@angular/common';
+
 import { TranslationService } from '../../i18n/translation.service';
 import { LocaleDatePipe } from '../../i18n/locale-date.pipe';
 
@@ -19,9 +20,10 @@ interface CalendarDay {
 @Component({
   selector: 'app-date-picker',
   standalone: true,
-  imports: [CommonModule, LocaleDatePipe],
+  imports: [LocaleDatePipe],
   templateUrl: './date-picker.component.html',
-  styleUrls: ['./date-picker.component.css']
+  styleUrls: ['./date-picker.component.css'],
+  changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class DatePickerComponent implements OnChanges {
   @Input() value: string = '';

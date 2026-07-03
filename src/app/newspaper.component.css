@@ -4,7 +4,7 @@
   margin: 0 auto;
   height: 100vh;
   background-color: var(--color-bg-app);
-  font-family: 'Google Sans', sans-serif;
+  font-family: 'Google Sans Variable', sans-serif;
 }
 
 /* Fixed Header Styles */
@@ -243,7 +243,8 @@
 
 .dates-dropdown {
   min-width: 120px;
-  padding: 4px 8px;
+  height: 32px;
+  padding: 6px 8px;
   border-radius: 6px;
   border: 1px solid var(--color-border-ui);
   background: var(--color-bg-muted);
@@ -585,6 +586,22 @@
   transition: all 0.3s ease;
   background-color: var(--color-bg-page);
   position: relative;
+  /* Skip layout/paint for thumbnails that are scrolled out of the panel.
+     contain-intrinsic-size gives the browser a placeholder height so the
+     scrollbar doesn't jump when off-screen items are rendered on scroll. */
+  content-visibility: auto;
+  contain-intrinsic-size: 0 200px;
+}
+
+/* Placeholder shown while a deferred thumbnail is outside the panel viewport.
+   Height approximates a real thumbnail item so the panel scrollbar does not jump. */
+.thumbnail-item-placeholder {
+  min-height: 200px;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  cursor: default;
+  pointer-events: none;
 }
 
 .thumbnail-item:hover {
@@ -637,19 +654,6 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-}
-
-/* Article title in content modal */
-.article-modal-title {
-  margin: 0 0 14px;
-  padding: 10px 20px 8px;
-  font-size: 1rem;
-  font-weight: 700;
-  line-height: 1.35;
-  color: var(--color-text-dark);
-  border-bottom: 2px solid var(--color-primary);
-  background: var(--color-bg-muted);
-  border-radius: 8px 8px 0 0;
 }
 
 /* Slow connection notice — shown after image skeleton persists too long */
@@ -1000,11 +1004,55 @@
   width: 100%;
 }
 
+/* Transparent wrapper: makes <picture> behave as a full-width block so the
+   inner <img> sizes against it identically to when it was a direct child of
+   .image-inner. This keeps the rendered image box — and therefore the absolute
+   .sections-overlay alignment — pixel-identical whether or not <source>
+   variants are present. */
+.main-page-picture {
+  display: block;
+  width: 100%;
+}
+
 .main-page-image {
   width: 100%;
   height: auto;
   display: block;
   transition: opacity 0.3s ease;
+}
+
+/* Progressive blur-up placeholder: the lightweight thumbnail, scaled to fill the
+   same box as the main image. It sits above the skeleton and the (initially
+   transparent) full image, and fades out once the full-resolution image has
+   loaded — revealing it beneath for a smooth low-res → sharp crossfade.
+   Decorative only: pointer-events:none so it never blocks the sections overlay. */
+.main-page-thumb-placeholder {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: center;
+  filter: blur(4px);
+  opacity: 1;
+  transition: opacity 0.4s ease;
+  pointer-events: none;
+  z-index: 2;
+  border-radius: 8px;
+}
+
+.main-page-thumb-placeholder.is-faded {
+  opacity: 0;
+}
+
+/* Last-resort "image unavailable" placeholder: render at a modest, centered
+   size rather than stretching the full-bleed page-image box. */
+.main-page-image.is-unavailable {
+  width: auto;
+  max-width: 300px;
+  height: auto;
+  margin: 40px auto;
 }
 
 /* Page Footer Info Bar */
@@ -1100,58 +1148,6 @@
   text-decoration: underline;
 }
 
-.sections-overlay {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-}
-
-.clickable-section {
-  position: absolute;
-  border: 2px solid transparent;
-  cursor: pointer;
-  transition: all 0.3s ease;
-  background-color: rgba(25, 118, 210, 0);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.clickable-section:hover {
-  background-color: rgba(25, 118, 210, 0.15);
-  border-color: var(--color-primary);
-  z-index: 10;
-}
-
-.clickable-section.selected {
-  background-color: rgba(25, 118, 210, 0.25);
-  border-color: var(--color-primary-darker);
-  border-width: 1px;
-}
-
-.section-label {
-  background-color: rgba(25, 118, 210, 0.9);
-  color: var(--color-white);
-  padding: 8px 15px;
-  border-radius: 20px;
-  font-size: 13px;
-  font-weight: bold;
-  opacity: 0;
-  transition: opacity 0.3s ease;
-  pointer-events: none;
-  white-space: nowrap;
-  max-width: 90%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-family: 'Google Sans', sans-serif;
-}
-
-.clickable-section:hover .section-label {
-  opacity: 1;
-}
-
 .instructions {
   margin-top: 20px;
   padding: 15px 25px;
@@ -1212,11 +1208,36 @@
   flex-direction: column;
 }
 
+.close-button {
+  position: absolute;
+  top: 22px;
+  right: 20px;
+  background-color: var(--color-danger);
+  color: var(--color-white);
+  border: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  font-size: 24px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s ease;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+  z-index: 1;
+}
+
+.close-button:hover {
+  background-color: var(--color-danger-dark);
+  transform: scale(1.1);
+}
+
 .section-image-container {
   display: flex;
   flex-direction: column;
-  gap: 20px;
-  padding: 0 20px 20px 20px;
+  gap: 8px;
+  padding: 0 20px 12px 20px;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -1337,13 +1358,142 @@
 }
 
 .read-article-section {
+  container-type: inline-size;
   display: flex;
   align-items: center;
+  justify-content: space-between;
   min-height: 73px;
   padding: 23px 20px;
   flex-shrink: 0;
   border-top: 1px solid var(--color-border);
   background: var(--color-white);
+  gap: 10px;
+}
+
+/* ── Inline share buttons (wide view) ── */
+.share-inline {
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+  margin-right: 38px;
+  flex-shrink: 0;
+}
+
+.share-inline .inline-share-buttons ::ng-deep .modal-share-header {
+  flex-direction: row;
+  padding: 0;
+  border-bottom: none;
+  background: transparent;
+  backdrop-filter: none;
+  border-radius: 0;
+}
+
+.share-inline .inline-share-buttons ::ng-deep .modal-logo {
+  display: none;
+}
+
+.share-inline .inline-share-buttons ::ng-deep .modal-share-buttons {
+  padding-top: 0;
+}
+
+.share-inline .inline-share-buttons ::ng-deep .action-divider {
+  display: none;
+}
+
+.share-inline .inline-share-buttons ::ng-deep .action-btn-download {
+  display: none;
+}
+
+/* Print button: icon-only circle matching share buttons */
+.share-inline .inline-share-buttons ::ng-deep .action-btn-print {
+  padding: 6px;
+  border-radius: 50%;
+  width: 32px;
+  height: 32px;
+  justify-content: center;
+  font-size: 0;
+  border: none;
+  gap: 0;
+}
+
+/* ── Dropdown share (narrow view) ── */
+.share-dropdown-wrapper {
+  position: relative;
+  margin-left: auto;
+  margin-right: 38px;
+  flex-shrink: 0;
+  display: none;
+}
+
+.share-dropdown-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid var(--color-border-ui, #ddd);
+  background: var(--color-bg-surface, #f5f5f5);
+  color: var(--color-text-dark, #333);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.share-dropdown-toggle:hover {
+  background: var(--color-primary-light, #e8f0fe);
+  color: var(--color-primary, #1a73e8);
+  border-color: var(--color-primary, #1a73e8);
+}
+
+.share-dropdown-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 50;
+  background: var(--color-white, #fff);
+  border-radius: 10px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+  overflow: hidden;
+  animation: shareDropdownFadeIn 0.15s ease;
+}
+
+.share-dropdown-panel ::ng-deep .modal-share-header {
+  border-radius: 10px;
+}
+
+.share-dropdown-panel ::ng-deep .modal-logo {
+  display: none;
+}
+
+.share-dropdown-panel ::ng-deep .action-btn-download {
+  display: none;
+}
+
+.share-dropdown-panel ::ng-deep .modal-share-buttons {
+  padding-top: 0;
+}
+
+@keyframes shareDropdownFadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Container query: swap inline ↔ dropdown at 438px ── */
+@container (max-width: 438px) {
+  .share-inline {
+    display: none;
+  }
+  .share-dropdown-wrapper {
+    display: block;
+  }
+}
+@container (min-width: 439px) {
+  .share-inline {
+    display: flex;
+  }
+  .share-dropdown-wrapper {
+    display: none;
+  }
 }
 
 .read-article-button {
@@ -1420,228 +1570,6 @@
   height: 14px;
 }
 
-/* ===== MOBILE MODAL IMAGE/TEXT TOGGLE ===== */
-
-/* Pill toggle container — only rendered on mobile */
-.mobile-modal-toggle {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--color-bg-app, #f1f5f9);
-  border-radius: 30px;
-  padding: 4px;
-  margin: 0 auto 10px;
-  width: fit-content;
-  gap: 2px;
-  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.08);
-}
-
-.mobile-modal-tab {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 22px;
-  border: none;
-  background: transparent;
-  border-radius: 26px;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--color-text-muted, #64748b);
-  cursor: pointer;
-  transition: background 0.25s ease, color 0.25s ease, box-shadow 0.25s ease;
-  -webkit-tap-highlight-color: transparent;
-  user-select: none;
-}
-
-.mobile-modal-tab svg {
-  flex-shrink: 0;
-  transition: stroke 0.25s ease;
-}
-
-.mobile-modal-tab.active {
-  background: var(--color-primary, #1e3a8a);
-  color: #ffffff;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
-}
-
-/* Hide image container when text tab is active (mobile only).
-   Selector is intentionally more specific than .modal-images-container
-   so it wins the cascade regardless of rule order. */
-.modal-images-container.modal-images-hidden {
-  display: none;
-}
-
-/* Text panel body — fades in when the *ngIf creates it */
-.modal-text-body {
-  animation: modalPanelFadeIn 0.28s ease;
-  padding: 4px 4px 24px;
-}
-
-@keyframes modalPanelFadeIn {
-  from { opacity: 0; transform: translateY(6px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-
-/* ===== END MOBILE TOGGLE ===== */
-
-/* Modal Styles */
-.modal-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background-color: rgba(0, 0, 0, 0.75);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 2000;
-  animation: fadeIn 0.3s ease;
-}
-
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
-.modal-content {
-  background: var(--color-white);
-  border-radius: 12px;
-  max-width: 800px;
-  width: 90%;
-  max-height: 85vh;
-  overflow: hidden;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
-  position: relative;
-  animation: slideUp 0.3s ease;
-}
-
-.modal-image-content {
-  background: var(--color-white);
-  max-width: 95vw;
-  max-height: 95vh;
-  overflow: auto;
-  position: relative;
-  animation: slideUp 0.3s ease;
-  border-radius: 8px;
-  padding: 20px 20px 0;
-}
-
-.modal-images-container {
-  display: flex;
-  flex-direction: column;
-  gap: 30px;
-  align-items: center;
-}
-
-.modal-image-item {
-  width: 100%;
-  max-width: 1200px;
-  display: flex;
-  flex-direction: column;
-}
-
-.modal-full-image {
-  width: 100%;
-  height: auto;
-  display: block;
-  border-radius: 0px 0px 8px 8px;
-}
-
-.modal-image-label {
-  background: rgba(0, 0, 0, 0.75);
-  color: white;
-  padding: 12px 20px;
-  border-radius: 6px;
-  font-size: 16px;
-  font-weight: bold;
-  text-align: center;
-  backdrop-filter: blur(10px);
-}
-
-@keyframes slideUp {
-  from {
-    transform: translateY(50px);
-    opacity: 0;
-  }
-  to {
-    transform: translateY(0);
-    opacity: 1;
-  }
-}
-
-.modal-close-button {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  background-color: var(--color-danger);
-  color: var(--color-white);
-  border: none;
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
-  font-size: 24px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.3s ease;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-  z-index: 10;
-}
-
-.modal-close-button:hover {
-  background-color: var(--color-danger-dark);
-  transform: scale(1.1);
-}
-
-.modal-body {
-  padding: 50px 40px 40px 40px;
-  overflow-y: auto;
-  max-height: 85vh;
-}
-
-.modal-content {
-  display: flex;
-  flex-direction: column;
-}
-
-.modal-content .modal-body {
-  padding: 0 20px 20px;
-}
-
-.close-button {
-  position: absolute;
-  top: 22px;
-  right: 20px;
-  background-color: var(--color-danger);
-  color: var(--color-white);
-  border: none;
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  font-size: 24px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.3s ease;
-  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
-  z-index: 1;
-}
-
-.close-button:hover {
-  background-color: var(--color-danger-dark);
-  transform: scale(1.1);
-}
-
-/* .article-body child rules are in global styles.css
-   (innerHTML-injected elements don't receive Angular's _ngcontent attribute,
-   so descendant selectors in component styles never match them) */
 
 .article-footer {
   margin-top: 30px;
@@ -1688,7 +1616,7 @@
 
 .placeholder-content p {
   font-size: 16px;
-  font-family: 'Google Sans', sans-serif;
+  font-family: 'Google Sans Variable', sans-serif;
 }
 
 /* Scrollbar Styles */

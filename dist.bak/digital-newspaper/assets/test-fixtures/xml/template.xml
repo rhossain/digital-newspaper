@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<newspaper>
+
+  <post>
+    <title>Post Title Here</title>
+    <content><![CDATA[<p>Post body content goes here. HTML is supported.</p>]]></content>
+    <date>2026-06-04</date>
+    <edition>1</edition>
+    <page>1</page>
+  </post>
+
+</newspaper>

@@ -1,9 +1,16 @@
-import { Injectable } from '@angular/core';
+import { Injectable, Signal, PLATFORM_ID, inject } from '@angular/core';
+import { isPlatformBrowser } from '@angular/common';
+import { toSignal } from '@angular/core/rxjs-interop';
 import { HttpClient, HttpResponse } from '@angular/common/http';
 import { Observable, BehaviorSubject, Subject, Subscription, timer, forkJoin, interval, of, throwError } from 'rxjs';
-import { tap, map, catchError, timeout, retry, switchMap, debounceTime, distinctUntilChanged } from 'rxjs/operators';
+import { tap, map, catchError, timeout, retry, switchMap, exhaustMap, debounceTime, distinctUntilChanged } from 'rxjs/operators';
 import { AuthService } from './auth.service';
 import { WP_BASE_URL } from '../config';
+import { clearHttpCache, evictEditionCache, evictSettingsCache, markForBrowserCacheBypass } from '../interceptors/http-cache.interceptor';
+import { SettingsService } from './settings.service';
+import { DateIndexService } from './date-index.service';
+import { EditionCacheService } from './edition-cache.service';
+import { BootstrapStateService, InlineBootstrapState } from './bootstrap-state.service';
 
 export interface NewsSection {
   id: string;
@@ -31,12 +38,32 @@ export interface NewsSection {
   importSource?: 'xml' | 'manual';
 }
 
+/**
+ * Optional responsive/next-gen variants for a page's display image.
+ *
+ * Server-derived from `fullImage` (lazily generated + disk-cached on the WP
+ * side). Purely additive: when absent, the viewer renders the original
+ * `<img [src]="fullImage">` exactly as before. `fullImage` always remains the
+ * source of truth for download / print / zoom / cropping.
+ */
+export interface PageImageVariants {
+  /** Intrinsic pixel dimensions of the source image — used for width/height to prevent CLS. */
+  width?: number;
+  height?: number;
+  /** AVIF sources as "url widthDescriptor" entries, e.g. "https://…/page-01-1400.avif 1400w". */
+  avif?: string[];
+  /** WebP sources in the same "url widthDescriptor" form. */
+  webp?: string[];
+}
+
 export interface NewspaperPage {
   id: number;
   thumbnail: string;
   fullImage: string;
   /** Optional high-resolution image used in the crop selector. Falls back to fullImage if absent. */
   fullImageHiRes?: string;
+  /** Optional responsive AVIF/WebP variants + intrinsic size. Absent → render original fullImage. */
+  imageVariants?: PageImageVariants;
   sections: NewsSection[];
   /** Multilingual page name keyed by language code, e.g. { en: 'Sports', bn: 'খেলাধুলা' } */
   pageLabels?: { [lang: string]: string };
@@ -97,6 +124,12 @@ export interface GlobalSettings {
   headScripts?: string;
   /** Site name appended to individual post/section page titles, e.g. "দৈনিক সংগ্রাম ই-পেপার". */
   othersPageTitle?: string;
+  /**
+   * Controls the encoding format for all new image uploads and auto-generated images.
+   *  'webp' (default) — encode as WebP before upload (smaller files, same quality).
+   *  'all'            — preserve the original file format (current/legacy behaviour).
+   */
+  imageFormat?: 'webp' | 'all';
 }
 
 export interface NewspaperData {
@@ -108,6 +141,13 @@ export interface NewspaperData {
    * to detect concurrent-edit conflicts (optimistic concurrency control).
    */
   dataVersion?: number;
+  /**
+   * True when this snapshot was loaded from the "light" first-paint payload
+   * (article bodies stripped from non-first pages). The data service upgrades it
+   * to the full payload in the background; consumers can ignore this flag.
+   * @internal
+   */
+  _partial?: boolean;
 }
 
 interface WpMediaItem {
@@ -268,6 +308,28 @@ export class NewspaperDataService {
   public data$!: Observable<NewspaperData>;
 
   /**
+   * Signal-based read of `data$`.
+   *
+   * Components that have already migrated to Angular Signals can read
+   * `dataService.data()` directly in templates — no `async` pipe or manual
+   * `.subscribe()` / `.unsubscribe()` required.
+   *
+   * The `!` assertion is sound: both signals are initialised synchronously
+   * inside the constructor (immediately after their source BehaviorSubjects),
+   * before any external code can call into the service.
+   *
+   * Existing `data$.subscribe()` consumers continue to work unchanged —
+   * these signals are purely additive.
+   */
+  data!: Signal<NewspaperData>;
+
+  /**
+   * Signal-based read of `currentDate$`.
+   * @see data for the design rationale.
+   */
+  currentDate!: Signal<string>;
+
+  /**
    * Emits the server's new dataVersion whenever the version poll detects
    * a remote change. Components subscribe to decide whether to silently
    * reload or warn the user before doing so.
@@ -276,6 +338,9 @@ export class NewspaperDataService {
 
   private versionPollSub?: Subscription;
   private readonly versionUrl = `${WP_BASE_URL}/wp-json/digital-newspaper/v1/data/version`;
+  /** Static snapshot of the version probe (Apache-served, no PHP). Public boot
+   *  reads this first and falls back to versionUrl on miss/error. */
+  private readonly versionStaticUrl = `${WP_BASE_URL}/wp-content/dn-static/version.json`;
   
   // WordPress REST API base
   private assetsUrl = '/assets/newspaper-data.json';
@@ -284,8 +349,68 @@ export class NewspaperDataService {
   private readonly mediaApiUrl = `${WP_BASE_URL}/wp-json/wp/v2/media`;
   private dataRecoveredFromMediaLibrary = false;
 
-  constructor(private http: HttpClient, private auth: AuthService) {
-    const cachedSettings = NewspaperDataService._readCachedSettings();
+  /**
+   * Publish-time inlined bootstrap state, retained ONLY when it is complete
+   * enough to render the first paint without any network call (settings + full
+   * editions + numeric dataVersion). Set in the constructor; consumed once by
+   * the public `loadDataFromGranular()` gate, then cleared so later reloads use
+   * the normal network path. Null when inlining is disabled/absent (the default).
+   */
+  private _freshInlineState: InlineBootstrapState | null = null;
+  /** Guard so the one-shot post-paint inline revalidation runs at most once. */
+  private _inlineRevalidated = false;
+
+  private readonly platformId = inject(PLATFORM_ID);
+  private get isBrowser(): boolean { return isPlatformBrowser(this.platformId); }
+
+  constructor(
+    private http: HttpClient,
+    private auth: AuthService,
+    private settingsService: SettingsService,
+    private dateIndexService: DateIndexService,
+    private editionCacheService: EditionCacheService,
+    private bootstrapState: BootstrapStateService,
+  ) {
+    // ── Publish-time inlined bootstrap state (instant first paint, no SSR) ────
+    // When the WordPress plugin has injected today's content into index.html as
+    // <script id="dn-initial-state">, seed the synchronous caches BEFORE the
+    // first network request so loadDataFromGranular()'s speculative edition
+    // fetch resolves from memory (layer 1) with zero round-trip. Entirely
+    // additive: when the blob is absent (the default), read() returns null and
+    // every downstream path runs exactly as before. The version poll still
+    // fetches the current dataVersion and corrects any staleness.
+    const inlineState = this.bootstrapState.read();
+    if (inlineState) {
+      if (inlineState.settings) {
+        this.settingsService.apply(inlineState.settings);
+      }
+      if (inlineState.editions?.length) {
+        this.dateIndexService.syncFromEditions(inlineState.editions);
+        this.editionCacheService.seedFromLoadedData(inlineState.editions);
+      }
+      // Seed the FULL available-dates list (not just the latest edition's date)
+      // so the date picker is complete on the inline-gated first paint, which
+      // otherwise skips the network /data/dates fetch. syncFromEditions unions,
+      // so this never shrinks an existing list.
+      if (Array.isArray(inlineState.dates) && inlineState.dates.length) {
+        this.dateIndexService.syncFromEditions(
+          inlineState.dates.filter(d => typeof d === 'string').map(d => ({ date: d })),
+        );
+      }
+      // Capture a fully-formed inline state so the public initial load can skip
+      // the blocking network batch entirely (see loadDataFromGranular). Only
+      // retained when it carries everything needed to render — settings, full
+      // editions, and a numeric dataVersion — so partial blobs fall through to
+      // the normal network path. initial-state.json carries FULL article content
+      // (not the light variant), so the emitted data is never marked _partial.
+      const hasAll =
+        !!inlineState.settings &&
+        Array.isArray(inlineState.editions) && inlineState.editions.length > 0 &&
+        typeof inlineState.dataVersion === 'number';
+      this._freshInlineState = hasAll ? inlineState : null;
+    }
+
+    const cachedSettings = inlineState?.settings ?? NewspaperDataService._readCachedSettings();
     this.dataSubject = new BehaviorSubject<NewspaperData>({
       settings: cachedSettings || {
         defaultDateMode: 'current',
@@ -293,9 +418,24 @@ export class NewspaperDataService {
       },
       editions: []
     });
-    this.currentDateSubject = new BehaviorSubject<string>(this.getTodayDate());
+    // Use getDefaultDate() rather than getTodayDate() so that returning visitors
+    // whose localStorage already holds settings (defaultDateMode / specificDate)
+    // and a cached latestDate (from DateIndexService) see the correct date from
+    // the very first render — eliminating the "today → latestDate" visual jump
+    // while HTTP is in flight.  getDefaultDate() reads only synchronous caches
+    // (settingsService signal + dateIndexService.latestDate() signal, both
+    // pre-warmed from localStorage) so it is safe to call in a constructor.
+    this.currentDateSubject = new BehaviorSubject<string>(this.getDefaultDate());
     this.currentDate$ = this.currentDateSubject.asObservable();
     this.data$ = this.dataSubject.asObservable();
+
+    // ── Signal bridges (toSignal requires an active injection context) ────────
+    // BehaviorSubject always emits synchronously so requireSync is safe here.
+    // `initialValue` is set explicitly to avoid the `undefined` union type that
+    // the overload without requireSync would add.
+    this.data        = toSignal(this.data$,        { initialValue: this.dataSubject.value });
+    this.currentDate = toSignal(this.currentDate$, { initialValue: this.currentDateSubject.value });
+
     // Debounce emergency-draft writes: atomic saves fire rapidly; serialising
     // the full dataset to JSON on every emission is expensive. 2 s is enough
     // to capture any crash that happens during active editing.
@@ -328,40 +468,464 @@ export class NewspaperDataService {
     this.currentDateSubject.next(date);
   }
 
+  /**
+   * Lazy hydration for a date whose editions aren't yet in the in-memory
+   * `data.editions` array.
+   *
+   * Background: `loadDataFromGranular()` only hydrates editions for
+   * `latestDate` + today for speed.  When the admin switches to an older
+   * date via the date picker, the in-memory array doesn't contain its
+   * editions, so `getEditionsByDate()` returns []. This helper fetches the
+   * missing date via the granular `/data/editions/:date` endpoint (which
+   * goes through `EditionCacheService`'s 4-layer cache) and merges the
+   * result into `dataSubject` so all the synchronous `getEditionsByDate`/
+   * `getEditionByDateAndNumber` reads "just work".
+   *
+   * Safe to call repeatedly — returns immediately if the date already has
+   * editions in memory.  Emits and completes without modifying state on
+   * any HTTP error so the caller can degrade gracefully.
+   */
+  /**
+   * Force-evict a date from in-memory state and re-fetch from the server.
+   * Use after an atomic save error: the server may have committed the write
+   * before the HTTP response failed, so the in-memory view could be stale.
+   * evictDateCache() must have been called first (removes HTTP + service caches).
+   */
+  reloadDate(date: string): Observable<void> {
+    if (!date) return of(void 0);
+    // Drop the date from the data subject so hydrateDateIfMissing will re-fetch.
+    const current = this.dataSubject.value;
+    this.dataSubject.next({
+      ...current,
+      editions: current.editions.filter(e => e.date !== date),
+    });
+    return this.hydrateDateIfMissing(date);
+  }
+
+  /**
+   * Warm a date's editions from the static snapshot during browser idle time.
+   * Static-only and fire-and-forget — never triggers a WordPress/PHP request,
+   * so a missing snapshot costs nothing. Used for "yesterday's paper" prefetch.
+   */
+  prefetchDateInBackground(date: string): void {
+    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
+    this.editionCacheService.prefetchStatic(date);
+  }
+
+  hydrateDateIfMissing(date: string): Observable<void> {
+    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return of(void 0);
+    }
+    const current = this.dataSubject.value;
+    const alreadyHas = current.editions.some(e => e.date === date);
+    if (alreadyHas) {
+      return of(void 0);
+    }
+    return this.editionCacheService.getEditionsForDate(date).pipe(
+      tap(editions => {
+        if (!Array.isArray(editions) || editions.length === 0) {
+          return;
+        }
+        const next = this.dataSubject.value;
+        // Defensive: re-filter in case another hydration raced.
+        const otherEditions = next.editions.filter(e => e.date !== date);
+        const merged = [...otherEditions, ...editions].sort((a, b) => {
+          const d = b.date.localeCompare(a.date);
+          return d !== 0 ? d : ((a.edition ?? 1) - (b.edition ?? 1));
+        });
+        this.dataSubject.next({ ...next, editions: merged });
+      }),
+      map(() => void 0),
+      catchError(err => {
+        console.warn('[NewspaperDataService] hydrateDateIfMissing failed for', date, err?.message ?? err);
+        return of(void 0);
+      })
+    );
+  }
+
   getCurrentDate(): string {
     return this.currentDateSubject.value;
   }
 
-  // Data loading with backwards compatibility (no caching)
-  loadData(): Observable<NewspaperData> {
-    // Cache-buster query param prevents CDN / LiteSpeed / browser from serving
-    // a stale cached version of the API response without triggering a CORS
-    // preflight (custom request headers like Cache-Control would require the
-    // server to add them to Access-Control-Allow-Headers).
-    const cacheBuster = `?_t=${Date.now()}`;
-    return this.http.get<unknown>(
-      this.apiUrl + cacheBuster
-    ).pipe(
-      // 20 s — WordPress on shared hosting can take 5-15 s on a cold boot.
-      // The previous 5 s limit was too aggressive and caused silent fallback
-      // to the stale local newspaper-data.json file.
+  /**
+   * Primary data load — tries the fast granular endpoints first, then falls
+   * back to the legacy monolithic blob endpoint.
+   *
+   * ── Why granular-first? ──────────────────────────────────────────────────
+   * The legacy /data endpoint returns the ENTIRE dataset as one serialized
+   * blob.  On a newspaper with 1+ years of editions that blob can exceed
+   * 30–50 MB, causing PHP to exceed max_execution_time before returning a
+   * response.  The granular endpoints are O(1) per option read and each
+   * response is a few KB.
+   *
+   * ── Strategy ────────────────────────────────────────────────────────────
+   * 1. Try `loadDataFromGranular()`:
+   *      - GET /data/settings  (settings + dataVersion)
+   *      - GET /data/dates     (list of all available dates)
+   *      - GET /data/editions/{latestDate}  (today's / most-recent edition)
+   *    Total payload: ~5–50 KB regardless of dataset size.
+   *
+   * 2. If ANY granular call fails (endpoint not found, timeout, WAF block),
+   *    fall back to the legacy /data blob.  This preserves backward
+   *    compatibility with servers that have an older plugin version.
+   *
+   * 3. If the legacy call also fails after 2 retries, serve the bundled
+   *    empty asset so the UI shows a clear empty state rather than a crash.
+   */
+  loadData(opts: { lightFirst?: boolean } = {}): Observable<NewspaperData> {
+    // lightFirst is OPT-IN and used ONLY by the public, read-only viewer. The
+    // admin editor must never receive the content-stripped "light" payload — a
+    // save while that data is loaded would persist empty article bodies and
+    // destroy content. All admin callers use the default (full) load.
+    return this.loadDataFromGranular(opts.lightFirst === true).pipe(
+      catchError((granularErr) => {
+        console.warn(
+          '[NewspaperDataService] Granular endpoints failed — falling back to legacy /data blob. Reason:',
+          granularErr?.message ?? granularErr
+        );
+        return this.loadDataFromLegacyBlob();
+      }),
+      catchError((err) => this.loadEmergencyDraftAfterApiFailure(err)),
+      tap((data: NewspaperData) => {
+        this.dataSubject.next(data);
+        if (data.settings) {
+          this.settingsService.apply(data.settings);
+        }
+        if (data.editions?.length) {
+          this.dateIndexService.syncFromEditions(data.editions);
+          // Do NOT seed the shared cache with light (partial) editions — that
+          // would mask the full article content on later reads. The background
+          // upgrade below fetches and seeds the full payload instead.
+          if (!data._partial) {
+            this.editionCacheService.seedFromLoadedData(data.editions);
+          }
+        }
+        // Light first-paint payload → upgrade to the full payload in the
+        // background. The viewer re-renders automatically when the upgraded
+        // data emits through data$ (same path the version-poll reload uses).
+        if (data._partial) {
+          this.upgradePartialData(data);
+        }
+      })
+    );
+  }
+
+  /**
+   * Replace a light (first-paint) payload with the full payload for its dates.
+   * Fetches the full edition(s) through the normal cache path (which seeds the
+   * cache), merges them into the current data, and emits — so article bodies
+   * that were stripped from the light payload become available. Best-effort and
+   * browser-only; on failure the light payload simply remains (first page still
+   * works, other pages' article bodies load on demand if the reader navigates).
+   */
+  private upgradePartialData(partial: NewspaperData): void {
+    if (!this.isBrowser) return;
+    const dates = [...new Set((partial.editions ?? []).map(e => e.date).filter(Boolean))];
+    if (dates.length === 0) return;
+
+    forkJoin(
+      dates.reduce((acc, date) => {
+        acc[date] = this.editionCacheService.getEditionsForDate(date);
+        return acc;
+      }, {} as Record<string, Observable<NewspaperEdition[]>>)
+    )
+      .pipe(
+        timeout(20000),
+        catchError(() => of(null)),
+      )
+      .subscribe(byDate => {
+        if (!byDate) return;
+        const full: NewspaperEdition[] = Object.values(byDate).flat();
+        if (full.length === 0) return;
+        const current = this.dataSubject.value;
+        const others = current.editions.filter(e => !dates.includes(e.date));
+        const merged: NewspaperData = {
+          ...current,
+          editions: [...others, ...full],
+          _partial: false,
+        };
+        this.dataSubject.next(merged);
+        this.dateIndexService.syncFromEditions(full);
+        this.editionCacheService.seedFromLoadedData(full);
+      });
+  }
+
+  /**
+   * Return the FULL editions for a date (article bodies included), via the
+   * normal cache path. Used when a reader opens an article whose body was
+   * stripped by the light first-paint payload (e.g. a deep-linked article on a
+   * non-first page, before the background upgrade has finished). After the
+   * background upgrade has run this is an instant in-memory hit.
+   *
+   * Deliberately does NOT mutate the data subject — the caller patches only the
+   * open article's bound fields — so calling it from inside an event handler
+   * can't re-enter the render path. The subject is upgraded separately by
+   * upgradePartialData(). Never throws.
+   */
+  getFullEditionsForDate(date: string): Observable<NewspaperEdition[]> {
+    if (!date) return of([] as NewspaperEdition[]);
+    return this.editionCacheService
+      .getEditionsForDate(date)
+      .pipe(catchError(() => of([] as NewspaperEdition[])));
+  }
+
+  /**
+   * One-shot, post-paint revalidation of the inlined bootstrap state.
+   *
+   * Runs only in the browser, at most once, during idle time. Fetches the
+   * (static-first) version probe and, when the server's dataVersion is newer
+   * than the inlined one, refreshes the current date through the authoritative
+   * reload path — so a stale inline blob (e.g. an index.html cached before a
+   * later publish) is corrected well before the 5-minute version poll would.
+   * Best-effort: never throws, never blocks the first paint.
+   */
+  private scheduleInlineRevalidation(inlineVersion: number): void {
+    if (!this.isBrowser || this._inlineRevalidated) return;
+    this._inlineRevalidated = true;
+
+    const run = () => {
+      this.http.get<{ dataVersion: number }>(this.versionStaticUrl).pipe(
+        catchError(() => this.http.get<{ dataVersion: number }>(this.versionUrl)),
+        catchError(() => of({ dataVersion: 0 })),
+      ).subscribe(res => {
+        const remote = res?.dataVersion ?? 0;
+        if (remote > inlineVersion) {
+          // Authoritative refresh of the currently-shown date (settings + dates
+          // via REST, edition via the cache path). Emits through data$ exactly
+          // like the version-poll reload, so the UI updates automatically.
+          //
+          // After the reload, also advance currentDateSubject to the newly-
+          // published latestDate when running in 'current' mode. Without this,
+          // a stale inline bootstrap blob (initial-state.json baked into
+          // index.html on the previous deploy) keeps the reader on the old date
+          // indefinitely: reloadCurrentDateOnly() correctly updates
+          // dateIndexService.latestDate() via its inner fetch() call, but
+          // nobody moves currentDateSubject forward, so the UI stays stuck.
+          //
+          // Capture the date BEFORE the async reload so we can detect whether
+          // the user manually navigated during the 3–6 s window between the
+          // page load and the tap() callback. If they did, currentDateSubject
+          // will have a different value by the time tap() runs, and we must
+          // NOT override their explicit choice.
+          const dateAtRevalidationStart = this.currentDateSubject.value;
+          this.reloadCurrentDateOnly(dateAtRevalidationStart).pipe(
+            tap(() => {
+              const settings = this.getSettings();
+              if (settings.defaultDateMode !== 'specific') {
+                const newDefault = this.getDefaultDate();
+                // Guard: only advance if (a) there is a newer date to show AND
+                // (b) the user has not navigated away since we started the reload.
+                if (
+                  newDefault !== this.currentDateSubject.value &&
+                  this.currentDateSubject.value === dateAtRevalidationStart
+                ) {
+                  this.currentDateSubject.next(newDefault);
+                  // Hydrate the new date's editions so the data$ subscriber in
+                  // the component renders the correct date when currentDate$ fires.
+                  this.hydrateDateIfMissing(newDefault).subscribe();
+                }
+              }
+            }),
+          ).subscribe();
+        }
+      });
+    };
+
+    const ric = (window as unknown as {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+    }).requestIdleCallback;
+    if (typeof ric === 'function') ric(run, { timeout: 3000 });
+    else setTimeout(run, 1200);
+  }
+
+  /**
+   * Fast granular load via the per-resource cacheable endpoints.
+   *
+   * Fetches settings + dates + the expected initial edition all in parallel,
+   * then fetches any remaining editions needed (usually none).
+   *
+   * Performance strategy — two-phase waterfall eliminated:
+   *   Old:  forkJoin(settings, dates, version)
+   *           → await → forkJoin(editions[latestDate], editions[today])
+   *   New:  forkJoin(settings, dates, version, editions[speculativeDate])
+   *           → only fetch remaining dates if speculative guess was wrong
+   *
+   * speculativeDate = getDefaultDate() which reads only synchronous caches
+   * (localStorage-backed settings + latestDate signals), so on return visits
+   * the guess is almost always correct and no second round-trip is needed.
+   * On a first-ever visit speculativeDate = today, which is right when the
+   * newspaper has published today and wrong otherwise — the latter triggers
+   * the normal step-2 fetch as a fallback.
+   *
+   * The speculative edition fetch goes through EditionCacheService's
+   * 4-layer cache (memory → localStorage → IndexedDB → HTTP), so on return
+   * visits it resolves from IDB without hitting the network at all.
+   *
+   * Throws on any error so `loadData()` can fall back to the legacy path.
+   */
+  private loadDataFromGranular(lightFirst = false): Observable<NewspaperData> {
+    // ── Zero-API initial load gate (public viewer only) ──────────────────────
+    // When the served index.html carried a complete inline bootstrap blob, the
+    // synchronous caches were already seeded in the constructor. Emit that data
+    // directly and SKIP the blocking settings/dates/version/edition network
+    // batch — the first paint then makes zero API calls. A one-shot post-paint
+    // revalidation (and the 5-min version poll) corrects any staleness.
+    //
+    // Consumed once: `_freshInlineState` is nulled so later reloads (after a
+    // detected version change) take the normal authoritative network path. The
+    // admin editor never reaches here with lightFirst=true, so it is unaffected.
+    if (lightFirst && this._freshInlineState) {
+      const inline = this._freshInlineState;
+      this._freshInlineState = null;
+      const data: NewspaperData = {
+        settings: inline.settings!,
+        editions: inline.editions!,
+        dataVersion: inline.dataVersion ?? 0,
+        // NOT _partial: initial-state.json carries full article content.
+      };
+      this.scheduleInlineRevalidation(inline.dataVersion ?? 0);
+      return of(data);
+    }
+
+    // Determine the expected initial date from synchronous caches so we can
+    // start the edition fetch in the same parallel batch as settings/dates/version.
+    const speculativeDate = this.getDefaultDate();
+
+    // Light first-paint payload ONLY when the caller (public viewer) opts in.
+    // The default path fetches the FULL edition so the admin editor is always
+    // safe to save. Both shapes resolve to { editions, light }.
+    const speculative$: Observable<{ editions: NewspaperEdition[]; light: boolean }> =
+      lightFirst
+        ? this.editionCacheService.getEditionsForDateLight(speculativeDate)
+        : this.editionCacheService.getEditionsForDate(speculativeDate)
+            .pipe(map(editions => ({ editions, light: false })));
+
+    // Single parallel batch: settings + dates index + version + edition for
+    // the expected initial date.  The version endpoint is tiny (~30 B) and
+    // must be included here so the local dataVersion is NEVER reset to 0
+    // (resetting to 0 causes the version poll to immediately fire
+    // remoteDataChanged$ and show a false "content updated" toast).
+    // Public viewer (lightFirst) reads the Apache-served static snapshots first
+    // (settings.json / dates.json / version.json) with REST fallback — no PHP on
+    // the initial paint. The admin editor (lightFirst=false) always reads the
+    // authoritative REST endpoints so it can never save from a stale snapshot.
+    const preferStatic = lightFirst;
+    const version$ = preferStatic
+      ? this.http.get<{ dataVersion: number }>(this.versionStaticUrl).pipe(
+          catchError(() => this.http.get<{ dataVersion: number }>(this.versionUrl)),
+          catchError(() => of({ dataVersion: 0 })),
+        )
+      : this.http.get<{ dataVersion: number }>(this.versionUrl)
+          .pipe(catchError(() => of({ dataVersion: 0 })));
+
+    return forkJoin({
+      settings:            this.settingsService.fetch(preferStatic),
+      dates:               this.dateIndexService.fetch(preferStatic),
+      version:             version$,
+      speculativeEditions: speculative$
+                             .pipe(catchError(() => of({ editions: [] as NewspaperEdition[], light: false }))),
+    }).pipe(
+      switchMap(({ settings, dates, version, speculativeEditions }) => {
+        const today      = this.getTodayDate();
+        const latestDate = dates[0] ?? today;
+        const specEditions = speculativeEditions.editions;
+        const specLight    = speculativeEditions.light;
+
+        // Canonical set of dates needed for the initial view.
+        const datesToLoad = [...new Set([latestDate, today])].filter(Boolean);
+
+        if (datesToLoad.length === 0) {
+          // Granular /data/dates returned an empty list — migration is
+          // incomplete or the granular options are not yet populated.
+          // Throw so loadData()'s catchError falls back to the legacy blob.
+          throw new Error('Granular dates list is empty — falling back to legacy blob');
+        }
+
+        // Which canonical dates are NOT yet covered by the speculative fetch?
+        // On return visits speculativeDate == latestDate so this is usually [].
+        //
+        // IMPORTANT: only treat speculativeDate as "covered" when the speculative
+        // fetch actually returned data.  An empty result means the fetch failed or
+        // found nothing — in that case the date must be retried via the remaining-
+        // dates path below, not silently dropped.
+        const speculativeCovered = specEditions.length > 0;
+        const remainingDates = datesToLoad.filter(
+          d => !(speculativeCovered && d === speculativeDate)
+        );
+
+        if (remainingDates.length === 0) {
+          // speculativeCovered must be true here (if it were false, speculativeDate
+          // would still be in remainingDates, so length would be > 0).
+          // Speculative fetch covered everything — no second round-trip needed.
+          // `_partial` is set ONLY for a light payload (so loadData() upgrades it).
+          // Full-path data omits the key entirely, keeping the exact original
+          // shape the admin/save path relies on.
+          return of({
+            settings,
+            editions: specEditions,
+            dataVersion: version.dataVersion ?? 0,
+            ...(specLight ? { _partial: true } : {}),
+          } as NewspaperData);
+        }
+
+        // Fetch the dates not covered by the speculative batch.
+        return forkJoin(
+          remainingDates.reduce((acc, date) => {
+            acc[date] = this.editionCacheService.getEditionsForDate(date);
+            return acc;
+          }, {} as Record<string, Observable<NewspaperEdition[]>>)
+        ).pipe(
+          map((editionsByDate): NewspaperData => {
+            const editions: NewspaperEdition[] = [
+              ...specEditions,
+              ...Object.values(editionsByDate).flat(),
+            ];
+            // If all edition options came back empty the granular options were
+            // not yet written (partial migration: index exists but dn_edition_*
+            // options don't).  Throw so catchError falls back to the legacy blob.
+            if (editions.length === 0) {
+              throw new Error('Granular edition options are empty — falling back to legacy blob');
+            }
+            // _partial only when the speculative (light) date contributes
+            // stripped content; the upgrade then refetches the full payload.
+            // Full-path data omits the key to preserve the original shape.
+            return {
+              settings,
+              editions,
+              dataVersion: version.dataVersion ?? 0,
+              ...(specLight ? { _partial: true } : {}),
+            };
+          })
+        );
+      }),
+      // 20 s total — each individual fetch already has a 10 s per-request
+      // timeout, so this outer guard only fires if the chain as a whole stalls
+      // (e.g. a forkJoin leg silently hangs past its own timeout). Matches the
+      // legacy blob timeout so the two paths are symmetric.
       timeout(20000),
-      // Retry the live API before giving up. A slow cold-start (timeout) or a
-      // transient network/5xx error should not immediately surface the local
-      // fallback — that was causing months-old bundled data to be displayed as
-      // if it were current. 2 retries with a short backoff (≈1.5 s, 3 s).
+      switchMap((data) => {
+        this.dataRecoveredFromMediaLibrary = false;
+        return this.hasAnyPages(data) ? of(data) : this.loadDataFromMediaLibrary(data);
+      })
+    );
+  }
+
+  /**
+   * Legacy monolithic blob load — backward-compatible with older plugin versions.
+   * Used as a fallback when the granular endpoints are unavailable.
+   */
+  private loadDataFromLegacyBlob(): Observable<NewspaperData> {
+    const cacheBuster = `?_t=${Date.now()}`;
+    return this.http.get<unknown>(this.apiUrl + cacheBuster).pipe(
+      timeout(20000),
       retry({
         count: 2,
         delay: (_err, retryCount) => timer(retryCount * 1500),
       }),
       catchError((err) => {
-        // The live API is genuinely unreachable after retries. Fall back to the
-        // bundled asset, which is now an EMPTY-but-valid dataset (no stale news,
-        // no base64 images). The UI shows an empty state rather than presenting
-        // months-old content as today's edition.
         console.warn(
-          '[NewspaperDataService] Live API unreachable after retries — '
-          + 'serving empty fallback dataset. Reason:', err?.message ?? err
+          '[NewspaperDataService] Legacy /data blob also unreachable — serving empty fallback. Reason:',
+          err?.message ?? err
         );
         return this.http.get<unknown>(this.assetsUrl);
       }),
@@ -369,10 +933,62 @@ export class NewspaperDataService {
       switchMap((data) => {
         this.dataRecoveredFromMediaLibrary = false;
         return this.hasAnyPages(data) ? of(data) : this.loadDataFromMediaLibrary(data);
+      })
+    );
+  }
+
+  /**
+   * Targeted reload for the viewer — refreshes only one date's editions and
+   * the available-dates index, rather than fetching the full /data blob.
+   *
+   * Called by the version-poll subscriber when a remote change is detected.
+   * Using the granular /data/editions/:date and /data/dates endpoints means
+   * the HTTP cache interceptor can still serve a 304 if nothing relevant changed,
+   * making the "check" essentially free most of the time.
+   *
+   * Falls back to the full loadData() if either granular fetch fails, so
+   * existing behaviour is preserved in degraded environments.
+   *
+   * @param date  The currently-displayed date (YYYY-MM-DD) whose edition to refresh.
+   */
+  reloadCurrentDateOnly(date: string): Observable<void> {
+    // Evict both cache layers for this date so the next fetch is fresh.
+    this.evictDateCache(date);
+
+    return forkJoin({
+      editions: this.editionCacheService.getEditionsForDate(date),
+      // Refreshes the DateIndexService signal and returns the updated list.
+      // This also handles the case where a new edition date was just published.
+      dates:    this.dateIndexService.fetch(),
+      // Re-fetch global settings so that settings changes made by an admin in
+      // another tab/session (logo, maintenance mode, language, etc.) are picked
+      // up immediately when the version poll detects a remote change — without
+      // requiring a full page reload.  The HTTP interceptor cache applies a
+      // 1-hour TTL with ETag validation, so this is a cheap conditional GET
+      // when settings have not changed, and a full fetch only when they have.
+      settings: this.settingsService.fetch(),
+    }).pipe(
+      tap(({ editions, settings }) => {
+        const current = this.dataSubject.value;
+        // Preserve all dates except the one we just refreshed.
+        const otherEditions = current.editions.filter(e => e.date !== date);
+        const merged = [...otherEditions, ...editions].sort((a, b) => {
+          const d = b.date.localeCompare(a.date);
+          return d !== 0 ? d : ((a.edition ?? 1) - (b.edition ?? 1));
+        });
+        // Apply both refreshed editions AND refreshed settings so the viewer
+        // reflects any settings changes (e.g. maintenance mode, logo) without
+        // requiring a full page reload.
+        this.dataSubject.next({ ...current, settings, editions: merged });
       }),
-      catchError((err) => this.loadEmergencyDraftAfterApiFailure(err)),
-      tap((data: NewspaperData) => {
-        this.dataSubject.next(data);
+      map(() => void 0),
+      catchError(err => {
+        // Granular endpoints unavailable — fall back to the full reload.
+        console.warn(
+          '[NewspaperDataService] reloadCurrentDateOnly failed, falling back to loadData(). Reason:',
+          err?.message ?? err
+        );
+        return this.loadData().pipe(map(() => void 0));
       })
     );
   }
@@ -413,8 +1029,18 @@ export class NewspaperDataService {
   }
 
   private cacheEmergencyDraft(data: NewspaperData): void {
+    if (!this.isBrowser) return; // SSR — no localStorage
     if (this.dataRecoveredFromMediaLibrary) return;
+    // Never persist a light (partial) payload — its article bodies are stripped,
+    // so restoring it later (or saving from it) would lose content. Defensive:
+    // public readers (the only ones with partial data) are already excluded by
+    // the auth-token check below.
+    if (data._partial) return;
     if (!this.hasAnyPages(data)) return;
+    // Only write emergency drafts in authenticated admin sessions.
+    // Public readers never edit content, so serialising their full JSON
+    // state every 2 s is pure waste.
+    if (!this.auth.getToken()) return;
     try {
       localStorage.setItem(
         NewspaperDataService.EMERGENCY_DRAFT_KEY,
@@ -426,6 +1052,7 @@ export class NewspaperDataService {
   }
 
   private readEmergencyDraft(): NewspaperData | null {
+    if (!this.isBrowser) return null; // SSR — no localStorage
     try {
       const raw = localStorage.getItem(NewspaperDataService.EMERGENCY_DRAFT_KEY);
       if (!raw) return null;
@@ -486,9 +1113,14 @@ export class NewspaperDataService {
         result.settings.language = 'en';
       }
     }
-    // Cache settings from the API for offline / quick-startup use
+    // Cache settings for offline / quick-startup use AND keep SettingsService in sync.
+    // This is the single place normalizeData writes settings, so every code path that
+    // produces a NewspaperData value (loadData, import, emergency draft) ends up here.
     if (result.settings) {
       this.cacheSettings(result.settings);
+      // `settingsService.apply()` normalises and pushes to the signal — keeps
+      // SettingsService.settings() consistent with dataSubject for all callers.
+      this.settingsService.apply(result.settings);
     }
     // Normalize page fields: PHP serializes empty/unset strings as [] (empty
     // array) which is truthy in JS, causing *ngIf guards to pass while
@@ -747,7 +1379,13 @@ export class NewspaperDataService {
     const datesWithPages = data.editions
       .filter(e => e.pages && e.pages.length > 0)
       .map(e => e.date);
-    return [...new Set(datesWithPages)].sort().reverse();
+    // Union with DateIndexService so callers see EVERY date the server knows
+    // about, not just the ones whose editions happen to be loaded in memory.
+    // loadDataFromGranular() only hydrates editions for latestDate + today
+    // for speed — without this union, getAvailableDates() would only return
+    // those 1-2 dates and the date picker would hide every older edition.
+    const indexed = this.dateIndexService.get();
+    return [...new Set([...datesWithPages, ...indexed])].sort().reverse();
   }
 
   /**
@@ -761,7 +1399,11 @@ export class NewspaperDataService {
    */
   getAllEditionDates(): string[] {
     const data = this.getData();
-    return [...new Set(data.editions.map(e => e.date))].sort().reverse();
+    // Union with DateIndexService so the admin date picker sees EVERY date,
+    // not just the latestDate + today that loadDataFromGranular() hydrates.
+    // See getAvailableDates() above for the full reasoning.
+    const indexed = this.dateIndexService.get();
+    return [...new Set([...data.editions.map(e => e.date), ...indexed])].sort().reverse();
   }
 
   // Create or get edition for a date (and optional edition number)
@@ -843,17 +1485,79 @@ export class NewspaperDataService {
   private readonly pageAtomicUrl    = `${this.wpBaseUrl}/wp-json/digital-newspaper/v1/data/page`;
   private readonly sectionAtomicUrl = `${this.wpBaseUrl}/wp-json/digital-newspaper/v1/data/section`;
 
+  // Client-side timeout for atomic mutations. Set above the typical gateway
+  // timeout (~30 s on cPanel / Hostinger) so the server has a chance to return
+  // 504 before we abort locally; but bounded so a hung connection eventually
+  // fires the error handler instead of leaving the UI in a half-saved state.
+  private readonly atomicSaveTimeoutMs = 45000;
+
   private patchDataVersion(res: any): void {
     if (res?.newDataVersion) {
       this.dataSubject.next({ ...this.dataSubject.value, dataVersion: res.newDataVersion });
     }
   }
 
+  /** Publicly patch the local dataVersion (used by the admin component to
+   *  pre-adopt a version emitted by remoteDataChanged$ before loadData()
+   *  completes, preventing a spurious second poll-triggered reload). */
+  patchDataVersionPublic(version: number): void {
+    if (version && version > (this.dataSubject.value.dataVersion ?? 0)) {
+      this.dataSubject.next({ ...this.dataSubject.value, dataVersion: version });
+    }
+  }
+
+  /**
+   * Invalidate every client-side cache layer in one call.
+   *
+   * Use after bulk operations that may affect any number of dates
+   * (bulk XML import, data restore, full rebuild) so the subsequent
+   * loadData() call always fetches fresh data from the server instead
+   * of returning stale in-memory, localStorage, or IndexedDB entries.
+   *
+   * Does NOT trigger a reload — the caller is responsible for calling
+   * loadData() afterward.
+   */
+  clearAllCaches(): void {
+    clearHttpCache();
+    this.editionCacheService.clearMemory();
+  }
+
+  /**
+   * After any atomic write, evict the cache entry for the affected date so
+   * the next fetch of /data/editions/:date returns the server's updated data.
+   * Also clears /data/dates in case page counts changed.
+   */
+  private evictDateCache(date: string): void {
+    // Evict from the HTTP-level interceptor cache (handles ETag slots + /data/dates)
+    evictEditionCache(date);
+    // Mark this date to bypass the browser's native HTTP cache on the very next
+    // request.  The browser may hold a stale response with max-age=86400 from
+    // before the server-side fix; adding Cache-Control: no-cache to the outgoing
+    // request forces revalidation regardless of the cached max-age.
+    markForBrowserCacheBypass(date);
+    // Also evict from the EditionCacheService in-memory Map so the next
+    // getEditionsForDate(date) call re-fetches from the network.
+    this.editionCacheService.evict(date);
+  }
+
   /** Atomically upsert a single page on the server (PUT /data/page). */
   savePageAtomically(page: NewspaperPage, date: string, edition: number): Observable<any> {
     const headers = this.auth.getAuthHeaders();
     return this.http.put<any>(this.pageAtomicUrl, { date, edition, page }, { headers }).pipe(
-      tap(res => this.patchDataVersion(res))
+      timeout(this.atomicSaveTimeoutMs),
+      tap({
+        next: (res) => {
+          this.patchDataVersion(res);
+          this.evictDateCache(date);
+        },
+        error: () => {
+          // Evict cache even on error: the server may have committed the write
+          // before the response failed (e.g. sync timeout kills the response
+          // after update_option succeeds). Without this eviction the frontend
+          // keeps serving stale cached data that doesn't include the new page.
+          this.evictDateCache(date);
+        },
+      })
     );
   }
 
@@ -861,7 +1565,14 @@ export class NewspaperDataService {
   deletePageAtomically(pageId: number, date: string, edition: number): Observable<any> {
     const headers = this.auth.getAuthHeaders();
     return this.http.delete<any>(this.pageAtomicUrl, { headers, body: { date, edition, pageId } }).pipe(
-      tap(res => this.patchDataVersion(res))
+      timeout(this.atomicSaveTimeoutMs),
+      tap({
+        next: (res) => {
+          this.patchDataVersion(res);
+          this.evictDateCache(date);
+        },
+        error: () => { this.evictDateCache(date); },
+      })
     );
   }
 
@@ -876,7 +1587,43 @@ export class NewspaperDataService {
     const headers = this.auth.getAuthHeaders();
     return this.http.put<any>(this.sectionAtomicUrl,
       { date, edition, pageId, originalSectionId, section }, { headers }
-    ).pipe(tap(res => this.patchDataVersion(res)));
+    ).pipe(
+      timeout(this.atomicSaveTimeoutMs),
+      tap({
+        next: (res) => {
+          this.patchDataVersion(res);
+          this.evictDateCache(date);
+          // Fire-and-forget: pre-generate this section's social thumbnail so the
+          // first WhatsApp/Twitter/Facebook crawl gets the image instantly.
+          this.prewarmSectionSocial(date, edition, pageId, section.id || originalSectionId);
+        },
+        error: () => { this.evictDateCache(date); },
+      })
+    );
+  }
+
+  /**
+   * Fire-and-forget pre-warm of a single section's 1200x630 social thumbnail.
+   *
+   * Hits the public /social-thumb endpoint, which generates and disk-caches the
+   * exact JPEG that /social later references as og:image. Running it right after
+   * a section is saved means the first social-media crawl receives a ready image
+   * instead of triggering a slow on-the-fly resize — which on shared hosting can
+   * exceed the crawler's fetch timeout and produce a thumbnail-less preview.
+   * Every error is intentionally swallowed: this is purely best-effort.
+   */
+  private prewarmSectionSocial(date: string, edition: number, pageId: number, sectionId: string): void {
+    if (!this.isBrowser) return;
+    const id = (sectionId ?? '').trim();
+    if (!date || !id) return;
+    const pad = (n: number) => String(Math.max(1, n)).padStart(2, '0');
+    const url = `${this.wpBaseUrl}/wp-json/digital-newspaper/v1/social-thumb`
+      + `?date=${encodeURIComponent(date)}`
+      + `&page=page-${pad(pageId)}`
+      + `&edition=edition-${pad(edition)}`
+      + `&slug=${encodeURIComponent(id)}`;
+    // The endpoint returns a JPEG; request it as a blob and discard the result.
+    this.http.get(url, { responseType: 'blob' }).subscribe({ next: () => {}, error: () => {} });
   }
 
   /** Atomically delete a single section on the server (DELETE /data/section). */
@@ -884,7 +1631,52 @@ export class NewspaperDataService {
     const headers = this.auth.getAuthHeaders();
     return this.http.delete<any>(this.sectionAtomicUrl,
       { headers, body: { date, edition, pageId, sectionId } }
-    ).pipe(tap(res => this.patchDataVersion(res)));
+    ).pipe(
+      timeout(this.atomicSaveTimeoutMs),
+      tap({
+        next: (res) => {
+          this.patchDataVersion(res);
+          this.evictDateCache(date);
+        },
+        error: () => { this.evictDateCache(date); },
+      })
+    );
+  }
+
+  /**
+   * Atomically save ALL editions for a single date (PUT /data/editions-for-date).
+   *
+   * Used by the vintage theme's auto-save after structural changes such as
+   * creating a new edition, renaming edition labels, creating a new date, or
+   * deleting an edition.
+   *
+   * Unlike the full POST /data save, this endpoint:
+   *   - Only writes the targeted dn_edition_{date} option and the index.
+   *   - Never writes the dn_data blob (no memory spike, no blob growth).
+   *   - Is NOT subject to the shrinking-overwrite guard that blocks full saves
+   *     when the in-memory Angular state only contains 1-2 dates.
+   */
+  saveEditionsForDateAtomically(date: string): Observable<any> {
+    const headers = this.auth.getAuthHeaders();
+    const url = `${this.wpBaseUrl}/wp-json/digital-newspaper/v1/data/editions-for-date`;
+    // Send only edition structural metadata (date, edition number, labels).
+    // Pages are already managed by savePageAtomically / saveSectionAtomically;
+    // sending them here would (a) bloat the payload and (b) risk overwriting
+    // server-side page changes made after this client last synced.
+    // The PHP endpoint restores pages from dn_edition_{date} before saving.
+    const editions = this.dataSubject.value.editions
+      .filter(e => e.date === date)
+      .map(({ pages: _pages, ...meta }) => meta);
+    return this.http.put<any>(url, { date, editions }, { headers }).pipe(
+      timeout(this.atomicSaveTimeoutMs),
+      tap({
+        next: (res) => {
+          this.patchDataVersion(res);
+          this.evictDateCache(date);
+        },
+        error: () => { this.evictDateCache(date); },
+      })
+    );
   }
 
   saveData(data: NewspaperData, options: SaveDataOptions = {}): Observable<any> {
@@ -900,6 +1692,7 @@ export class NewspaperDataService {
     // Persist settings to localStorage for cross-window availability
     if (data.settings) {
       this.cacheSettings(data.settings);
+      this.settingsService.apply(data.settings);
     }
 
     // Save to backend API.
@@ -923,6 +1716,12 @@ export class NewspaperDataService {
           const current = this.dataSubject.value;
           this.dataSubject.next({ ...current, dataVersion: response.newDataVersion });
         }
+        // Invalidate the HTTP cache so the next read fetches fresh data from
+        // the server.  A full save may affect multiple dates, so clear all entries.
+        clearHttpCache();
+        // Also clear the EditionCacheService in-memory store — a full save may
+        // have modified any date, so we cannot evict selectively.
+        this.editionCacheService.clearMemory();
       }),
       catchError((err) => {
         // On any save failure, silently fetch the server's current dataVersion
@@ -946,7 +1745,37 @@ export class NewspaperDataService {
   }
 
   /**
-   * Applies the sectionPostIds map returned by the PHP plugin after a save,
+   * Saves only the global settings object via PATCH /data/settings, without
+   * sending any editions data.  This avoids the shrinking-overwrite guard that
+   * fires when the admin edits settings while only a subset of editions are
+   * loaded in the browser.
+   */
+  saveSettingsOnly(settings: GlobalSettings): Observable<any> {
+    this.cacheSettings(settings);
+    this.settingsService.apply(settings);
+
+    const headers = this.auth.getAuthHeaders();
+    const settingsUrl = `${this.apiUrl}/settings`;
+
+    return this.http.patch<{ success: boolean; newDataVersion: number; settings: GlobalSettings }>(
+      settingsUrl,
+      { settings },
+      { headers }
+    ).pipe(
+      tap((response) => {
+        if (response?.newDataVersion) {
+          const current = this.dataSubject.value;
+          this.dataSubject.next({ ...current, dataVersion: response.newDataVersion, settings });
+        }
+        // Only evict the settings cache — edition entries are still valid.
+        // Using clearHttpCache() here was wasteful: it forced readers to
+        // re-download every cached edition after any settings change.
+        evictSettingsCache();
+      })
+    );
+  }
+
+  /**
    * patching wpPostId onto every matching NewsSection in the in-memory data.
    * The map key format is "{date}:{editionNumber}:{pageId}:{sectionId}".
    */
@@ -1004,7 +1833,21 @@ export class NewspaperDataService {
 
   restoreServerBackup(index: number): Observable<any> {
     const headers = this.auth.getAuthHeaders();
-    return this.http.post(`${this.apiUrl}/restore`, { index }, { headers });
+    return this.http.post(`${this.apiUrl}/restore`, { index }, { headers }).pipe(
+      tap(() => {
+        // Invalidate all cache layers so the restored data is immediately
+        // visible — both the HTTP interceptor cache and the EditionCacheService
+        // in-memory + IDB stores.  Without this, the admin and viewer would
+        // continue serving pre-restore edition data until the next page reload.
+        clearHttpCache();
+        this.editionCacheService.clearMemory();
+      }),
+      switchMap((result) =>
+        // Re-hydrate the in-memory dataSubject from the server so the admin
+        // UI reflects the restored content without requiring a manual refresh.
+        this.loadData().pipe(map(() => result))
+      )
+    );
   }
 
   rebuildDataFromSectionPosts(): Observable<{ success: boolean; editionCount: number; pageCount: number; sectionCount: number }> {
@@ -1013,6 +1856,15 @@ export class NewspaperDataService {
       `${this.apiUrl}/rebuild-from-sections`,
       {},
       { headers }
+    ).pipe(
+      tap(() => {
+        // Invalidate all cache layers before the caller's loadData() call so
+        // rebuilt editions are fetched fresh from the server.  Without this,
+        // past-date entries already in IDB / localStorage would be returned by
+        // EditionCacheService instead of the freshly rebuilt data.
+        clearHttpCache();
+        this.editionCacheService.clearMemory();
+      })
     );
   }
 
@@ -1178,30 +2030,22 @@ export class NewspaperDataService {
   }
 
   // Global Settings Management
+
+  /**
+   * Returns the current global settings with all null-safety guards applied.
+   *
+   * Delegates to SettingsService so there is exactly one normalisation path.
+   * SettingsService is kept in sync from:
+   *   • loadData() tap → settingsService.apply()
+   *   • normalizeData() → settingsService.apply()   (covers import + emergency draft)
+   *   • saveData() tap  → settingsService.apply()
+   *   • updateSettings() → settingsService.apply()
+   *
+   * The localStorage key ('dn_global_settings') is intentionally shared by both
+   * services — both can read/write it without conflict.
+   */
   getSettings(): GlobalSettings {
-    const data = this.getData();
-    const raw = data.settings;
-    if (!raw) {
-      return {
-        defaultDateMode: 'current',
-        socialLinks: {},
-        logo: { url: '', alt: 'Digital Newspaper' },
-        editor: '',
-        address: {},
-        language: 'en'
-      };
-    }
-    // Ensure every sub-object exists so callers don't have to null-check
-    return {
-      ...raw,
-      logo: raw.logo || { url: '', alt: 'Digital Newspaper' },
-      socialLinks: (raw.socialLinks && !Array.isArray(raw.socialLinks))
-        ? raw.socialLinks
-        : {},
-      address: raw.address || {},
-      editor: raw.editor ?? '',
-      language: raw.language || 'en'
-    };
+    return this.settingsService.get();
   }
 
   updateSettings(settings: GlobalSettings): void {
@@ -1212,6 +2056,9 @@ export class NewspaperDataService {
     });
     // Persist to localStorage so new windows pick it up immediately
     this.cacheSettings(settings);
+    // Keep SettingsService in sync (it reads the same localStorage key,
+    // but updating the signal directly avoids a localStorage round-trip).
+    this.settingsService.apply(settings);
   }
 
   /**
@@ -1240,17 +2087,20 @@ export class NewspaperDataService {
    */
   startVersionPoll(intervalMs = 30_000): void {
     this.stopVersionPoll();
-    // Emit immediately once, then every interval
-    this.versionPollSub = interval(intervalMs).subscribe(() => {
-      this.http.get<{ dataVersion: number }>(this.versionUrl).pipe(
-        catchError(() => of(null)) // network error → skip silently
-      ).subscribe(res => {
-        if (!res) return;
-        const local = this.dataSubject.value.dataVersion ?? 0;
-        if (res.dataVersion > local) {
-          this.remoteDataChanged$.next(res.dataVersion);
-        }
-      });
+    // exhaustMap: if the previous version check hasn't resolved by the time
+    // the next interval fires, the new tick is ignored — no request stacking.
+    this.versionPollSub = interval(intervalMs).pipe(
+      exhaustMap(() =>
+        this.http.get<{ dataVersion: number }>(this.versionUrl).pipe(
+          catchError(() => of(null)) // network error → skip silently
+        )
+      )
+    ).subscribe(res => {
+      if (!res) return;
+      const local = this.dataSubject.value.dataVersion ?? 0;
+      if (res.dataVersion > local) {
+        this.remoteDataChanged$.next(res.dataVersion);
+      }
     });
   }
 
@@ -1260,18 +2110,29 @@ export class NewspaperDataService {
   }
 
   getDefaultDate(): string {
+    const today = this.getTodayDate();
     const settings = this.getSettings();
     if (settings.defaultDateMode === 'specific' && settings.specificDate) {
-      return settings.specificDate;
+      // Never return a future specific date to public readers — clamp to today.
+      return settings.specificDate <= today ? settings.specificDate : today;
     }
-    // 'current' mode: use today, but fall back to the most recent date with
-    // pages if today's edition has no pages yet.
-    const today = this.getTodayDate();
+    // 'current' mode: prefer the cached latestDate (persisted to localStorage
+    // by DateIndexService after each successful fetch).  This lets us return
+    // the correct date synchronously at construction time — before any HTTP
+    // request has fired — so currentDateSubject is pre-warmed correctly.
+    // Falls through to the today / edition-pages logic when no cached value
+    // exists (first-ever visit, private browsing, or cleared storage).
+    const cachedLatest = this.dateIndexService.latestDate();
+    // Defense-in-depth: never surface a future date to the public reader.
+    if (cachedLatest && cachedLatest <= today) return cachedLatest;
+    // 'current' mode fallback: use today, but fall back to the most recent date
+    // with pages if today's edition has no pages yet.
     const todayHasPages = this.getEditionsByDate(today).some(e => e.pages && e.pages.length > 0);
     if (!todayHasPages) {
       // getAvailableDates() already filters for dates with pages, sorted newest-first
       const availableDates = this.getAvailableDates();
-      const fallback = availableDates.find(d => d < today) ?? availableDates[0];
+      // Only fall back to a date <= today (skip any future dates in the list).
+      const fallback = availableDates.find(d => d <= today);
       if (fallback) return fallback;
     }
     return today;
@@ -1279,6 +2140,7 @@ export class NewspaperDataService {
 
   // --- localStorage settings cache ---
   private cacheSettings(settings: GlobalSettings): void {
+    if (!this.isBrowser) return; // SSR — no localStorage
     try {
       localStorage.setItem(
         NewspaperDataService.SETTINGS_CACHE_KEY,
@@ -1289,6 +2151,7 @@ export class NewspaperDataService {
 
   /** Static helper so it can be called before the instance is fully constructed. */
   private static _readCachedSettings(): GlobalSettings | null {
+    if (typeof localStorage === 'undefined') return null; // SSR — no localStorage
     try {
       const raw = localStorage.getItem(NewspaperDataService.SETTINGS_CACHE_KEY);
       if (raw) {
@@ -1304,13 +2167,78 @@ export class NewspaperDataService {
   }
 
   private triggerFileDownload(json: string, filename: string): void {
-    const blob = new Blob([json], { type: 'application/json' });
+    if (!this.isBrowser) return; // download only makes sense in the browser
+    // BANGLA SAFETY: charset=utf-8 is explicit so the browser and any
+    // downstream tool that opens the file knows to interpret the bytes as
+    // UTF-8.  Without it, some OS file-open dialogs default to the system
+    // locale (often Windows-1252) and misread multi-byte Bangla codepoints.
+    const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
     const url = window.URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
     link.download = filename;
     link.click();
     window.URL.revokeObjectURL(url);
+  }
+
+  /**
+   * Download a COMPLETE, authoritative backup by fetching directly from the
+   * server's /data/export-full endpoint.
+   *
+   * Unlike downloadExport() which serialises in-memory Angular state (only
+   * 1-2 dates hydrated at load time), this method pulls from the PHP plugin's
+   * granular per-date options (dn_edition_YYYY-MM-DD), which are the single
+   * source of truth for ALL dates including those never loaded into the browser.
+   *
+   * BANGLA SAFETY: the server responds with Content-Type: application/json;
+   * charset=UTF-8 and JSON_UNESCAPED_UNICODE, so Bangla characters arrive as
+   * literal UTF-8 bytes.  We write them to a Blob with explicit charset=utf-8
+   * and trigger the file download — no encoding conversion at any step.
+   *
+   * @returns Observable that emits { filename, sizeKb } on success.
+   */
+  downloadExportFull(): Observable<{ filename: string; sizeKb: number }> {
+    const headers = this.auth.getAuthHeaders();
+    const exportUrl = `${this.wpBaseUrl}/wp-json/digital-newspaper/v1/data/export-full`;
+
+    // Request as text so we forward the exact UTF-8 byte stream the server
+    // produced — no JSON.parse() / JSON.stringify() round-trip that could
+    // escape Bangla characters as \uXXXX sequences.
+    return this.http.get(exportUrl, { headers, responseType: 'text' }).pipe(
+      timeout(120000), // 2 min: large archives can be slow to assemble server-side
+      map((raw: string) => {
+        // Validate the response is parseable JSON before writing the file.
+        let parsed: any;
+        try {
+          parsed = JSON.parse(raw);
+        } catch {
+          throw new Error('Server export-full returned non-JSON response. Check server logs.');
+        }
+        if (!parsed || typeof parsed !== 'object') {
+          throw new Error('Server export-full returned an invalid structure.');
+        }
+        const editionCount: number = Array.isArray(parsed.editions) ? parsed.editions.length : 0;
+        const today = this.getTodayDate();
+        const filename = `newspaper-backup-full-${today}.json`;
+
+        // Write the RAW bytes from the server — not re-serialised — so
+        // Bangla characters stay as their original UTF-8 codepoints.
+        this.triggerFileDownload(raw, filename);
+
+        const sizeKb = Math.round((raw.length / 1024) * 10) / 10;
+        this.addBackupHistoryEntry({
+          id: Date.now().toString(),
+          exportedAt: parsed.meta?.exportedAt ?? new Date().toISOString(),
+          filename,
+          exportScope: 'full',
+          exportType: 'full',
+          editionCount,
+          sizeKb,
+          sourceUrl: parsed.meta?.sourceUrl ?? this.wpBaseUrl,
+        });
+        return { filename, sizeKb };
+      })
+    );
   }
 
   buildExportPayload(options: ExportOptions): { payload: ExportPayload; filename: string } {
@@ -1389,6 +2317,7 @@ export class NewspaperDataService {
   // ─── Backup History ───────────────────────────────────────────────────────
 
   getBackupHistory(): BackupHistoryEntry[] {
+    if (!this.isBrowser) return []; // SSR — no localStorage
     try {
       const raw = localStorage.getItem(NewspaperDataService.BACKUP_HISTORY_KEY);
       if (raw) return JSON.parse(raw) as BackupHistoryEntry[];
@@ -1408,6 +2337,7 @@ export class NewspaperDataService {
   }
 
   clearBackupHistory(): void {
+    if (!this.isBrowser) return; // SSR — no localStorage
     localStorage.removeItem(NewspaperDataService.BACKUP_HISTORY_KEY);
   }
 

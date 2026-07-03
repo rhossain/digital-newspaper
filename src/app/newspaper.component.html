@@ -1,32 +1,35 @@
 <div class="newspaper-container">
 
   <!-- ===== UNDER MAINTENANCE PAGE ===== -->
-  <ng-container *ngIf="settings?.underMaintenance">
+  @if (settings?.underMaintenance) {
     <header class="maintenance-header">
       <div class="maintenance-header-inner">
         <div class="logo-wrapper">
-          <img
-            *ngIf="settings?.logo?.url"
-            [src]="settings!.logo!.url"
-            [alt]="settings!.logo!.alt || 'Logo'"
-            class="logo-image"
-            (error)="onLogoError($event)"
-          />
-          <img
-            *ngIf="settings && !settings.logo?.url && !assetLogoError"
-            src="assets/logo.png"
-            [alt]="(settings.logo && settings.logo.alt) || 'Logo'"
-            class="logo-image"
-            (error)="onAssetLogoError()"
-          />
-          <svg *ngIf="settings && !settings.logo?.url && assetLogoError" class="logo-icon" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-            <polyline points="14 2 14 8 20 8"></polyline>
-          </svg>
+          @if (settings?.logo?.url) {
+            <img
+              [src]="settings!.logo!.url"
+              [alt]="settings!.logo!.alt || 'Logo'"
+              class="logo-image"
+              (error)="onLogoError($event)"
+              />
+          }
+          @if (settings && !settings.logo?.url && !assetLogoError) {
+            <img
+              src="assets/logo.png"
+              [alt]="(settings.logo && settings.logo.alt) || 'Logo'"
+              class="logo-image"
+              (error)="onAssetLogoError()"
+              />
+          }
+          @if (settings && !settings.logo?.url && assetLogoError) {
+            <svg class="logo-icon" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+              <polyline points="14 2 14 8 20 8"></polyline>
+            </svg>
+          }
         </div>
       </div>
     </header>
-
     <main class="maintenance-body">
       <div class="maintenance-card">
         <div class="maintenance-icon">
@@ -40,664 +43,879 @@
         </p>
       </div>
     </main>
-  </ng-container>
+  }
   <!-- ===== END MAINTENANCE PAGE ===== -->
 
   <!-- ===== NORMAL CONTENT (hidden during maintenance) ===== -->
-  <ng-container *ngIf="!settings?.underMaintenance">
-
-  <!-- Fixed Header -->
-  <header class="panel-header">
-    <div class="header-inner">
-    <div class="header-left">
-      <div class="date-navigator">
-        <button class="date-nav-btn" (click)="previousDay()" [title]="ts.t('header.previousDay')">
+  @if (!settings?.underMaintenance) {
+    <!-- Fixed Header -->
+    <header class="panel-header">
+      <div class="header-inner">
+        <div class="header-left">
+          <div class="date-navigator">
+            <button class="date-nav-btn" (click)="previousDay()" [title]="ts.t('header.previousDay')">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="15 18 9 12 15 6"></polyline>
+              </svg>
+            </button>
+            <app-date-picker
+              [value]="selectedDate"
+              [max]="todayDate"
+              [availableDates]="availableDates"
+              (valueChange)="onDatePickerChange($event)"
+            ></app-date-picker>
+            <button class="date-nav-btn" (click)="nextDay()" [disabled]="isToday" [title]="ts.t('header.nextDay')">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="9 18 15 12 9 6"></polyline>
+              </svg>
+            </button>
+          </div>
+          @if (availableDates.length > 1) {
+            <div class="available-dates">
+              <span class="dates-label">{{ 'header.jumpTo' | translate }}</span>
+              <select [(ngModel)]="selectedDate" (change)="onDateChange()" class="dates-dropdown">
+                @for (date of availableDates; track trackByDate($index, date)) {
+                  <option [value]="date">
+                    {{ date | localeDate:'short' }}
+                  </option>
+                }
+              </select>
+            </div>
+          }
+        </div>
+        <div class="header-center">
+          <button
+            class="mobile-header-menu-btn"
+            [class.open]="mobileHeaderMenuOpen"
+            type="button"
+            (click)="toggleMobileHeaderMenu()"
+            [attr.aria-expanded]="mobileHeaderMenuOpen"
+            aria-label="Toggle header menu"
+            [title]="mobileHeaderMenuOpen ? 'Close menu' : 'Menu'"
+            >
+            <svg class="mobile-menu-icon mobile-menu-open-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="3" y1="6" x2="21" y2="6"></line>
+              <line x1="3" y1="12" x2="21" y2="12"></line>
+              <line x1="3" y1="18" x2="21" y2="18"></line>
+            </svg>
+            <svg class="mobile-menu-icon mobile-menu-close-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+            </svg>
+          </button>
+          <div class="logo-container">
+            <a [href]="logoHref" class="logo-link" aria-label="Homepage">
+              <div class="logo-wrapper">
+                @if (settings?.logo?.url) {
+                  <img
+                    [src]="settings!.logo!.url"
+                    [alt]="settings!.logo!.alt || 'Logo'"
+                    class="logo-image"
+                    (error)="onLogoError($event)"
+                    />
+                }
+                @if (settings && !settings.logo?.url && !assetLogoError) {
+                  <img
+                    src="assets/logo.png"
+                    [alt]="(settings.logo && settings.logo.alt) || 'Logo'"
+                    class="logo-image"
+                    (error)="onAssetLogoError()"
+                    />
+                }
+                @if (settings && !settings.logo?.url && assetLogoError) {
+                  <svg class="logo-icon" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                    <polyline points="14 2 14 8 20 8"></polyline>
+                    <line x1="16" y1="13" x2="8" y2="13"></line>
+                    <line x1="16" y1="17" x2="8" y2="17"></line>
+                    <line x1="10" y1="9" x2="8" y2="9"></line>
+                  </svg>
+                }
+                @if (settings?.showBetaBadge) {
+                  <span class="logo-beta-badge">beta</span>
+                }
+              </div>
+              @if (settings && !settings.logo?.url && assetLogoError) {
+                <div class="header-text">
+                  <h1 class="newspaper-title">{{ settings.logo?.alt || 'দৈনিক সংগ্রাম' }}</h1>
+                  <p class="newspaper-date">{{ todayDisplayDate }}</p>
+                </div>
+              }
+            </a>
+          </div>
+        </div>
+        <div class="header-right">
+          <div class="social-links">
+            @if (socialLinks.facebook) {
+              <a [href]="socialLinks.facebook" target="_blank" rel="noopener noreferrer" class="social-icon" title="Facebook">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"></path>
+                </svg>
+              </a>
+            }
+            @if (socialLinks.twitter) {
+              <a [href]="socialLinks.twitter" target="_blank" rel="noopener noreferrer" class="social-icon" title="Twitter">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M23 3a10.9 10.9 0 0 1-3.14 1.53 4.48 4.48 0 0 0-7.86 3v1A10.66 10.66 0 0 1 3 4s-4 9 5 13a11.64 11.64 0 0 1-7 2c9 5 20 0 20-11.5a4.5 4.5 0 0 0-.08-.83A7.72 7.72 0 0 0 23 3z"></path>
+                </svg>
+              </a>
+            }
+            @if (socialLinks.linkedin) {
+              <a [href]="socialLinks.linkedin" target="_blank" rel="noopener noreferrer" class="social-icon" title="LinkedIn">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-2-2 2 2 0 0 0-2 2v7h-4v-7a6 6 0 0 1 6-6z"></path>
+                  <rect x="2" y="9" width="4" height="12"></rect>
+                  <circle cx="4" cy="4" r="2"></circle>
+                </svg>
+              </a>
+            }
+            @if (socialLinks.instagram) {
+              <a [href]="socialLinks.instagram" target="_blank" rel="noopener noreferrer" class="social-icon" title="Instagram">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                  <rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect>
+                  <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z" stroke="white" stroke-width="2" fill="none"></path>
+                  <line x1="17.5" y1="6.5" x2="17.51" y2="6.5" stroke="white" stroke-width="2"></line>
+                </svg>
+              </a>
+            }
+            @if (socialLinks.youtube) {
+              <a [href]="socialLinks.youtube" target="_blank" rel="noopener noreferrer" class="social-icon" title="YouTube">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M22.54 6.42a2.78 2.78 0 0 0-1.94-2C18.88 4 12 4 12 4s-6.88 0-8.6.46a2.78 2.78 0 0 0-1.94 2A29 29 0 0 0 1 11.75a29 29 0 0 0 .46 5.33A2.78 2.78 0 0 0 3.4 19c1.72.46 8.6.46 8.6.46s6.88 0 8.6-.46a2.78 2.78 0 0 0 1.94-2 29 29 0 0 0 .46-5.25 29 29 0 0 0-.46-5.33z"></path>
+                  <polygon points="10 8 16 12 10 16 10 8"></polygon>
+                </svg>
+              </a>
+            }
+            @if (socialLinks.whatsapp) {
+              <a [href]="socialLinks.whatsapp" target="_blank" rel="noopener noreferrer" class="social-icon" title="WhatsApp">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413Z"></path>
+                </svg>
+              </a>
+            }
+          </div>
+          <p class="newspaper-date">{{ todayDisplayDate }}</p>
+          <!-- <a href="/admin" class="admin-link" title="Admin Panel">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polyline points="15 18 9 12 15 6"></polyline>
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M12 1v6m0 6v6m8.66-15.66l-4.24 4.24m-4.24 4.24L3.34 22.66M23 12h-6m-6 0H1m20.66 8.66l-4.24-4.24m-4.24-4.24L3.34 1.34"></path>
           </svg>
-        </button>
-        <app-date-picker
-          [value]="selectedDate"
-          [max]="todayDate"
-          [availableDates]="availableDates"
-          (valueChange)="onDatePickerChange($event)"
-        ></app-date-picker>
-        <button class="date-nav-btn" (click)="nextDay()" [disabled]="isToday" [title]="ts.t('header.nextDay')">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polyline points="9 18 15 12 9 6"></polyline>
-          </svg>
-        </button>
-      </div>
-      <div class="available-dates" *ngIf="availableDates.length > 1">
-        <span class="dates-label">{{ 'header.jumpTo' | translate }}</span>
-        <select [(ngModel)]="selectedDate" (change)="onDateChange()" class="dates-dropdown">
-          <option *ngFor="let date of availableDates; trackBy: trackByDate" [value]="date">
-            {{ date | localeDate:'short' }}
-          </option>
-        </select>
+        </a> -->
       </div>
     </div>
-
-    <div class="header-center">
-      <button
-        class="mobile-header-menu-btn"
-        [class.open]="mobileHeaderMenuOpen"
-        type="button"
-        (click)="toggleMobileHeaderMenu()"
-        [attr.aria-expanded]="mobileHeaderMenuOpen"
-        aria-label="Toggle header menu"
-        [title]="mobileHeaderMenuOpen ? 'Close menu' : 'Menu'"
-      >
-        <svg class="mobile-menu-icon mobile-menu-open-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="3" y1="6" x2="21" y2="6"></line>
-          <line x1="3" y1="12" x2="21" y2="12"></line>
-          <line x1="3" y1="18" x2="21" y2="18"></line>
-        </svg>
-        <svg class="mobile-menu-icon mobile-menu-close-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="6" y1="6" x2="18" y2="18"></line>
-          <line x1="18" y1="6" x2="6" y2="18"></line>
-        </svg>
-      </button>
-      <div class="logo-container">
-        <a [href]="logoHref" class="logo-link" aria-label="Homepage">
-        <div class="logo-wrapper">
-          <img
-            *ngIf="settings?.logo?.url"
-            [src]="settings!.logo!.url"
-            [alt]="settings!.logo!.alt || 'Logo'"
-            class="logo-image"
-            (error)="onLogoError($event)"
-          />
-          <img
-            *ngIf="settings && !settings.logo?.url && !assetLogoError"
-            src="assets/logo.png"
-            [alt]="(settings.logo && settings.logo.alt) || 'Logo'"
-            class="logo-image"
-            (error)="onAssetLogoError()"
-          />
-          <svg *ngIf="settings && !settings.logo?.url && assetLogoError" class="logo-icon" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-          <polyline points="14 2 14 8 20 8"></polyline>
-          <line x1="16" y1="13" x2="8" y2="13"></line>
-          <line x1="16" y1="17" x2="8" y2="17"></line>
-          <line x1="10" y1="9" x2="8" y2="9"></line>
-        </svg>
-          <span class="logo-beta-badge" *ngIf="settings?.showBetaBadge">beta</span>
+    @if (isMobileView && mobileHeaderMenuOpen) {
+      <div class="mobile-header-menu-backdrop" (click)="closeMobileHeaderMenu()"></div>
+    }
+    @if (isMobileView && mobileHeaderMenuOpen) {
+      <div class="mobile-header-menu">
+        <div class="mobile-menu-block">
+          <div class="date-navigator">
+            <button class="date-nav-btn" (click)="previousDay()" [title]="ts.t('header.previousDay')">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="15 18 9 12 15 6"></polyline>
+              </svg>
+            </button>
+            <app-date-picker
+              [value]="selectedDate"
+              [max]="todayDate"
+              [availableDates]="availableDates"
+              (valueChange)="onDatePickerChange($event)"
+            ></app-date-picker>
+            <button class="date-nav-btn" (click)="nextDay()" [disabled]="isToday" [title]="ts.t('header.nextDay')">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="9 18 15 12 9 6"></polyline>
+              </svg>
+            </button>
+          </div>
+          @if (availableDates.length > 1) {
+            <div class="available-dates">
+              <span class="dates-label">{{ 'header.jumpTo' | translate }}</span>
+              <select [(ngModel)]="selectedDate" (change)="onDateChange()" class="dates-dropdown">
+                @for (date of availableDates; track trackByDate($index, date)) {
+                  <option [value]="date">
+                    {{ date | localeDate:'short' }}
+                  </option>
+                }
+              </select>
+            </div>
+          }
         </div>
-        <div class="header-text" *ngIf="settings && !settings.logo?.url && assetLogoError">
-          <h1 class="newspaper-title">{{ settings.logo?.alt || 'দৈনিক সংগ্রাম' }}</h1>
+        <div class="mobile-menu-block mobile-menu-socials">
+          <div class="social-links">
+            @if (socialLinks.facebook) {
+              <a [href]="socialLinks.facebook" target="_blank" rel="noopener noreferrer" class="social-icon" title="Facebook">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"></path>
+                </svg>
+              </a>
+            }
+            @if (socialLinks.twitter) {
+              <a [href]="socialLinks.twitter" target="_blank" rel="noopener noreferrer" class="social-icon" title="Twitter">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M23 3a10.9 10.9 0 0 1-3.14 1.53 4.48 4.48 0 0 0-7.86 3v1A10.66 10.66 0 0 1 3 4s-4 9 5 13a11.64 11.64 0 0 1-7 2c9 5 20 0 20-11.5a4.5 4.5 0 0 0-.08-.83A7.72 7.72 0 0 0 23 3z"></path>
+                </svg>
+              </a>
+            }
+            @if (socialLinks.linkedin) {
+              <a [href]="socialLinks.linkedin" target="_blank" rel="noopener noreferrer" class="social-icon" title="LinkedIn">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-2-2 2 2 0 0 0-2 2v7h-4v-7a6 6 0 0 1 6-6z"></path>
+                  <rect x="2" y="9" width="4" height="12"></rect>
+                  <circle cx="4" cy="4" r="2"></circle>
+                </svg>
+              </a>
+            }
+            @if (socialLinks.instagram) {
+              <a [href]="socialLinks.instagram" target="_blank" rel="noopener noreferrer" class="social-icon" title="Instagram">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                  <rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect>
+                  <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z" stroke="white" stroke-width="2" fill="none"></path>
+                  <line x1="17.5" y1="6.5" x2="17.51" y2="6.5" stroke="white" stroke-width="2"></line>
+                </svg>
+              </a>
+            }
+            @if (socialLinks.youtube) {
+              <a [href]="socialLinks.youtube" target="_blank" rel="noopener noreferrer" class="social-icon" title="YouTube">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M22.54 6.42a2.78 2.78 0 0 0-1.94-2C18.88 4 12 4 12 4s-6.88 0-8.6.46a2.78 2.78 0 0 0-1.94 2A29 29 0 0 0 1 11.75a29 29 0 0 0 .46 5.33A2.78 2.78 0 0 0 3.4 19c1.72.46 8.6.46 8.6.46s6.88 0 8.6-.46a2.78 2.78 0 0 0 1.94-2 29 29 0 0 0 .46-5.25 29 29 0 0 0-.46-5.33z"></path>
+                  <polygon points="10 8 16 12 10 16 10 8"></polygon>
+                </svg>
+              </a>
+            }
+            @if (socialLinks.whatsapp) {
+              <a [href]="socialLinks.whatsapp" target="_blank" rel="noopener noreferrer" class="social-icon" title="WhatsApp">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413Z"></path>
+                </svg>
+              </a>
+            }
+          </div>
           <p class="newspaper-date">{{ todayDisplayDate }}</p>
         </div>
-        </a>
-      </div>
-    </div>
-    
-    <div class="header-right">
-      <div class="social-links">
-        <a *ngIf="socialLinks.facebook" [href]="socialLinks.facebook" target="_blank" rel="noopener noreferrer" class="social-icon" title="Facebook">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"></path>
-          </svg>
-        </a>
-        <a *ngIf="socialLinks.twitter" [href]="socialLinks.twitter" target="_blank" rel="noopener noreferrer" class="social-icon" title="Twitter">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M23 3a10.9 10.9 0 0 1-3.14 1.53 4.48 4.48 0 0 0-7.86 3v1A10.66 10.66 0 0 1 3 4s-4 9 5 13a11.64 11.64 0 0 1-7 2c9 5 20 0 20-11.5a4.5 4.5 0 0 0-.08-.83A7.72 7.72 0 0 0 23 3z"></path>
-          </svg>
-        </a>
-        <a *ngIf="socialLinks.linkedin" [href]="socialLinks.linkedin" target="_blank" rel="noopener noreferrer" class="social-icon" title="LinkedIn">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-2-2 2 2 0 0 0-2 2v7h-4v-7a6 6 0 0 1 6-6z"></path>
-            <rect x="2" y="9" width="4" height="12"></rect>
-            <circle cx="4" cy="4" r="2"></circle>
-          </svg>
-        </a>
-        <a *ngIf="socialLinks.instagram" [href]="socialLinks.instagram" target="_blank" rel="noopener noreferrer" class="social-icon" title="Instagram">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-            <rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect>
-            <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z" stroke="white" stroke-width="2" fill="none"></path>
-            <line x1="17.5" y1="6.5" x2="17.51" y2="6.5" stroke="white" stroke-width="2"></line>
-          </svg>
-        </a>
-        <a *ngIf="socialLinks.youtube" [href]="socialLinks.youtube" target="_blank" rel="noopener noreferrer" class="social-icon" title="YouTube">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M22.54 6.42a2.78 2.78 0 0 0-1.94-2C18.88 4 12 4 12 4s-6.88 0-8.6.46a2.78 2.78 0 0 0-1.94 2A29 29 0 0 0 1 11.75a29 29 0 0 0 .46 5.33A2.78 2.78 0 0 0 3.4 19c1.72.46 8.6.46 8.6.46s6.88 0 8.6-.46a2.78 2.78 0 0 0 1.94-2 29 29 0 0 0 .46-5.25 29 29 0 0 0-.46-5.33z"></path>
-            <polygon points="10 8 16 12 10 16 10 8"></polygon>
-          </svg>
-        </a>
-        <a *ngIf="socialLinks.whatsapp" [href]="socialLinks.whatsapp" target="_blank" rel="noopener noreferrer" class="social-icon" title="WhatsApp">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413Z"></path>
-          </svg>
-        </a>
-      </div>
-      <p class="newspaper-date">{{ todayDisplayDate }}</p>
-      <!-- <a href="/admin" class="admin-link" title="Admin Panel">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="12" cy="12" r="3"></circle>
-          <path d="M12 1v6m0 6v6m8.66-15.66l-4.24 4.24m-4.24 4.24L3.34 22.66M23 12h-6m-6 0H1m20.66 8.66l-4.24-4.24m-4.24-4.24L3.34 1.34"></path>
-        </svg>
-      </a> -->
-    </div>
-    </div>
-
-    <div class="mobile-header-menu-backdrop" *ngIf="isMobileView && mobileHeaderMenuOpen" (click)="closeMobileHeaderMenu()"></div>
-    <div class="mobile-header-menu" *ngIf="isMobileView && mobileHeaderMenuOpen">
-      <div class="mobile-menu-block">
-        <div class="date-navigator">
-          <button class="date-nav-btn" (click)="previousDay()" [title]="ts.t('header.previousDay')">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="15 18 9 12 15 6"></polyline>
-            </svg>
-          </button>
-          <app-date-picker
-            [value]="selectedDate"
-            [max]="todayDate"
-            [availableDates]="availableDates"
-            (valueChange)="onDatePickerChange($event)"
-          ></app-date-picker>
-          <button class="date-nav-btn" (click)="nextDay()" [disabled]="isToday" [title]="ts.t('header.nextDay')">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="9 18 15 12 9 6"></polyline>
-            </svg>
-          </button>
-        </div>
-        <div class="available-dates" *ngIf="availableDates.length > 1">
-          <span class="dates-label">{{ 'header.jumpTo' | translate }}</span>
-          <select [(ngModel)]="selectedDate" (change)="onDateChange()" class="dates-dropdown">
-            <option *ngFor="let date of availableDates; trackBy: trackByDate" [value]="date">
-              {{ date | localeDate:'short' }}
-            </option>
-          </select>
-        </div>
-      </div>
-
-      <div class="mobile-menu-block mobile-menu-socials">
-        <div class="social-links">
-          <a *ngIf="socialLinks.facebook" [href]="socialLinks.facebook" target="_blank" rel="noopener noreferrer" class="social-icon" title="Facebook">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"></path>
-            </svg>
-          </a>
-          <a *ngIf="socialLinks.twitter" [href]="socialLinks.twitter" target="_blank" rel="noopener noreferrer" class="social-icon" title="Twitter">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M23 3a10.9 10.9 0 0 1-3.14 1.53 4.48 4.48 0 0 0-7.86 3v1A10.66 10.66 0 0 1 3 4s-4 9 5 13a11.64 11.64 0 0 1-7 2c9 5 20 0 20-11.5a4.5 4.5 0 0 0-.08-.83A7.72 7.72 0 0 0 23 3z"></path>
-            </svg>
-          </a>
-          <a *ngIf="socialLinks.linkedin" [href]="socialLinks.linkedin" target="_blank" rel="noopener noreferrer" class="social-icon" title="LinkedIn">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-2-2 2 2 0 0 0-2 2v7h-4v-7a6 6 0 0 1 6-6z"></path>
-              <rect x="2" y="9" width="4" height="12"></rect>
-              <circle cx="4" cy="4" r="2"></circle>
-            </svg>
-          </a>
-          <a *ngIf="socialLinks.instagram" [href]="socialLinks.instagram" target="_blank" rel="noopener noreferrer" class="social-icon" title="Instagram">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-              <rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect>
-              <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z" stroke="white" stroke-width="2" fill="none"></path>
-              <line x1="17.5" y1="6.5" x2="17.51" y2="6.5" stroke="white" stroke-width="2"></line>
-            </svg>
-          </a>
-          <a *ngIf="socialLinks.youtube" [href]="socialLinks.youtube" target="_blank" rel="noopener noreferrer" class="social-icon" title="YouTube">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M22.54 6.42a2.78 2.78 0 0 0-1.94-2C18.88 4 12 4 12 4s-6.88 0-8.6.46a2.78 2.78 0 0 0-1.94 2A29 29 0 0 0 1 11.75a29 29 0 0 0 .46 5.33A2.78 2.78 0 0 0 3.4 19c1.72.46 8.6.46 8.6.46s6.88 0 8.6-.46a2.78 2.78 0 0 0 1.94-2 29 29 0 0 0 .46-5.25 29 29 0 0 0-.46-5.33z"></path>
-              <polygon points="10 8 16 12 10 16 10 8"></polygon>
-            </svg>
-          </a>
-          <a *ngIf="socialLinks.whatsapp" [href]="socialLinks.whatsapp" target="_blank" rel="noopener noreferrer" class="social-icon" title="WhatsApp">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413Z"></path>
-            </svg>
-          </a>
-        </div>
-        <p class="newspaper-date">{{ todayDisplayDate }}</p>
-      </div>
-
-      <div
-        class="mobile-menu-block mobile-menu-footer-block"
-        *ngIf="localizedEditor || localizedAddressLine1 || settings?.address?.phone || settings?.address?.email || settings?.address?.website"
-      >
-        <div class="page-footer-info mobile-menu-footer-info">
-          <div class="footer-info-inner">
-            <div class="footer-info-item" *ngIf="localizedEditor">
-              <span class="footer-info-item-editor">{{ 'footer.editor' | translate }} <strong>{{ localizedEditor }}</strong></span>
-            </div>
-            <div class="footer-info-item" *ngIf="localizedAddressLine1">
-              <span class="footer-info-item-address">{{ localizedAddressLine1 }}<ng-container *ngIf="localizedAddressLine2">, {{ localizedAddressLine2 }}</ng-container></span>
-            </div>
-            <div class="footer-info-item footer-contact-row"
-                 *ngIf="settings?.address?.phone || settings?.address?.email || settings?.address?.website">
-              <div class="footer-info-item-phone" *ngIf="settings?.address?.phone">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.61 3.41 2 2 0 0 1 3.59 1.24h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.8a16 16 0 0 0 6.29 6.29l.96-.96a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
-                <a [href]="'tel:' + settings?.address?.phone">{{ localizedPhone }}</a>
-              </div>
-              <span class="footer-contact-divider"
-                    *ngIf="settings?.address?.phone && settings?.address?.email">|</span>
-              <div class="footer-info-item-email" *ngIf="settings?.address?.email">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
-                <a [href]="'mailto:' + settings?.address?.email">{{ settings?.address?.email }}</a>
-              </div>
-              <span class="footer-contact-divider"
-                    *ngIf="settings?.address?.email && settings?.address?.website">|</span>
-              <span class="footer-contact-divider"
-                    *ngIf="!settings?.address?.email && settings?.address?.phone && settings?.address?.website">|</span>
-              <div class="footer-info-item-website" *ngIf="settings?.address?.website">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
-                <a [href]="settings?.address?.website" target="_blank" rel="noopener noreferrer">{{ settings?.address?.website }}</a>
+        @if (localizedEditor || localizedAddressLine1 || settings?.address?.phone || settings?.address?.email || settings?.address?.website) {
+          <div
+            class="mobile-menu-block mobile-menu-footer-block"
+            >
+            <div class="page-footer-info mobile-menu-footer-info">
+              <div class="footer-info-inner">
+                @if (localizedEditor) {
+                  <div class="footer-info-item">
+                    <span class="footer-info-item-editor">{{ 'footer.editor' | translate }} <strong>{{ localizedEditor }}</strong></span>
+                  </div>
+                }
+                @if (localizedAddressLine1) {
+                  <div class="footer-info-item">
+                    <span class="footer-info-item-address">{{ localizedAddressLine1 }}@if (localizedAddressLine2) {
+                      , {{ localizedAddressLine2 }}
+                    }</span>
+                  </div>
+                }
+                @if (settings?.address?.phone || settings?.address?.email || settings?.address?.website) {
+                  <div class="footer-info-item footer-contact-row"
+                    >
+                    @if (settings?.address?.phone) {
+                      <div class="footer-info-item-phone">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.61 3.41 2 2 0 0 1 3.59 1.24h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.8a16 16 0 0 0 6.29 6.29l.96-.96a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
+                        <a [href]="'tel:' + settings?.address?.phone">{{ localizedPhone }}</a>
+                      </div>
+                    }
+                    @if (settings?.address?.phone && settings?.address?.email) {
+                      <span class="footer-contact-divider"
+                      >|</span>
+                    }
+                    @if (settings?.address?.email) {
+                      <div class="footer-info-item-email">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
+                        <a [href]="'mailto:' + settings?.address?.email">{{ settings?.address?.email }}</a>
+                      </div>
+                    }
+                    @if (settings?.address?.email && settings?.address?.website) {
+                      <span class="footer-contact-divider"
+                      >|</span>
+                    }
+                    @if (!settings?.address?.email && settings?.address?.phone && settings?.address?.website) {
+                      <span class="footer-contact-divider"
+                      >|</span>
+                    }
+                    @if (settings?.address?.website) {
+                      <div class="footer-info-item-website">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
+                        <a [href]="settings?.address?.website" target="_blank" rel="noopener noreferrer">{{ settings?.address?.website }}</a>
+                      </div>
+                    }
+                  </div>
+                }
               </div>
             </div>
           </div>
-        </div>
+        }
       </div>
-    </div>
+    }
   </header>
-
   <!-- Main Content Area -->
   <div class="main-layout">
-    <!-- Left Panel: Thumbnail List -->
+    <!-- Left Panel: Thumbnail List / Ad slot -->
     <div class="left-panel" [class.hidden]="!leftPanelVisible">
       <h2 class="panel-title">{{ 'header.pages' | translate }}</h2>
 
-      <div class="thumbnail-list" *ngIf="pages.length > 0">
-        <div
-          *ngFor="let page of pages; trackBy: trackByPageId"
-          class="thumbnail-item"
-          [class.active]="currentPage?.id === page.id"
-          (click)="onPageClick(page)"
-        >
-          <div class="thumbnail-image-wrapper">
-            <div class="skeleton-loader" *ngIf="thumbnailsLoading[page.id]"></div>
-            <img
-              *ngIf="pageThumbnailSrcs[page.id]"
-              [src]="pageThumbnailSrcs[page.id]"
-              [alt]="'Page ' + page.id"
-              loading="lazy"
-              decoding="async"
-              (load)="onThumbnailLoad(page.id)"
-              (error)="onThumbnailLoad(page.id)"
-              [style.opacity]="thumbnailsLoading[page.id] ? '0' : '1'"
-            />
-          </div>
-          <span class="page-number">{{ ts.toLocaleDigits(page.id) }}</span>
-        </div>
-      </div>
-
-      <!-- Skeleton thumbnails while API data is loading -->
-      <div class="thumbnail-list" *ngIf="isLoading && pages.length === 0">
-        <div class="thumbnail-item skeleton-thumbnail-item" *ngFor="let n of [1,2,3,4]; trackBy: trackByIndex">
-          <div class="thumbnail-image-wrapper">
-            <div class="skeleton-loader"></div>
-          </div>
-          <div class="skeleton-page-number"></div>
-        </div>
-      </div>
-      <div class="empty-state" *ngIf="pages.length === 0 && !isLoading">
-        <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-          <polyline points="14 2 14 8 20 8"></polyline>
-        </svg>
-        <p>{{ 'viewer.noPagesAvailable' | translate }}</p>
-        <p class="empty-state-subtitle">{{ 'viewer.for' | translate }} {{ displayDate }}</p>
-      </div>
-    </div>
-
-    <!-- Center Panel: Main Page View -->
-    <div class="center-panel">
-
-    <!-- Skeleton fill while API data is loading -->
-    <div class="center-panel-loading-skeleton" *ngIf="isLoading && !currentPage">
-      <div class="skeleton-loader"></div>
-    </div>
-
-    <div class="empty-state" *ngIf="!currentPage && pages.length === 0 && !isLoading">
-      <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-        <circle cx="8.5" cy="8.5" r="1.5"></circle>
-        <polyline points="21 15 16 10 5 21"></polyline>
-      </svg>
-      <h3>{{ 'viewer.noContent' | translate }}</h3>
-      <p>{{ 'viewer.noEdition' | translate }} {{ displayDate }}</p>
-      <p class="empty-state-subtitle">{{ 'viewer.selectDifferentDate' | translate }}</p>
-    </div>
-
-    <div class="main-page-container" *ngIf="currentPage">
-
-      <!-- Page Toolbar: Print & Download (left) | Edition & Page selectors (right) -->
-      <div class="page-toolbar">
-
-        <!-- Left: Edition & Page name selectors -->
-        <div class="toolbar-left">
-          <!-- Edition Selector -->
-          <div class="selector-widget" *ngIf="editionsForDate.length > 0">
-            <div
-              class="edition-display"
-              [class.has-dropdown]="editionsForDate.length > 1"
-              (click)="editionsForDate.length > 1 && (editionDropdownOpen = !editionDropdownOpen)"
-              (keydown.enter)="editionsForDate.length > 1 && (editionDropdownOpen = !editionDropdownOpen)"
-              [attr.tabindex]="editionsForDate.length > 1 ? 0 : -1"
-            >
-              <span class="edition-label">{{ currentEdition ? getEditionLabel(currentEdition) : '' }}</span>
-              <svg *ngIf="editionsForDate.length > 1" class="edition-arrow" [class.open]="editionDropdownOpen"
-                width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                <polyline points="6 9 12 15 18 9"></polyline>
-              </svg>
-            </div>
-            <div class="edition-dropdown" *ngIf="editionsForDate.length > 1 && editionDropdownOpen">
-              <button
-                *ngFor="let ed of editionsForDate; trackBy: trackByEditionKey"
-                class="edition-option"
-                [class.active]="selectedEditionNumber === (ed.edition || 1)"
-                (click)="onEditionChange(ed.edition || 1)"
-              >
-                {{ getEditionLabel(ed) }}
-              </button>
-            </div>
-            <div class="edition-backdrop" *ngIf="editionDropdownOpen" (click)="editionDropdownOpen = false"></div>
-          </div>
-
-          <!-- Page Name Selector -->
-          <div class="selector-widget" *ngIf="pages.length > 0">
-            <div
-              class="edition-display"
-              [class.has-dropdown]="pages.length > 1"
-              (click)="pages.length > 1 && (pageDropdownOpen = !pageDropdownOpen)"
-              (keydown.enter)="pages.length > 1 && (pageDropdownOpen = !pageDropdownOpen)"
-              [attr.tabindex]="pages.length > 1 ? 0 : -1"
-            >
-              <span class="page-num-badge">{{ ts.toLocaleDigits(currentPage.id) }}</span>
-              <span class="edition-label">{{ currentPage ? getPageLabel(currentPage) : '' }}</span>
-              <svg *ngIf="pages.length > 1" class="edition-arrow" [class.open]="pageDropdownOpen"
-                width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                <polyline points="6 9 12 15 18 9"></polyline>
-              </svg>
-            </div>
-            <div class="edition-dropdown" *ngIf="pages.length > 1 && pageDropdownOpen">
-              <button
-                *ngFor="let page of pages; trackBy: trackByPageId"
-                class="edition-option"
-                [class.active]="currentPage.id === page.id"
-                (click)="onPageClick(page); pageDropdownOpen = false"
-              >
-                <span class="option-num">{{ ts.toLocaleDigits(page.id) }}</span>
-                <span class="option-label">{{ getPageLabel(page) }}</span>
-              </button>
-            </div>
-            <div class="edition-backdrop" *ngIf="pageDropdownOpen" (click)="pageDropdownOpen = false"></div>
-          </div>
-        </div>
-
-        <!-- Right: Print & Download the full page image -->
-        <div class="toolbar-right">
-          <button class="toolbar-btn toolbar-btn-print" (click)="printImage(resolveImageUrl(currentPage.fullImage), (ts.t('viewer.page') + ' ' + ts.toLocaleDigits(currentPage.id)))" [title]="ts.t('viewer.print')">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="6 9 6 2 18 2 18 9"></polyline>
-              <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
-              <rect x="6" y="14" width="12" height="8"></rect>
-            </svg>
-            <span>{{ 'viewer.print' | translate }}</span>
-          </button>
-          <button class="toolbar-btn toolbar-btn-download" (click)="downloadImage(resolveImageUrl(currentPage.fullImage), (ts.t('viewer.page') + ' ' + ts.toLocaleDigits(currentPage.id)))" [title]="ts.t('viewer.download')">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-              <polyline points="7 10 12 15 17 10"></polyline>
-              <line x1="12" y1="15" x2="12" y2="3"></line>
-            </svg>
-            <span class="toolbar-btn-text">{{ 'viewer.download' | translate }}</span>
-          </button>
-          <button class="toolbar-btn panel-toggle-btn" (click)="leftPanelVisible = !leftPanelVisible"
-            [title]="leftPanelVisible ? 'Hide pages panel' : 'Show pages panel'"
-            [class.panel-hidden]="!leftPanelVisible">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="3" y="3" width="18" height="18" rx="2"></rect>
-              <line x1="15" y1="3" x2="15" y2="21"></line>
-            </svg>
-          </button>
-        </div>
-      </div>
-
-      <!-- Page Pagination Bar -->
-      <div class="page-pagination" #paginationBar *ngIf="pages.length > 1 && settings?.showPagePagination !== false">
-        <button
-          class="pagination-btn"
-          (click)="onPageClick(pages[pages.indexOf(currentPage) - 1])"
-          [disabled]="pages.indexOf(currentPage) === 0"
-          title="Previous Page"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"></polyline></svg>
-        </button>
-
-        <ng-container *ngFor="let item of getPaginationPages(); trackBy: trackByIndex">
-          <span *ngIf="item === null" class="pagination-ellipsis" aria-hidden="true">&#8230;</span>
-          <button
-            *ngIf="item !== null"
-            class="pagination-page-btn"
-            [class.active]="currentPage.id === pages[item - 1].id"
-            (click)="onPageClick(pages[item - 1])"
-            [title]="ts.t('viewer.page') + ' ' + ts.toLocaleDigits(pages[item - 1].id)"
-          >
-            {{ ts.toLocaleDigits(pages[item - 1].id) }}
-          </button>
-        </ng-container>
-
-        <button
-          class="pagination-btn"
-          (click)="onPageClick(pages[pages.indexOf(currentPage) + 1])"
-          [disabled]="pages.indexOf(currentPage) === pages.length - 1"
-          title="Next Page"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>
-        </button>
-      </div>
-
-      <div class="image-wrapper">
-        <div class="image-inner">
-          <div class="skeleton-loader main-image-skeleton" *ngIf="!imageLoaded"></div>
-          <div class="slow-connection-notice" *ngIf="showSlowConnectionWarning && !imageLoaded" role="alert">
-            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-              <path d="M1.42 1.42C3.15 2.95 5.36 3.96 7.77 4.27M2.51 8.61C4.65 10.1 7.22 11 10 11a9.8 9.8 0 0 0 3.91-.8"></path>
-              <path d="M8.53 16.11a6 6 0 0 1 6.95 0M12 20h.01"></path>
-              <line x1="2" y1="2" x2="22" y2="22"></line>
-            </svg>
-            <p class="slow-connection-title">Taking longer than usual&hellip;</p>
-            <p class="slow-connection-msg">Your internet connection appears to be slow. Please check your connection or try refreshing the page.</p>
-            <button class="slow-connection-refresh" (click)="refreshPage()">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                <polyline points="23 4 23 10 17 10"></polyline>
-                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
-              </svg>
-              Refresh page
-            </button>
-          </div>
-          <img
-            #mainImage
-            [src]="resolveImageUrl(currentPage.fullImage)"
-            [alt]="ts.t('viewer.page') + ' ' + ts.toLocaleDigits(currentPage.id)"
-            class="main-page-image"
-            (load)="onImageLoad()"
-            (error)="onImageError()"
-            [style.opacity]="imageLoaded ? '1' : '0'"
-          />
-
-          <!-- Clickable sections overlay -->
-          <div class="sections-overlay" *ngIf="imageLoaded">
-            <ng-container *ngFor="let section of currentPage.sections; trackBy: trackBySectionId">
-              <!-- Hide sections with zero crop coords (XML-imported but not yet cropped) -->
+      @if (!adService.ready()) {
+        <!--
+          AdService is still fetching /ads/config.
+          Render nothing until we know whether to show an ad or thumbnails.
+          The fetch is a fast, CDN-cached public endpoint so this is imperceptible.
+          Crucially: no thumbnail requests are initiated here.
+        -->
+      } @else if (adService.slotEnabledMap().get('desktop_page_left')) {
+        <!-- Ad slot replaces the page thumbnail list entirely -->
+        <app-ad-slot slotId="desktop_page_left" />
+      } @else {
+        <!-- No ad — normal thumbnail list with its own loading skeleton -->
+        @if (pages.length > 0) {
+          <div class="thumbnail-list">
+            @for (page of pages; track trackByPageId($index, page)) {
+              <!-- Lazy thumbnails: the component assigns pageThumbnailSrcs[id]
+                   (which starts the fetch) only when this item scrolls into the
+                   panel, via an IntersectionObserver rooted on .left-panel (see
+                   observeLazyThumbnails). data-page-id lets the observer map an
+                   intersecting element back to its page. Native loading="lazy"
+                   can't be used here — it measures the window viewport, not the
+                   panel's, so it never fires for panel-scrolled items. -->
               <div
-                *ngIf="section.width > 0 && section.height > 0"
-                class="clickable-section"
-                [style.left.%]="section.x"
-                [style.top.%]="section.y"
-                [style.width.%]="section.width"
-                [style.height.%]="section.height"
-                [class.selected]="selectedSection?.id === section.id"
-                (click)="selectSection(section)"
-                [title]="section.title"
-              >
-                <div class="section-label">{{ section.title }}</div>
+                class="thumbnail-item"
+                [attr.data-page-id]="page.id"
+                [class.active]="currentPage?.id === page.id"
+                (click)="onPageClick(page)"
+                >
+                <div class="thumbnail-image-wrapper">
+                  @if (thumbnailsLoading[page.id]) {
+                    <div class="skeleton-loader"></div>
+                  }
+                  @if (pageThumbnailSrcs[page.id]) {
+                    <!-- src is assigned lazily by the IntersectionObserver (or
+                         eagerly for the top few / cached). fetchpriority="low"
+                         lets the high-priority main page image win the network. -->
+                    <img
+                      [src]="pageThumbnailSrcs[page.id]"
+                      [alt]="'Page ' + page.id"
+                      decoding="async"
+                      fetchpriority="low"
+                      (load)="onThumbnailLoad(page.id)"
+                      (error)="onThumbnailError(page.id)"
+                      [style.opacity]="thumbnailsLoading[page.id] ? '0' : '1'"
+                      />
+                  }
+                </div>
+                <span class="page-number">{{ ts.toLocaleDigits(page.id) }}</span>
               </div>
-            </ng-container>
+            }
           </div>
-        </div>
-      </div>
-
-      <!-- Page Footer Info -->
-      <div class="page-footer-info" *ngIf="localizedEditor || localizedAddressLine1 || settings?.address?.phone || settings?.address?.email || settings?.address?.website">
-        <div class="footer-info-inner">
-          <div class="footer-info-item" *ngIf="localizedEditor">
-            <!-- <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg> -->
-            <span class="footer-info-item-editor">{{ 'footer.editor' | translate }} <strong>{{ localizedEditor }}</strong></span>
+        }
+        <!-- Skeleton thumbnails while pages API data is loading -->
+        @if (isLoading && pages.length === 0) {
+          <div class="thumbnail-list">
+            @for (n of [1,2,3,4]; track trackByIndex($index, n)) {
+              <div class="thumbnail-item skeleton-thumbnail-item">
+                <div class="thumbnail-image-wrapper">
+                  <div class="skeleton-loader"></div>
+                </div>
+                <div class="skeleton-page-number"></div>
+              </div>
+            }
           </div>
-          <div class="footer-info-item" *ngIf="localizedAddressLine1">
-            <!-- <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg> -->
-            <span class="footer-info-item-address">{{ localizedAddressLine1 }}<ng-container *ngIf="localizedAddressLine2">, {{ localizedAddressLine2 }}</ng-container></span>
-          </div>
-          <div class="footer-info-item footer-contact-row"
-               *ngIf="settings?.address?.phone || settings?.address?.email || settings?.address?.website">
-            <div class="footer-info-item-phone" *ngIf="settings?.address?.phone">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.61 3.41 2 2 0 0 1 3.59 1.24h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.8a16 16 0 0 0 6.29 6.29l.96-.96a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
-              <a [href]="'tel:' + settings?.address?.phone">{{ localizedPhone }}</a>
-            </div>
-            <span class="footer-contact-divider"
-                  *ngIf="settings?.address?.phone && settings?.address?.email">|</span>
-            <div class="footer-info-item-email" *ngIf="settings?.address?.email">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
-              <a [href]="'mailto:' + settings?.address?.email">{{ settings?.address?.email }}</a>
-            </div>
-            <span class="footer-contact-divider"
-                  *ngIf="settings?.address?.email && settings?.address?.website">|</span>
-            <span class="footer-contact-divider"
-                  *ngIf="!settings?.address?.email && settings?.address?.phone && settings?.address?.website">|</span>
-            <div class="footer-info-item-website" *ngIf="settings?.address?.website">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
-              <a [href]="settings?.address?.website" target="_blank" rel="noopener noreferrer">{{ settings?.address?.website }}</a>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Instructions -->
-      <!-- <div class="instructions" *ngIf="!selectedSection">
-        <p>{{ 'viewer.clickToRead' | translate }}</p>
-      </div> -->
-    </div>
-  </div>
-
-  <!-- Right Panel: Article Content -->
-  <div class="right-panel" [class.open]="selectedSection">
-    <div *ngIf="selectedSection" class="article-content">
-      <button class="close-button" (click)="closeSection()">
-        <span>&times;</span>
-      </button>
-
-      <div class="read-article-section">
-        <button 
-          class="read-article-button"
-          (click)="openContentModal()"
-           *ngIf="selectedSection.content && selectedSection.showCaption !== false"
-        >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        }
+        @if (pages.length === 0 && !isLoading) {
+          <div class="empty-state">
+            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
               <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
               <polyline points="14 2 14 8 20 8"></polyline>
-              <line x1="16" y1="13" x2="8" y2="13"></line>
-              <line x1="16" y1="17" x2="8" y2="17"></line>
             </svg>
-            <span>{{ 'viewer.readArticle' | translate }}</span>
-          </button>
-      </div>
-
-      <!-- Full Section Image -->
-      <div class="section-image-container" *ngIf="currentPage">
-        <div class="section-item">
-          <div class="section-image-wrapper" (click)="openImageModal()" [title]="ts.t('viewer.clickToViewFull')">
-            <div class="skeleton-loader section-image-skeleton" *ngIf="sectionImageLoading && croppedSectionImage"></div>
-            <img 
-              *ngIf="croppedSectionImage"
-              [src]="croppedSectionImage" 
-              [alt]="selectedSection.title"
-              class="section-full-image"
-              (load)="onSectionImageLoad()"
-              (error)="onSectionImageError()"
-              [style.opacity]="sectionImageLoading ? '0' : '1'"
-              [style.display]="sectionImageLoading ? 'none' : 'block'"
-            />
-            <div *ngIf="sectionImageError" class="section-image-loading">
-              {{ 'viewer.previewUnavailable' | translate }}
-            </div>
-            <div *ngIf="!croppedSectionImage && !sectionImageError" class="section-image-loading">
-              {{ 'viewer.loadingSectionImage' | translate }}
-            </div>
-            
-            <!-- Zoom indicator -->
-            <div *ngIf="croppedSectionImage" class="zoom-indicator">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="11" cy="11" r="8"></circle>
-                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-                <line x1="11" y1="8" x2="11" y2="14"></line>
-                <line x1="8" y1="11" x2="14" y2="11"></line>
-              </svg>
-            </div>
+            <p>{{ 'viewer.noPagesAvailable' | translate }}</p>
+            <p class="empty-state-subtitle">{{ 'viewer.for' | translate }} {{ displayDate }}</p>
           </div>
-          
-          <div class="section-caption">
-            <p class="section-page-number">{{ 'viewer.page' | translate }} {{ ts.toLocaleDigits(currentPage.id) }}</p>
-          </div>
-        </div>
-
-        <!-- Linked Sections -->
-        <div class="linked-sections" *ngIf="linkedSections.length > 0">
-          <div class="linked-section-list">
-            <div 
-              *ngFor="let linkedSection of linkedSections; trackBy: trackByLinkedSectionId"
-              class="linked-section-item"
-            >
-              <div class="linked-section-wrapper" (click)="openLinkedSectionImage(linkedSection)" [title]="ts.t('viewer.clickToViewFull')">
-                <img 
-                  *ngIf="getCroppedImageForSection(linkedSection)"
-                  [src]="getCroppedImageForSection(linkedSection)!" 
-                  [alt]="linkedSection.title"
-                  class="linked-section-image"
-                  (error)="onLinkedSectionImageError($event)"
-                />
-                <div *ngIf="!getCroppedImageForSection(linkedSection)" class="linked-section-placeholder">
-                  <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-                    <circle cx="8.5" cy="8.5" r="1.5"></circle>
-                    <polyline points="21 15 16 10 5 21"></polyline>
-                  </svg>
-                </div>
-                
-                <!-- Zoom indicator -->
-                <div class="linked-zoom-indicator">
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <circle cx="11" cy="11" r="8"></circle>
-                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-                    <line x1="11" y1="8" x2="11" y2="14"></line>
-                    <line x1="8" y1="11" x2="14" y2="11"></line>
-                  </svg>
-                </div>
-              </div>
-              
-              <div class="linked-section-caption">
-                <p class="linked-page-number">
-                  {{ 'viewer.page' | translate }} {{ ts.toLocaleDigits(linkedSection.pageId || 0) }}
-                  <button class="go-to-section-btn" (click)="selectLinkedSection(linkedSection)" [title]="ts.t('viewer.goToSection')">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                      <line x1="5" y1="12" x2="19" y2="12"></line>
-                      <polyline points="12 5 19 12 12 19"></polyline>
-                    </svg>
-                  </button>
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
+        }
+      }
 
     </div>
-
+    <!-- Center Panel: Main Page View -->
+    <div class="center-panel">
+      <!-- Skeleton fill while API data is loading -->
+      @if (isLoading && !currentPage) {
+        <div class="center-panel-loading-skeleton">
+          <div class="skeleton-loader"></div>
+        </div>
+      }
+      @if (!currentPage && pages.length === 0 && !isLoading) {
+        <div class="empty-state">
+          <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+            <circle cx="8.5" cy="8.5" r="1.5"></circle>
+            <polyline points="21 15 16 10 5 21"></polyline>
+          </svg>
+          <h3>{{ 'viewer.noContent' | translate }}</h3>
+          <p>{{ 'viewer.noEdition' | translate }} {{ displayDate }}</p>
+          <p class="empty-state-subtitle">{{ 'viewer.selectDifferentDate' | translate }}</p>
+        </div>
+      }
+      @if (currentPage) {
+        <div class="main-page-container">
+          <!-- Page Toolbar: Print & Download (left) | Edition & Page selectors (right) -->
+          <div class="page-toolbar">
+            <!-- Left: Edition & Page name selectors -->
+            <div class="toolbar-left">
+              <!-- Edition Selector -->
+              @if (editionsForDate.length > 0) {
+                <div class="selector-widget">
+                  <div
+                    class="edition-display"
+                    [class.has-dropdown]="editionsForDate.length > 1"
+                    (click)="editionsForDate.length > 1 && (editionDropdownOpen = !editionDropdownOpen)"
+                    (keydown.enter)="editionsForDate.length > 1 && (editionDropdownOpen = !editionDropdownOpen)"
+                    [attr.tabindex]="editionsForDate.length > 1 ? 0 : -1"
+                    >
+                    <span class="edition-label">{{ currentEdition ? getEditionLabel(currentEdition) : '' }}</span>
+                    @if (editionsForDate.length > 1) {
+                      <svg class="edition-arrow" [class.open]="editionDropdownOpen"
+                        width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                        <polyline points="6 9 12 15 18 9"></polyline>
+                      </svg>
+                    }
+                  </div>
+                  @if (editionsForDate.length > 1 && editionDropdownOpen) {
+                    <div class="edition-dropdown">
+                      @for (ed of editionsForDate; track trackByEditionKey($index, ed)) {
+                        <button
+                          class="edition-option"
+                          [class.active]="selectedEditionNumber === (ed.edition || 1)"
+                          (click)="onEditionChange(ed.edition || 1)"
+                          >
+                          {{ getEditionLabel(ed) }}
+                        </button>
+                      }
+                    </div>
+                  }
+                  @if (editionDropdownOpen) {
+                    <div class="edition-backdrop" (click)="editionDropdownOpen = false"></div>
+                  }
+                </div>
+              }
+              <!-- Page Name Selector -->
+              @if (pages.length > 0) {
+                <div class="selector-widget">
+                  <div
+                    class="edition-display"
+                    [class.has-dropdown]="pages.length > 1"
+                    (click)="pages.length > 1 && (pageDropdownOpen = !pageDropdownOpen)"
+                    (keydown.enter)="pages.length > 1 && (pageDropdownOpen = !pageDropdownOpen)"
+                    [attr.tabindex]="pages.length > 1 ? 0 : -1"
+                    >
+                    <span class="page-num-badge">{{ ts.toLocaleDigits(currentPage.id) }}</span>
+                    <span class="edition-label">{{ currentPage ? getPageLabel(currentPage) : '' }}</span>
+                    @if (pages.length > 1) {
+                      <svg class="edition-arrow" [class.open]="pageDropdownOpen"
+                        width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                        <polyline points="6 9 12 15 18 9"></polyline>
+                      </svg>
+                    }
+                  </div>
+                  @if (pages.length > 1 && pageDropdownOpen) {
+                    <div class="edition-dropdown">
+                      @for (page of pages; track trackByPageId($index, page)) {
+                        <button
+                          class="edition-option"
+                          [class.active]="currentPage.id === page.id"
+                          (click)="onPageClick(page); pageDropdownOpen = false"
+                          >
+                          <span class="option-num">{{ ts.toLocaleDigits(page.id) }}</span>
+                          <span class="option-label">{{ getPageLabel(page) }}</span>
+                        </button>
+                      }
+                    </div>
+                  }
+                  @if (pageDropdownOpen) {
+                    <div class="edition-backdrop" (click)="pageDropdownOpen = false"></div>
+                  }
+                </div>
+              }
+            </div>
+            <!-- Right: Print & Download the full page image -->
+            <div class="toolbar-right">
+              <button class="toolbar-btn toolbar-btn-print" (click)="printImage(resolveImageUrl(currentPage.fullImage), (ts.t('viewer.page') + ' ' + ts.toLocaleDigits(currentPage.id)))" [title]="ts.t('viewer.print')">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="6 9 6 2 18 2 18 9"></polyline>
+                  <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
+                  <rect x="6" y="14" width="12" height="8"></rect>
+                </svg>
+                <span>{{ 'viewer.print' | translate }}</span>
+              </button>
+              <button class="toolbar-btn toolbar-btn-download" (click)="downloadImage(resolveImageUrl(currentPage.fullImage), (ts.t('viewer.page') + ' ' + ts.toLocaleDigits(currentPage.id)))" [title]="ts.t('viewer.download')">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                  <polyline points="7 10 12 15 17 10"></polyline>
+                  <line x1="12" y1="15" x2="12" y2="3"></line>
+                </svg>
+                <span class="toolbar-btn-text">{{ 'viewer.download' | translate }}</span>
+              </button>
+              <button class="toolbar-btn panel-toggle-btn" (click)="leftPanelVisible = !leftPanelVisible"
+                [title]="leftPanelVisible ? 'Hide pages panel' : 'Show pages panel'"
+                [class.panel-hidden]="!leftPanelVisible">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="3" y="3" width="18" height="18" rx="2"></rect>
+                  <line x1="15" y1="3" x2="15" y2="21"></line>
+                </svg>
+              </button>
+            </div>
+          </div>
+          <!-- Page Pagination Bar -->
+          @if (pages.length > 1 && settings?.showPagePagination !== false) {
+            <div class="page-pagination" #paginationBar>
+              <button
+                class="pagination-btn"
+                (click)="onPageClick(pages[pages.indexOf(currentPage) - 1])"
+                [disabled]="pages.indexOf(currentPage) === 0"
+                title="Previous Page"
+                >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"></polyline></svg>
+              </button>
+              @for (item of paginationPages; track trackByIndex($index, item)) {
+                @if (item === null) {
+                  <span class="pagination-ellipsis" aria-hidden="true">&#8230;</span>
+                }
+                @if (item !== null) {
+                  <button
+                    class="pagination-page-btn"
+                    [class.active]="currentPage.id === pages[item - 1].id"
+                    (click)="onPageClick(pages[item - 1])"
+                    [title]="ts.t('viewer.page') + ' ' + ts.toLocaleDigits(pages[item - 1].id)"
+                    >
+                    {{ ts.toLocaleDigits(pages[item - 1].id) }}
+                  </button>
+                }
+              }
+              <button
+                class="pagination-btn"
+                (click)="onPageClick(pages[pages.indexOf(currentPage) + 1])"
+                [disabled]="pages.indexOf(currentPage) === pages.length - 1"
+                title="Next Page"
+                >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>
+              </button>
+            </div>
+          }
+          <div class="image-wrapper">
+            <div class="image-inner">
+              @if (!imageLoaded && !mainThumbSrc) {
+                <div class="skeleton-loader main-image-skeleton"></div>
+              }
+              <!-- Progressive blur-up: the lightweight thumbnail paints instantly
+                   as a low-res placeholder, then the full image (below) crossfades
+                   over it once loaded. aria-hidden + pointer-events:none so it is
+                   purely decorative and never blocks the sections overlay. -->
+              @if (mainThumbSrc) {
+                <img
+                  class="main-page-thumb-placeholder"
+                  [class.is-faded]="imageLoaded"
+                  [src]="mainThumbSrc"
+                  alt=""
+                  aria-hidden="true"
+                  decoding="async"
+                  fetchpriority="high"
+                  (error)="onMainThumbError()"
+                  />
+              }
+              @if (showSlowConnectionWarning && !imageLoaded) {
+                <div class="slow-connection-notice" role="alert">
+                  <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M1.42 1.42C3.15 2.95 5.36 3.96 7.77 4.27M2.51 8.61C4.65 10.1 7.22 11 10 11a9.8 9.8 0 0 0 3.91-.8"></path>
+                    <path d="M8.53 16.11a6 6 0 0 1 6.95 0M12 20h.01"></path>
+                    <line x1="2" y1="2" x2="22" y2="22"></line>
+                  </svg>
+                  <p class="slow-connection-title">Taking longer than usual&hellip;</p>
+                  <p class="slow-connection-msg">Your internet connection appears to be slow. Please check your connection or try refreshing the page.</p>
+                  <button class="slow-connection-refresh" (click)="refreshPage()">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                      <polyline points="23 4 23 10 17 10"></polyline>
+                      <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+                    </svg>
+                    Refresh page
+                  </button>
+                </div>
+              }
+              <!-- Responsive next-gen sources are emitted ONLY when the server
+                   supplied page.imageVariants (precomputed in selectPage()).
+                   With no variants, both @if blocks are skipped and the <img>
+                   below renders the original fullImage exactly as before. The
+                   <img> remains the element that holds #mainImage, fires
+                   (load)/(error), and is the universal fallback. -->
+              <picture class="main-page-picture">
+                @if (mainAvifSrcset) {
+                  <source type="image/avif" [attr.srcset]="mainAvifSrcset" [attr.sizes]="mainImgSizes || null" />
+                }
+                @if (mainWebpSrcset) {
+                  <source type="image/webp" [attr.srcset]="mainWebpSrcset" [attr.sizes]="mainImgSizes || null" />
+                }
+                <img
+                  #mainImage
+                  [src]="mainImageSrc"
+                  [alt]="ts.t('viewer.page') + ' ' + ts.toLocaleDigits(currentPage.id)"
+                  class="main-page-image"
+                  [class.is-unavailable]="mainImageFailed"
+                  [attr.fetchpriority]="mainThumbSrc ? 'auto' : 'high'"
+                  decoding="async"
+                  [attr.width]="mainImgWidth"
+                  [attr.height]="mainImgHeight"
+                  (load)="onImageLoad()"
+                  (error)="onImageError()"
+                  [style.opacity]="imageLoaded ? '1' : '0'"
+                  />
+              </picture>
+              <!-- Clickable sections overlay -->
+              @if (imageLoaded) {
+                <app-section-overlay
+                  [sections]="currentPage.sections"
+                  [selectedSectionId]="selectedSection?.id"
+                  (sectionClick)="selectSection($event)"
+                ></app-section-overlay>
+              }
+            </div>
+          </div>
+          <!-- Page Footer Info -->
+          @if (localizedEditor || localizedAddressLine1 || settings?.address?.phone || settings?.address?.email || settings?.address?.website) {
+            <div class="page-footer-info">
+              <div class="footer-info-inner">
+                @if (localizedEditor) {
+                  <div class="footer-info-item">
+                    <!-- <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg> -->
+                    <span class="footer-info-item-editor">{{ 'footer.editor' | translate }} <strong>{{ localizedEditor }}</strong></span>
+                  </div>
+                }
+                @if (localizedAddressLine1) {
+                  <div class="footer-info-item">
+                    <!-- <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg> -->
+                    <span class="footer-info-item-address">{{ localizedAddressLine1 }}@if (localizedAddressLine2) {
+                      , {{ localizedAddressLine2 }}
+                    }</span>
+                  </div>
+                }
+                @if (settings?.address?.phone || settings?.address?.email || settings?.address?.website) {
+                  <div class="footer-info-item footer-contact-row"
+                    >
+                    @if (settings?.address?.phone) {
+                      <div class="footer-info-item-phone">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.61 3.41 2 2 0 0 1 3.59 1.24h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.8a16 16 0 0 0 6.29 6.29l.96-.96a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
+                        <a [href]="'tel:' + settings?.address?.phone">{{ localizedPhone }}</a>
+                      </div>
+                    }
+                    @if (settings?.address?.phone && settings?.address?.email) {
+                      <span class="footer-contact-divider"
+                      >|</span>
+                    }
+                    @if (settings?.address?.email) {
+                      <div class="footer-info-item-email">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
+                        <a [href]="'mailto:' + settings?.address?.email">{{ settings?.address?.email }}</a>
+                      </div>
+                    }
+                    @if (settings?.address?.email && settings?.address?.website) {
+                      <span class="footer-contact-divider"
+                      >|</span>
+                    }
+                    @if (!settings?.address?.email && settings?.address?.phone && settings?.address?.website) {
+                      <span class="footer-contact-divider"
+                      >|</span>
+                    }
+                    @if (settings?.address?.website) {
+                      <div class="footer-info-item-website">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
+                        <a [href]="settings?.address?.website" target="_blank" rel="noopener noreferrer">{{ settings?.address?.website }}</a>
+                      </div>
+                    }
+                  </div>
+                }
+              </div>
+            </div>
+          }
+          <!-- Instructions -->
+          <!-- <div class="instructions" *ngIf="!selectedSection">
+          <p>{{ 'viewer.clickToRead' | translate }}</p>
+        </div> -->
+      </div>
+    }
+  </div>
+  <!-- Right Panel: Article Content -->
+  <div class="right-panel" [class.open]="selectedSection">
+    @if (selectedSection) {
+      <div class="article-content">
+        <button class="close-button" (click)="closeSection()">
+          <span>&times;</span>
+        </button>
+        <div class="read-article-section">
+          @if (selectedSection.content && selectedSection.showCaption !== false) {
+            <button
+              class="read-article-button"
+              (click)="openContentModal()"
+              >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                <polyline points="14 2 14 8 20 8"></polyline>
+                <line x1="16" y1="13" x2="8" y2="13"></line>
+                <line x1="16" y1="17" x2="8" y2="17"></line>
+              </svg>
+              <span>{{ 'viewer.readArticle' | translate }}</span>
+            </button>
+          }
+          <!-- Inline share buttons: visible when container is wide enough -->
+          <div class="share-inline">
+            <app-share-buttons
+              class="inline-share-buttons"
+              [section]="selectedSection"
+              [selectedDate]="selectedDate"
+              [pageSlug]="currentPage ? getPageSlug(currentPage) : ''"
+              [editionSlug]="getEditionSlug(selectedEditionNumber)"
+              [logo]="settings?.logo ?? undefined"
+              [imageUrl]="shareImageUrl || undefined"
+              [siteName]="settings?.logo?.alt || ''"
+              [showPrint]="true"
+              (printClicked)="printContent(selectedSection.content || '', selectedSection.title)">
+            </app-share-buttons>
+          </div>
+          <!-- Dropdown fallback: visible when container is too narrow -->
+          <div class="share-dropdown-wrapper">
+            <button class="share-dropdown-toggle" (click)="toggleShareDropdown($event)" [title]="ts.t('share.share')">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="18" cy="5" r="3"></circle>
+                <circle cx="6" cy="12" r="3"></circle>
+                <circle cx="18" cy="19" r="3"></circle>
+                <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
+                <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
+              </svg>
+            </button>
+            @if (showShareDropdown) {
+              <div class="share-dropdown-panel">
+                <app-share-buttons
+                  [section]="selectedSection"
+                  [selectedDate]="selectedDate"
+                  [pageSlug]="currentPage ? getPageSlug(currentPage) : ''"
+                  [editionSlug]="getEditionSlug(selectedEditionNumber)"
+                  [logo]="settings?.logo ?? undefined"
+                  [imageUrl]="shareImageUrl || undefined"
+                  [siteName]="settings?.logo?.alt || ''"
+                  [showPrint]="true"
+                  (printClicked)="printContent(selectedSection.content || '', selectedSection.title)">
+                </app-share-buttons>
+              </div>
+            }
+          </div>
+        </div>
+        <!-- Full Section Image -->
+        @if (currentPage) {
+          <div class="section-image-container">
+            <!-- Slot 3: desktop_post_preview_top — above the section image -->
+            <app-ad-slot slotId="desktop_post_preview_top" />
+            <div class="section-item">
+              <div class="section-image-wrapper" (click)="openImageModal()" [title]="ts.t('viewer.clickToViewFull')">
+                @if (sectionImageLoading && croppedSectionImage) {
+                  <div class="skeleton-loader section-image-skeleton"></div>
+                }
+                @if (croppedSectionImage) {
+                  <img
+                    [src]="croppedSectionImage"
+                    [alt]="selectedSection.title"
+                    class="section-full-image"
+                    (load)="onSectionImageLoad()"
+                    (error)="onSectionImageError()"
+                    [style.opacity]="sectionImageLoading ? '0' : '1'"
+                    [style.display]="sectionImageLoading ? 'none' : 'block'"
+                    />
+                }
+                @if (sectionImageError) {
+                  <div class="section-image-loading">
+                    {{ 'viewer.previewUnavailable' | translate }}
+                  </div>
+                }
+                @if (!croppedSectionImage && !sectionImageError) {
+                  <div class="section-image-loading">
+                    {{ 'viewer.loadingSectionImage' | translate }}
+                  </div>
+                }
+                <!-- Zoom indicator -->
+                @if (croppedSectionImage) {
+                  <div class="zoom-indicator">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <circle cx="11" cy="11" r="8"></circle>
+                      <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                      <line x1="11" y1="8" x2="11" y2="14"></line>
+                      <line x1="8" y1="11" x2="14" y2="11"></line>
+                    </svg>
+                  </div>
+                }
+              </div>
+              <div class="section-caption">
+                <p class="section-page-number">{{ 'viewer.page' | translate }} {{ ts.toLocaleDigits(currentPage.id) }}</p>
+              </div>
+            </div>
+            <!-- Slot 4: desktop_post_preview_middle — between section image and linked sections -->
+            <app-ad-slot slotId="desktop_post_preview_middle" />
+            <!-- Linked Sections -->
+            @if (linkedSections.length > 0) {
+              <div class="linked-sections">
+                <div class="linked-section-list">
+                  @for (linkedSection of linkedSections; track trackByLinkedSectionId($index, linkedSection)) {
+                    <div
+                      class="linked-section-item"
+                      >
+                      <div class="linked-section-wrapper" (click)="openLinkedSectionImage(linkedSection)" [title]="ts.t('viewer.clickToViewFull')">
+                        @if (getCroppedImageForSection(linkedSection)) {
+                          <img
+                            [src]="getCroppedImageForSection(linkedSection)!"
+                            [alt]="linkedSection.title"
+                            class="linked-section-image"
+                            (error)="onLinkedSectionImageError($event)"
+                            />
+                        }
+                        @if (!getCroppedImageForSection(linkedSection)) {
+                          <div class="linked-section-placeholder">
+                            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                              <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                              <polyline points="21 15 16 10 5 21"></polyline>
+                            </svg>
+                          </div>
+                        }
+                        <!-- Zoom indicator -->
+                        <div class="linked-zoom-indicator">
+                          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="11" cy="11" r="8"></circle>
+                            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                            <line x1="11" y1="8" x2="11" y2="14"></line>
+                            <line x1="8" y1="11" x2="14" y2="11"></line>
+                          </svg>
+                        </div>
+                      </div>
+                      <div class="linked-section-caption">
+                        <p class="linked-page-number">
+                          {{ 'viewer.page' | translate }} {{ ts.toLocaleDigits(linkedSection.pageId || 0) }}
+                          <button class="go-to-section-btn" (click)="selectLinkedSection(linkedSection)" [title]="ts.t('viewer.goToSection')">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                              <line x1="5" y1="12" x2="19" y2="12"></line>
+                              <polyline points="12 5 19 12 12 19"></polyline>
+                            </svg>
+                          </button>
+                        </p>
+                      </div>
+                    </div>
+                  }
+                </div>
+              </div>
+            }
+          </div>
+        }
+      </div>
+    }
     <!-- Skeleton fill while API data is loading -->
-    <div class="right-panel-loading-skeleton" *ngIf="isLoading && !selectedSection">
-      <div class="rp-skeleton-image"><div class="skeleton-loader"></div></div>
-      <!-- <div class="rp-skeleton-lines">
+    @if (isLoading && !selectedSection) {
+      <div class="right-panel-loading-skeleton">
+        <div class="rp-skeleton-image"><div class="skeleton-loader"></div></div>
+        <!-- <div class="rp-skeleton-lines">
         <div class="rp-skeleton-line rp-line-title"><div class="skeleton-loader"></div></div>
         <div class="rp-skeleton-line rp-line-short"><div class="skeleton-loader"></div></div>
         <div class="rp-skeleton-line"><div class="skeleton-loader"></div></div>
@@ -705,137 +923,55 @@
         <div class="rp-skeleton-line rp-line-short"><div class="skeleton-loader"></div></div>
       </div> -->
     </div>
-
-    <div *ngIf="!isLoading && !selectedSection" class="placeholder">
-      <div class="placeholder-content">
-        <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-          <polyline points="14 2 14 8 20 8"></polyline>
-          <line x1="16" y1="13" x2="8" y2="13"></line>
-          <line x1="16" y1="17" x2="8" y2="17"></line>
-          <polyline points="10 9 9 9 8 9"></polyline>
-        </svg>
-        <p>{{ 'viewer.selectSection' | translate }}</p>
-      </div>
-    </div>
-  </div>
-
-  <!-- Image Modal -->
-  <div class="modal-overlay" *ngIf="showImageModal" (click)="closeImageModal()">
-    <div class="modal-image-content" (click)="$event.stopPropagation()">
-      <button class="modal-close-button" (click)="closeImageModal()">
-        <span>&times;</span>
-      </button>
-      
-      <!-- Share buttons at top with logo -->
-      <app-share-buttons 
-        *ngIf="selectedSection" 
-        [section]="selectedSection" 
-        [selectedDate]="selectedDate"
-        [pageSlug]="getPageSlug(currentPage!)"
-        [editionSlug]="getEditionSlug(selectedEditionNumber)"
-        [logo]="settings?.logo"
-        [imageUrl]="shareImageUrl || undefined"
-        [siteName]="settings?.logo?.alt"
-        [showPrint]="true"
-        [showDownload]="true"
-        (printClicked)="printAllModalImages()"
-        (downloadClicked)="downloadAllModalImages()">
-      </app-share-buttons>
-
-      <!-- Image / Text toggle — mobile only -->
-      <div class="mobile-modal-toggle" *ngIf="isMobileView && selectedSection?.content">
-        <button
-          class="mobile-modal-tab"
-          [class.active]="mobileModalView === 'image'"
-          (click)="mobileModalView = 'image'"
-          aria-label="Image view">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-            <circle cx="8.5" cy="8.5" r="1.5"></circle>
-            <polyline points="21 15 16 10 5 21"></polyline>
+  }
+  @if (!isLoading && !selectedSection) {
+    @if (adService.slotEnabledMap().get('desktop_page_right')) {
+      <!-- Ad takes the place of the placeholder when this slot is enabled.
+           It hides automatically via CSS when the right panel is open (selectedSection). -->
+      <app-ad-slot slotId="desktop_page_right" />
+    } @else {
+      <div class="placeholder">
+        <div class="placeholder-content">
+          <svg width="80" height="80" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+            <polyline points="14 2 14 8 20 8"></polyline>
+            <line x1="16" y1="13" x2="8" y2="13"></line>
+            <line x1="16" y1="17" x2="8" y2="17"></line>
+            <polyline points="10 9 9 9 8 9"></polyline>
           </svg>
-          Image
-        </button>
-        <button
-          class="mobile-modal-tab"
-          [class.active]="mobileModalView === 'text'"
-          (click)="mobileModalView = 'text'"
-          aria-label="Text view">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="3" y1="6" x2="21" y2="6"></line>
-            <line x1="3" y1="12" x2="21" y2="12"></line>
-            <line x1="3" y1="18" x2="15" y2="18"></line>
-          </svg>
-          Text
-        </button>
-      </div>
-      
-      <!-- Image panel: always present in DOM; hidden on mobile when text view is active -->
-      <div class="modal-images-container"
-           [class.modal-images-hidden]="isMobileView && mobileModalView === 'text'">
-        <!-- Main/Selected Image -->
-        <div class="modal-image-item" *ngIf="modalImage">
-          <img 
-            [src]="modalImage" 
-            [alt]="modalImageTitle"
-            class="modal-full-image"
-            (error)="onModalImageError($event)"
-          />
-          <!-- <div class="modal-image-label" *ngIf="modalImageTitle">{{ modalImageTitle }}</div> -->
-        </div>
-        
-        <!-- Linked Section Images -->
-        <div class="modal-image-item" *ngFor="let linkedSection of modalLinkedSections; trackBy: trackByLinkedSectionId; let isLast = last">
-          <img 
-            [src]="getCroppedImageForSection(linkedSection)!" 
-            [alt]="linkedSection.title"
-            class="modal-full-image"
-            (error)="onModalImageError($event)"
-          />
-          <!-- <div class="modal-image-label">{{ linkedSection.title }}</div> -->
+          <p>{{ 'viewer.selectSection' | translate }}</p>
         </div>
       </div>
-
-      <!-- Text panel: mobile-only, created/destroyed via *ngIf to avoid height conflicts -->
-      <div class="modal-text-body"
-           *ngIf="isMobileView && mobileModalView === 'text' && selectedSection">
-        <h2 class="article-modal-title" *ngIf="selectedSection.title">{{ selectedSection.title }}</h2>
-        <div class="article-body" [innerHTML]="normalizeContent(selectedSection.content)"></div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Content Modal -->
-  <div class="modal-overlay" *ngIf="showContentModal" (click)="closeContentModal()">
-    <div class="modal-content" (click)="$event.stopPropagation()">
-      <button class="modal-close-button" (click)="closeContentModal()">
-        <span>&times;</span>
-      </button>
-      
-      <!-- Share buttons at top with logo -->
-      <app-share-buttons 
-        *ngIf="selectedSection" 
-        [section]="selectedSection" 
-        [selectedDate]="selectedDate"
-        [pageSlug]="getPageSlug(currentPage!)"
-        [editionSlug]="getEditionSlug(selectedEditionNumber)"
-        [logo]="settings?.logo"
-        [imageUrl]="shareImageUrl || undefined"
-        [siteName]="settings?.logo?.alt"
-        [showPrint]="true"
-        (printClicked)="printContent(selectedSection!.content!, selectedSection!.title)">
-      </app-share-buttons>
-      
-      <div class="modal-body" *ngIf="selectedSection">
-        <h2 class="article-modal-title" *ngIf="selectedSection.title">{{ selectedSection.title }}</h2>
-        <div class="article-body" [innerHTML]="normalizeContent(selectedSection.content)"></div>
-      </div>
-    </div>
-  </div>
-  </div>
-
-  </ng-container>
-  <!-- ===== END NORMAL CONTENT ===== -->
+    }
+  }
+</div>
+<!-- Image + Content Modals -->
+<app-article-modal
+  [showImageModal]="showImageModal"
+  [showContentModal]="showContentModal"
+  [section]="selectedSection"
+  [currentPage]="currentPage"
+  [modalImage]="modalImage"
+  [modalImageTitle]="modalImageTitle"
+  [modalLinkedSections]="modalLinkedSections"
+  [isMobileView]="isMobileView"
+  [mobileModalView]="mobileModalView"
+  [selectedDate]="selectedDate"
+  [pageSlug]="currentPage ? getPageSlug(currentPage) : ''"
+  [editionSlug]="getEditionSlug(selectedEditionNumber)"
+  [logo]="settings?.logo"
+  [shareImageUrl]="shareImageUrl"
+  [siteName]="settings?.logo?.alt || ''"
+  [getCroppedImage]="getCroppedImageBound"
+  (closeImageModal)="closeImageModal()"
+  (closeContentModal)="closeContentModal()"
+  (mobileViewChange)="mobileModalView = $event"
+  (printImages)="printAllModalImages()"
+  (downloadImages)="downloadAllModalImages()"
+  (printContent)="printContent(selectedSection!.content!, selectedSection!.title)"
+></app-article-modal>
+</div>
+}
+<!-- ===== END NORMAL CONTENT ===== -->
 
 </div>

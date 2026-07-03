@@ -1,3 +1,8 @@
+/* Quill rich-text editor styles — loaded lazily with the admin chunk only.
+   ViewEncapsulation.None on AdminComponent is required for these styles to
+   reach Quill's dynamically-generated DOM. */
+@import "quill/dist/quill.snow.css";
+
 /* Admin Container */
 .admin-container {
   height: 100vh;
@@ -5,7 +10,7 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  font-family: 'Google Sans', sans-serif;
+  font-family: 'Google Sans Variable', sans-serif;
 }
 
 /* Header */
@@ -1581,7 +1586,26 @@ select.page-id-select option:disabled {
 .cropper-canvas-wrap {
   flex: 1; min-width: 0; overflow: auto;
   background: #0f1420;
+  position: relative; /* anchor for the loading overlay */
 }
+
+/* Loading overlay shown while the hi-res page image is fetching */
+.cropper-loading {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex; flex-direction: column; align-items: center; gap: 12px;
+  color: #cbd5e1; font-size: 13px; text-align: center;
+  z-index: 5; pointer-events: none;
+}
+.cropper-spinner {
+  width: 40px; height: 40px;
+  border: 4px solid rgba(255, 255, 255, 0.18);
+  border-top-color: #4f9cf9;
+  border-radius: 50%;
+  animation: cropper-spin 0.8s linear infinite;
+}
+@keyframes cropper-spin { to { transform: rotate(360deg); } }
 .cropper-stage {
   position: relative;
   display: inline-block;
@@ -3730,4 +3754,101 @@ select.page-id-select option:disabled {
   border-radius: 50%;
   animation: spin 0.65s linear infinite;
   flex-shrink: 0;
+}
+
+/* ── Ad Manager Panel ────────────────────────────────────────────────────── */
+
+.ad-slots-table-wrap {
+  overflow-x: auto;
+  border-radius: 6px;
+  border: 1px solid var(--color-border, #e2e8f0);
+}
+
+.ad-slots-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.ad-slots-table thead tr {
+  background: var(--color-bg-secondary, #f8fafc);
+}
+
+.ad-slots-table th {
+  padding: 8px 12px;
+  text-align: left;
+  font-weight: 600;
+  color: var(--color-text-secondary, #64748b);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.72rem;
+  border-bottom: 1px solid var(--color-border, #e2e8f0);
+  white-space: nowrap;
+}
+
+.ad-slots-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--color-border, #e2e8f0);
+  vertical-align: middle;
+}
+
+.ad-slots-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.ad-slots-table tbody tr:hover {
+  background: var(--color-bg-hover, #f1f5f9);
+}
+
+.ad-slot-id {
+  font-family: monospace;
+  font-size: 0.78rem;
+  background: #eff6ff;
+  color: #1d4ed8;
+  padding: 2px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.ad-unit-path {
+  font-family: monospace;
+  font-size: 0.75rem;
+  color: var(--color-text-secondary, #475569);
+  word-break: break-all;
+}
+
+.ad-div-id {
+  font-family: monospace;
+  font-size: 0.72rem;
+  color: var(--color-text-secondary, #64748b);
+  white-space: nowrap;
+}
+
+.ad-sizes-cell {
+  white-space: nowrap;
+  color: var(--color-text-secondary, #475569);
+}
+
+/* Row dim when master switch is off */
+.ad-slot-row--off {
+  opacity: 0.45;
+}
+
+.ad-slot-placement {
+  font-size: 0.82rem;
+  color: var(--color-text-secondary, #475569);
+}
+
+.ad-code-example {
+  background: var(--color-bg-secondary, #f8fafc);
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: 6px;
+  padding: 12px 14px;
+  font-family: monospace;
+  font-size: 0.78rem;
+  color: var(--color-text, #1e293b);
+  line-height: 1.6;
+  overflow-x: auto;
+  white-space: pre;
+  margin: 8px 0 12px;
 }

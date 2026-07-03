@@ -1,14 +1,15 @@
-import { Component, OnInit, OnDestroy, ChangeDetectorRef } from '@angular/core';
-import { CommonModule } from '@angular/common';
+import { Component, OnInit, OnDestroy, ChangeDetectorRef, ChangeDetectionStrategy } from '@angular/core';
+
 import { ToasterService, ToastMessage } from '../services/toaster.service';
 import { Subscription } from 'rxjs';
 
 @Component({
   selector: 'app-toaster',
   standalone: true,
-  imports: [CommonModule],
+  imports: [],
   templateUrl: './toaster.component.html',
-  styleUrls: ['./toaster.component.css']
+  styleUrls: ['./toaster.component.css'],
+  changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class ToasterComponent implements OnInit, OnDestroy {
   toasts: ToastMessage[] = [];
