@@ -5,14 +5,16 @@ import { SwUpdate, VersionReadyEvent } from '@angular/service-worker';
 import { ToasterComponent } from './toaster/toaster.component';
 import { LoaderComponent } from './components/loader/loader.component';
 import { UpdateBannerComponent } from './components/update-banner/update-banner.component';
+import { DemoBannerComponent } from './components/demo-banner/demo-banner.component';
 import { NewspaperDataService } from './services/newspaper-data.service';
 import { WebVitalsService } from './services/web-vitals.service';
+import { DemoService } from './services/demo.service';
 import { filter, Subscription } from 'rxjs';
 
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [RouterOutlet, ToasterComponent, LoaderComponent, UpdateBannerComponent],
+  imports: [RouterOutlet, ToasterComponent, LoaderComponent, UpdateBannerComponent, DemoBannerComponent],
   template: `
     <router-outlet></router-outlet>
     <app-toaster></app-toaster>
@@ -20,6 +22,7 @@ import { filter, Subscription } from 'rxjs';
     @if (updateAvailable && !isAdminRoute) {
       <app-update-banner (dismissed)="applyUpdate()" />
     }
+    <app-demo-banner />
   `,
   styles: [],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -52,9 +55,21 @@ export class AppComponent implements OnInit, OnDestroy {
     @Inject(PLATFORM_ID) private platformId: object,
     private cdr: ChangeDetectorRef,
     private webVitals: WebVitalsService,
+    private demo: DemoService,
   ) {}
 
   ngOnInit(): void {
+    // ── Demo / Showcase Mode bootstrap (§3.2, §3.5) — no-op on non-demo builds.
+    // Generate the per-tab session token eagerly and register the unload beacon
+    // that destroys the server-side overlay when the buyer leaves.
+    if (this.demo.enabled) {
+      this.demo.getToken();
+      this.demo.registerUnloadBeacon();
+      // Ask the server whether demo mode is actually ON so the banner respects
+      // the WordPress toggle (turning it OFF hides the demo alert).
+      void this.demo.checkServerStatus();
+    }
+
     // Begin dependency-free Core Web Vitals collection (browser-only, no-op on
     // server). Metrics are exposed on window.__dnWebVitals and logged on tab
     // hide; off-device beaconing stays disabled unless explicitly configured.

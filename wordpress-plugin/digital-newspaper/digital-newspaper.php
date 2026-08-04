@@ -107,6 +107,50 @@ class Digital_Newspaper_API {
    */
   const OPTION_UPLOADS_CACHE = 'dn_uploads_cache_headers_enabled';
 
+  // ── Demo / Showcase Mode (opt-in, default OFF) ───────────────────────────
+  // See DEMO_MODE_TODO.md. When OFF (default) NONE of the demo code paths run
+  // and the plugin behaves byte-for-byte identically to before. Demo mode is
+  // "active" only when BOTH the option is true AND a valid per-session token
+  // header is present on the request — i.e. it is impossible to trigger any
+  // overlay behaviour on a normal production install where the flag is off.
+  /** Master opt-in flag. Toggle with: update_option('dn_demo_mode_enabled', true); */
+  const OPTION_DEMO_MODE = 'dn_demo_mode_enabled';
+  /** Request header carrying the per-tab, ephemeral demo data-session token. */
+  const DEMO_SESSION_HEADER = 'X-DN-Demo-Session';
+  /** Prefix for every session-scoped transient: dn_demo_{token}_{realKey}. */
+  const DEMO_KEY_PREFIX = 'dn_demo_';
+  /** Suffix for the per-session manifest transient listing written keys. */
+  const DEMO_MANIFEST_SUFFIX = '__keys';
+  /** TTL (seconds) applied to every session transient; refreshed on each write. */
+  const DEMO_TTL = 10800; // 3 hours
+  /** Sentinel stored in a session transient to mark a key deleted (tombstone). */
+  const DEMO_TOMBSTONE = '__dn_demo_deleted__';
+  /** §2A — Fixed, well-known demo login. Isolation comes from the per-tab data
+   *  token (§3.2), NOT the account, so this login can safely be shared. */
+  const DEMO_LOGIN_USER = 'demo';
+  const DEMO_LOGIN_PASS = 'demo1234';
+  /** Data keys covered by the copy-on-write overlay (per §1). */
+  const DEMO_DATA_KEYS = [
+    self::OPTION_KEY,       // dn_data — legacy blob / fallback
+    self::OPTION_INDEX,     // dn_data_index — date index
+    self::OPTION_SETTINGS,  // dn_settings
+    self::OPTION_BACKUPS,   // dn_data_backups
+  ];
+
+  /**
+   * Runtime cache for dn_demo_active()/dn_demo_session_id() so the (very hot)
+   * read filter can short-circuit in O(1) without re-reading the option or
+   * re-parsing the header on every single get_option() call. Null = not yet
+   * resolved for this request.
+   */
+  private $demo_session_id_cache = null;   // string|null
+  private $demo_active_cache     = null;   // bool|null
+
+  /** §2A — set true for a request authenticated by a scoped demo Bearer token. */
+  private $is_demo_auth = false;
+  /** §2A — display identity for the demo token (for activity log / me()). */
+  private $demo_identity = ['name' => 'Demo User', 'role' => 'dn_demo_admin'];
+
   public function __construct() {
     add_action('init', [$this, 'handle_cors_preflight'], 1);
     add_action('init', [$this, 'register_section_post_type']);
@@ -152,6 +196,420 @@ class Digital_Newspaper_API {
     add_action('init', [$this, 'maybe_handle_diag_query'], 5);
     // Inject Google Ad Manager head scripts when enabled.
     add_action('wp_head', [$this, 'inject_gam_head_script'], 1);
+
+    // ── Demo / Showcase Mode wiring (no-op unless the flag is ON) ───────────
+    // Registering the filters is cheap; every callback short-circuits in O(1)
+    // via dn_demo_active() when demo mode is not active, so a normal
+    // production install is completely unaffected.
+    //   • pre_option           : transparent copy-on-write READS for data keys
+    //   • pre_update_option     : defensive write-block for real data/config keys
+    // pre_option is WP 6.1+; per-key pre_option_{$key} filters below cover the
+    // fixed data keys on older cores too.
+    add_filter('pre_option', [$this, 'demo_filter_pre_option'], 10, 3);
+    foreach (self::DEMO_DATA_KEYS as $dk) {
+      add_filter('pre_option_' . $dk, [$this, 'demo_filter_pre_option_keyed'], 10, 3);
+    }
+    add_filter('pre_update_option', [$this, 'demo_guard_pre_update_option'], 10, 3);
+    // §2A — grant the scoped demo token just enough capability to drive the
+    // admin REST API (manage_options), while denying user/plugin management.
+    add_filter('user_has_cap', [$this, 'demo_grant_caps'], 10, 4);
+    // wp-cron backstop sweep of expired/orphaned demo transients (§4.3).
+    add_action('dn_demo_cron_sweep', [$this, 'demo_cron_sweep']);
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // Demo / Showcase Mode — storage overlay (§1)
+  // ══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * §1.1 — Resolve and validate the per-session demo token from the request.
+   *
+   * Returns '' when not in demo mode, the header is absent, or the token fails
+   * the strict 32-hex validation (reuses the sanitising discipline of
+   * sanitize_lock_resource()). Cached per-request.
+   */
+  private function dn_demo_session_id(): string {
+    if ($this->demo_session_id_cache !== null) {
+      return $this->demo_session_id_cache;
+    }
+    // Reentrancy guard: reading OPTION_DEMO_MODE below goes through get_option(),
+    // which fires our pre_option filter. Seed the cache with '' first so any
+    // re-entrant dn_demo_active()/dn_demo_session_id() call during that read
+    // resolves immediately instead of recursing.
+    $this->demo_session_id_cache = '';
+    $token = '';
+    // Master flag must be on.
+    if (!(bool) get_option(self::OPTION_DEMO_MODE, false)) {
+      return $this->demo_session_id_cache = '';
+    }
+    // Header arrives as HTTP_X_DN_DEMO_SESSION in $_SERVER.
+    $raw = '';
+    if (isset($_SERVER['HTTP_X_DN_DEMO_SESSION'])) {
+      $raw = (string) $_SERVER['HTTP_X_DN_DEMO_SESSION'];
+    } elseif (function_exists('getallheaders')) {
+      $headers = getallheaders();
+      foreach ((array) $headers as $k => $v) {
+        if (strcasecmp($k, self::DEMO_SESSION_HEADER) === 0) {
+          $raw = (string) $v;
+          break;
+        }
+      }
+    }
+    $raw = trim($raw);
+    // Strict allowlist: exactly 32 lowercase hex chars (crypto-random token).
+    if ($raw !== '' && preg_match('/^[a-f0-9]{32}$/', $raw)) {
+      $token = $raw;
+    }
+    return $this->demo_session_id_cache = $token;
+  }
+
+  /**
+   * §1.2 — Demo is "active" for this request iff the master flag is ON AND a
+   * valid session token is present. Everything in the overlay keys off this.
+   */
+  private function dn_demo_active(): bool {
+    if ($this->demo_active_cache !== null) {
+      return $this->demo_active_cache;
+    }
+    return $this->demo_active_cache = ($this->dn_demo_session_id() !== '');
+  }
+
+  /** §1.3 — Namespaced transient key for a real option key. */
+  private function dn_session_key(string $realKey): string {
+    return self::DEMO_KEY_PREFIX . $this->dn_demo_session_id() . '_' . $realKey;
+  }
+
+  /** Manifest transient key listing every session key written (for cleanup). */
+  private function dn_manifest_key(): string {
+    return self::DEMO_KEY_PREFIX . $this->dn_demo_session_id() . self::DEMO_MANIFEST_SUFFIX;
+  }
+
+  /** True when $option participates in the copy-on-write overlay. */
+  private function dn_is_data_key(string $option): bool {
+    if (in_array($option, self::DEMO_DATA_KEYS, true)) {
+      return true;
+    }
+    // Per-date edition keys: dn_edition_YYYY-MM-DD
+    if (strncmp($option, self::OPTION_EDITION_PREFIX, strlen(self::OPTION_EDITION_PREFIX)) === 0) {
+      $date = substr($option, strlen(self::OPTION_EDITION_PREFIX));
+      return (bool) preg_match('/^\d{4}-\d{2}-\d{2}$/', $date);
+    }
+    return false;
+  }
+
+  /**
+   * §1.4 — Copy-on-write READ. In demo mode: return the session copy if one
+   * exists (including a tombstone → the default), otherwise fall through to the
+   * golden/production value WITHOUT writing anything. Outside demo mode this is
+   * a plain get_option().
+   */
+  private function dn_get(string $realKey, $default = false) {
+    if (!$this->dn_demo_active()) {
+      return get_option($realKey, $default);
+    }
+    $sess = get_transient($this->dn_session_key($realKey));
+    if ($sess !== false) {
+      if (is_string($sess) && $sess === self::DEMO_TOMBSTONE) {
+        return $default; // key was deleted within this session
+      }
+      return $sess;
+    }
+    return get_option($realKey, $default);
+  }
+
+  /**
+   * §1.5 — Copy-on-write WRITE. In demo mode: persist to a session transient
+   * and record it in the manifest; NEVER touches the real option. Returns a
+   * success-shaped bool so existing callers that inspect the return value keep
+   * working. Outside demo mode this is the unchanged update_option() behaviour
+   * (autoload forced false, matching every data-key call site).
+   */
+  private function dn_set(string $realKey, $value, bool $autoload = false): bool {
+    if (!$this->dn_demo_active()) {
+      return update_option($realKey, $value, $autoload);
+    }
+    set_transient($this->dn_session_key($realKey), $value, self::DEMO_TTL);
+    $this->dn_manifest_add($realKey);
+    return true;
+  }
+
+  /**
+   * §1.5 — Copy-on-write DELETE. In demo mode: store a tombstone so subsequent
+   * reads return the default instead of falling back to the golden value.
+   * Outside demo mode this is a plain delete_option().
+   */
+  private function dn_delete(string $realKey): bool {
+    if (!$this->dn_demo_active()) {
+      return delete_option($realKey);
+    }
+    set_transient($this->dn_session_key($realKey), self::DEMO_TOMBSTONE, self::DEMO_TTL);
+    $this->dn_manifest_add($realKey);
+    return true;
+  }
+
+  /** §1.6 — Record a real key in the session manifest and refresh its TTL. */
+  private function dn_manifest_add(string $realKey): void {
+    $mk       = $this->dn_manifest_key();
+    $manifest = get_transient($mk);
+    if (!is_array($manifest)) {
+      $manifest = [];
+    }
+    if (!in_array($realKey, $manifest, true)) {
+      $manifest[] = $realKey;
+    }
+    set_transient($mk, $manifest, self::DEMO_TTL);
+    // Ensure the hourly cleanup backstop is scheduled.
+    if (!wp_next_scheduled('dn_demo_cron_sweep')) {
+      wp_schedule_event(time() + HOUR_IN_SECONDS, 'hourly', 'dn_demo_cron_sweep');
+    }
+  }
+
+  /**
+   * §1.4 — Transparent read filter. Fires on EVERY get_option(); short-circuits
+   * immediately unless demo is active AND the option is a data key with a
+   * session copy. Returning false lets WordPress read the golden value.
+   */
+  public function demo_filter_pre_option($pre, $option, $default_value) {
+    // Order matters: test dn_is_data_key() (cheap, no side effects) BEFORE
+    // dn_demo_active(). Resolving demo state reads OPTION_DEMO_MODE via
+    // get_option(), which re-enters this filter; short-circuiting on the
+    // key name first prevents infinite recursion.
+    if ($pre !== false || !$this->dn_is_data_key((string) $option) || !$this->dn_demo_active()) {
+      return $pre;
+    }
+    $sess = get_transient($this->dn_session_key((string) $option));
+    if ($sess === false) {
+      return $pre; // no session copy → golden value (copy-on-write read)
+    }
+    if (is_string($sess) && $sess === self::DEMO_TOMBSTONE) {
+      // Deleted within the session: emulate "option does not exist".
+      return $default_value;
+    }
+    return $sess;
+  }
+
+  /** Per-key variant for the fixed data keys (covers WP cores < 6.1). */
+  public function demo_filter_pre_option_keyed($pre, $option, $default_value) {
+    return $this->demo_filter_pre_option($pre, $option, $default_value);
+  }
+
+  /**
+   * §1.8 — Defensive write-block. Belt-and-braces net so a missed call site can
+   * never mutate real data (or global plugin config) while a demo session is
+   * active. On the happy path all data writes go through dn_set(), which never
+   * calls update_option() on a real key, so this never fires for them. If it
+   * does fire, we log it (QA signal) and return the OLD value so update_option()
+   * performs no DB write.
+   */
+  public function demo_guard_pre_update_option($value, $option, $old_value) {
+    if (!$this->dn_demo_active()) {
+      return $value; // flag off / no session → identical to stock behaviour
+    }
+    $option = (string) $option;
+    // Never interfere with transient plumbing (our own session storage) or any
+    // non-plugin option.
+    if (strncmp($option, '_transient_', 11) === 0
+        || strncmp($option, '_site_transient_', 16) === 0) {
+      return $value;
+    }
+    $isData   = $this->dn_is_data_key($option);
+    $isConfig = $this->dn_is_blocked_config_key($option);
+    if ($isData || $isConfig) {
+      error_log('[DigitalNewspaper][demo] BLOCKED update_option(' . $option . ') during active demo session — a write bypassed the overlay wrappers.');
+      return $old_value; // no DB write
+    }
+    return $value;
+  }
+
+  /**
+   * Plugin-config / global keys that must stay global and must never be written
+   * by a demo session (§1.8, §2.5). Data keys are handled separately.
+   */
+  private function dn_is_blocked_config_key(string $option): bool {
+    static $keys = null;
+    if ($keys === null) {
+      $keys = [
+        self::OPTION_ORIGINS,
+        self::OPTION_ALLOW_CREDENTIALS,
+        self::OPTION_DOMAIN_ALIASES,
+        self::OPTION_GAM_ENABLED,
+        self::OPTION_GAM_SLOT_STATES,
+        self::OPTION_STATIC_SNAPSHOTS,
+        self::OPTION_INLINE_INDEX,
+        self::OPTION_INDEX_HTML_PATH,
+        self::OPTION_PRELOAD_LCP,
+        self::OPTION_UPLOADS_CACHE,
+        self::OPTION_DEMO_MODE, // demo users can never toggle demo mode off
+      ];
+    }
+    return in_array($option, $keys, true);
+  }
+
+  /**
+   * §4.2 — Destroy the current demo session: delete every session transient
+   * recorded in the manifest, plus the manifest itself. Idempotent.
+   */
+  private function dn_demo_destroy_session(): void {
+    if ($this->dn_demo_session_id() === '') {
+      return;
+    }
+    $mk       = $this->dn_manifest_key();
+    $manifest = get_transient($mk);
+    if (is_array($manifest)) {
+      foreach ($manifest as $realKey) {
+        delete_transient($this->dn_session_key((string) $realKey));
+      }
+    }
+    delete_transient($mk);
+    // Session-scoped activity log.
+    delete_transient(self::DEMO_KEY_PREFIX . $this->dn_demo_session_id() . '_activity');
+    // Session-scoped page locks + their index.
+    $lockIndexKey = self::DEMO_KEY_PREFIX . $this->dn_demo_session_id() . '_lockindex';
+    $lockKeys     = get_transient($lockIndexKey);
+    if (is_array($lockKeys)) {
+      foreach ($lockKeys as $lk) {
+        delete_transient((string) $lk);
+      }
+    }
+    delete_transient($lockIndexKey);
+    // §7.1 — Delete this session's uploaded media (files + attachment rows).
+    $this->dn_demo_delete_session_media($this->dn_demo_session_id());
+    delete_transient(self::DEMO_KEY_PREFIX . $this->dn_demo_session_id() . '_mediacount');
+  }
+
+  /** §7.1 — Delete every attachment tagged with a given demo session token. */
+  private function dn_demo_delete_session_media(string $token): void {
+    if ($token === '') return;
+    $ids = get_posts([
+      'post_type'      => 'attachment',
+      'post_status'    => 'inherit',
+      'posts_per_page' => 200,
+      'fields'         => 'ids',
+      'meta_key'       => '_dn_demo_session',
+      'meta_value'     => $token,
+    ]);
+    foreach ((array) $ids as $id) {
+      wp_delete_attachment((int) $id, true);
+    }
+  }
+
+  /**
+   * §2.3 / §7.6 — Return a 413 WP_REST_Response if a demo save payload exceeds
+   * the abuse caps, or null when it is within limits. Caps: editions, total
+   * pages, total sections, and serialized byte size.
+   */
+  private function demo_payload_cap_error(array $payload): ?WP_REST_Response {
+    $maxEditions = 30;
+    $maxPages    = 400;
+    $maxSections = 4000;
+    $maxBytes    = 8 * 1024 * 1024; // 8 MB
+
+    $editions = is_array($payload['editions'] ?? null) ? $payload['editions'] : [];
+    if (count($editions) > $maxEditions) {
+      return $this->demo_cap_response('editions', count($editions), $maxEditions);
+    }
+    $pages = 0; $sections = 0;
+    foreach ($editions as $ed) {
+      foreach (($ed['pages'] ?? []) as $pg) {
+        $pages++;
+        $sections += is_array($pg['sections'] ?? null) ? count($pg['sections']) : 0;
+      }
+    }
+    if ($pages > $maxPages)       return $this->demo_cap_response('pages', $pages, $maxPages);
+    if ($sections > $maxSections) return $this->demo_cap_response('sections', $sections, $maxSections);
+
+    $encoded = wp_json_encode($payload);
+    if (is_string($encoded) && strlen($encoded) > $maxBytes) {
+      return $this->demo_cap_response('bytes', strlen($encoded), $maxBytes);
+    }
+    return null;
+  }
+
+  private function demo_cap_response(string $kind, int $got, int $max): WP_REST_Response {
+    return new WP_REST_Response([
+      'error'    => 'Demo mode limit exceeded: too many ' . $kind . '.',
+      'demoCap'  => $kind,
+      'received' => $got,
+      'max'      => $max,
+    ], 413);
+  }
+
+  /** §2.2 — Session-scoped activity-log transient key. */
+  private function dn_demo_log_key(): string {
+    return self::DEMO_KEY_PREFIX . $this->dn_demo_session_id() . '_activity';
+  }
+
+  /** §2.2 — Append one entry to the session activity log (capped, newest-first). */
+  private function dn_demo_log_append(array $entry): void {
+    $key = $this->dn_demo_log_key();
+    $log = get_transient($key);
+    if (!is_array($log)) {
+      $log = [];
+    }
+    array_unshift($log, $entry);
+    if (count($log) > 500) {
+      $log = array_slice($log, 0, 500); // cap to bound transient size
+    }
+    // Re-number ids newest-highest for a stable UI ordering.
+    $n = count($log);
+    foreach ($log as $i => &$e) {
+      $e['id'] = $n - $i;
+    }
+    unset($e);
+    set_transient($key, $log, self::DEMO_TTL);
+    $this->dn_manifest_add('activity'); // note: manifest stores real-key names; activity handled separately in destroy
+  }
+
+  /** §2.2 — Read the session activity log (newest-first array). */
+  private function dn_demo_log_read(): array {
+    $log = get_transient($this->dn_demo_log_key());
+    return is_array($log) ? $log : [];
+  }
+
+  /**
+   * §4.3 — Hourly wp-cron backstop: delete expired/orphaned demo transients.
+   * Transients already self-expire via their TTL; on installs WITHOUT an
+   * external object cache the timeout rows can linger, so we sweep any whose
+   * timeout has passed. No-op when demo mode is off.
+   */
+  public function demo_cron_sweep(): void {
+    global $wpdb;
+    if (!(bool) get_option(self::OPTION_DEMO_MODE, false)) {
+      return;
+    }
+    $now     = time();
+    $like    = $wpdb->esc_like('_transient_timeout_' . self::DEMO_KEY_PREFIX) . '%';
+    $expired = $wpdb->get_results($wpdb->prepare(
+      "SELECT option_name, option_value FROM {$wpdb->options} WHERE option_name LIKE %s",
+      $like
+    ));
+    if (!is_array($expired)) {
+      return;
+    }
+    foreach ($expired as $row) {
+      if ((int) $row->option_value < $now) {
+        // Derive the transient name and delete it (removes value + timeout).
+        $name = substr($row->option_name, strlen('_transient_timeout_'));
+        delete_transient($name);
+      }
+    }
+
+    // §7.1 — Orphaned demo media: delete attachments tagged with a demo session
+    // whose upload time is older than the TTL (their session is long gone).
+    $cutoff = $now - self::DEMO_TTL;
+    $stale  = get_posts([
+      'post_type'      => 'attachment',
+      'post_status'    => 'inherit',
+      'posts_per_page' => 100,
+      'fields'         => 'ids',
+      'meta_query'     => [
+        ['key' => '_dn_demo_session', 'compare' => 'EXISTS'],
+        ['key' => '_dn_demo_uploaded_at', 'value' => $cutoff, 'compare' => '<', 'type' => 'NUMERIC'],
+      ],
+    ]);
+    foreach ((array) $stale as $id) {
+      wp_delete_attachment((int) $id, true);
+    }
   }
 
   /**
@@ -381,6 +839,12 @@ class Digital_Newspaper_API {
       'sanitize_callback' => fn($v) => is_string($v) ? trim($v) : '',
       'default'           => '',
     ]);
+    // Demo / Showcase Mode master opt-in (default OFF). See DEMO_MODE_TODO.md.
+    register_setting('digital_newspaper_settings', self::OPTION_DEMO_MODE, [
+      'type'              => 'boolean',
+      'sanitize_callback' => fn($v) => (bool) $v,
+      'default'           => false,
+    ]);
   }
 
   public function render_settings_page(): void {
@@ -396,6 +860,7 @@ class Digital_Newspaper_API {
     $preload_lcp       = (bool) get_option(self::OPTION_PRELOAD_LCP, false);
     $uploads_cache     = (bool) get_option(self::OPTION_UPLOADS_CACHE, false);
     $index_html_path   = (string) get_option(self::OPTION_INDEX_HTML_PATH, '');
+    $demo_mode         = (bool) get_option(self::OPTION_DEMO_MODE, false);
     $resolved_index    = $this->resolve_index_html_path();
 
     // Diagnostic: does the snapshot directory already exist, and what's in it?
@@ -543,6 +1008,24 @@ class Digital_Newspaper_API {
                 <strong>Note:</strong> immutable caching is "sticky" on clients that already loaded an image —
                 <strong>enable on staging first.</strong> Turning this off removes the block (already-cached browsers
                 keep it until expiry).
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <th scope="row" style="color:#b45309;">Demo / Showcase Mode</th>
+            <td>
+              <label>
+                <input type="checkbox" name="<?php echo esc_attr(self::OPTION_DEMO_MODE); ?>" value="1" <?php checked($demo_mode); ?> />
+                <strong>Enable Demo / Showcase Mode</strong> (per-buyer, ephemeral, copy-on-write overlay)
+              </label>
+              <p class="description">
+                When enabled, requests that carry a valid <code><?php echo esc_html(self::DEMO_SESSION_HEADER); ?></code>
+                header get a private, per-session copy-on-write overlay: every edit is redirected to short-lived
+                session transients and the real newspaper data is <strong>never written</strong>. Buyers each see their
+                own version; closing the browser (or the <?php echo (int) round(self::DEMO_TTL / 3600); ?>-hour TTL /
+                hourly sweep) destroys it. Requests <em>without</em> the header behave exactly as normal.
+                <strong>Only enable this on an isolated demo/staging install</strong> — never on the production paper.
+                See <code>DEMO_MODE_TODO.md</code>.
               </p>
             </td>
           </tr>
@@ -994,6 +1477,13 @@ googletag.cmd.push(function() {
    * store until WP-5 is fully rolled out and verified.
    */
   private function maybe_migrate_storage(): void {
+    // Demo mode never runs the global blob→granular migration: it writes real
+    // option keys (a one-time, install-wide operation performed on the golden
+    // seed by the operator, not per-buyer). The seed is migrated before demo is
+    // exposed, so this is a safe no-op inside a demo session.
+    if ($this->dn_demo_active()) {
+      return;
+    }
     if (get_option(self::OPTION_MIGRATED_V2)) {
       // Flag is set, but verify the index actually has data.
       // If it is empty the migration timed out after setting the flag but
@@ -1114,7 +1604,7 @@ googletag.cmd.push(function() {
       // this when we actually recovered real settings from the blob — never
       // persist the empty defaults (that would just re-create the bug).
       if (!empty($blob['settings']) && is_array($blob['settings'])) {
-        update_option(self::OPTION_SETTINGS, $blob['settings'], false);
+        $this->dn_set(self::OPTION_SETTINGS, $blob['settings']);
       }
       unset($blob);
     }
@@ -1313,7 +1803,7 @@ googletag.cmd.push(function() {
       $rebuilt = $this->build_date_editions_from_section_posts($date);
       if (!empty($rebuilt)) {
         // Lazy write-through so the next request gets the fast path.
-        update_option($this->edition_option_key($date), $rebuilt, false);
+        $this->dn_set($this->edition_option_key($date), $rebuilt);
         error_log('[DigitalNewspaper] get_edition_for_date_granular: rebuilt ' . $date . ' from ' . count($rebuilt) . ' section post group(s).');
         return [
           'editions'    => $this->normalize_domain_urls($rebuilt),
@@ -1333,7 +1823,7 @@ googletag.cmd.push(function() {
       return isset($ed['date']) && (string) $ed['date'] === $date;
     }));
     if (!empty($raw_editions)) {
-      update_option($this->edition_option_key($date), $raw_editions, false);
+      $this->dn_set($this->edition_option_key($date), $raw_editions);
     }
 
     unset($data, $all_editions);
@@ -1517,7 +2007,7 @@ googletag.cmd.push(function() {
 
     // ── Settings ──────────────────────────────────────────────────────────
     if (!empty($data['settings']) && is_array($data['settings'])) {
-      update_option(self::OPTION_SETTINGS, $data['settings'], false);
+      $this->dn_set(self::OPTION_SETTINGS, $data['settings']);
     }
 
     // ── Per-date editions ─────────────────────────────────────────────────
@@ -1546,7 +2036,7 @@ googletag.cmd.push(function() {
       if (isset($editions_by_date[$only_date])) {
         global $wpdb;
         $wpdb->last_error = '';
-        $ok = update_option($this->edition_option_key($only_date), $editions_by_date[$only_date], false);
+        $ok = $this->dn_set($this->edition_option_key($only_date), $editions_by_date[$only_date]);
         if (!$ok) {
           // Verify the write actually landed by reading it back and looking
           // for the new dataVersion stamp inside any edition.  This survives
@@ -1565,11 +2055,11 @@ googletag.cmd.push(function() {
       } else {
         // Date no longer has any editions (last page deleted) — clean up the
         // stale per-date option so future reads don't return orphaned data.
-        delete_option($this->edition_option_key($only_date));
+        $this->dn_delete($this->edition_option_key($only_date));
       }
     } else {
       foreach ($editions_by_date as $date => $editions) {
-        $ok = update_option($this->edition_option_key($date), $editions, false);
+        $ok = $this->dn_set($this->edition_option_key($date), $editions);
         if (!$ok) {
           // Verify write landed (same logic as the scoped path above).
           global $wpdb;
@@ -1611,23 +2101,24 @@ googletag.cmd.push(function() {
         $merged[] = $only_date;
       }
       rsort($merged);
-      update_option(self::OPTION_INDEX, [
+      $this->dn_set(self::OPTION_INDEX, [
         'dates'       => $merged,
         'dataVersion' => $dataVersion,
-      ], false);
+      ]);
     } else {
       // Full-blob write — $editions_by_date represents the entire archive,
       // so it's safe (and necessary) to overwrite the index from it.
       $dates = array_keys($editions_by_date);
       rsort($dates);
-      update_option(self::OPTION_INDEX, [
+      $this->dn_set(self::OPTION_INDEX, [
         'dates'       => $dates,
         'dataVersion' => $dataVersion,
-      ], false);
+      ]);
     }
 
     // Mark migration done (in case this is the very first save on a new install)
-    if (!get_option(self::OPTION_MIGRATED_V2)) {
+    // Skipped in demo mode — this is a global install-wide flag, not per-session.
+    if (!$this->dn_demo_active() && !get_option(self::OPTION_MIGRATED_V2)) {
       update_option(self::OPTION_MIGRATED_V2, true);
     }
 
@@ -1887,6 +2378,11 @@ HTACCESS;
    *                                 rewritten (scoped atomic write). Null → all.
    */
   private function maybe_regenerate_static_snapshots(?string $only_date, $dataVersion): void {
+    // Demo mode never regenerates the GLOBAL static snapshot files: they are
+    // shared by every visitor, so writing them from one buyer's session data
+    // would both leak that session's edits site-wide and corrupt the golden
+    // seed's frozen files. The public snapshots continue to serve the seed.
+    if ($this->dn_demo_active()) return;
     if (!get_option(self::OPTION_STATIC_SNAPSHOTS, false)) return;
     $this->regenerate_static_snapshots($only_date, $dataVersion);
   }
@@ -2446,7 +2942,7 @@ HTACCESS;
     // the per-date write below carry the change.  Full saves (POST /data)
     // continue to refresh the blob so the fallback stays usable.
     if ($only_date === null) {
-      update_option(self::OPTION_KEY, $data, false);
+      $this->dn_set(self::OPTION_KEY, $data);
     }
 
     // Secondary write: granular per-date keys (used by the new cacheable endpoints).
@@ -2472,8 +2968,11 @@ HTACCESS;
     // Skipped ($sync_posts = false) by the atomic PUT endpoints which sync only
     // the single changed section themselves — avoiding O(all-sections) DB work
     // that causes gateway timeouts on large datasets.
+    // Demo mode never mirrors sections to the GLOBAL dn_section custom posts:
+    // those are shared across sessions and back the golden seed's recovery
+    // path. A demo save persists entirely in the per-session overlay above.
     $postIds = [];
-    if ($sync_posts) {
+    if ($sync_posts && !$this->dn_demo_active()) {
       try {
         $postIds = $this->sync_section_posts_from_data($data);
       } catch (\Throwable $e) {
@@ -2600,7 +3099,7 @@ HTACCESS;
     array_unshift($backups, $entry);
     unset($entry);
 
-    $backup_written = update_option(self::OPTION_BACKUPS, $backups, false);
+    $backup_written = $this->dn_set(self::OPTION_BACKUPS, $backups);
     if (!$backup_written) {
       // update_option returns false when (a) the value is byte-identical to
       // the stored copy (shouldn't happen here since we prepended a new entry)
@@ -3274,6 +3773,77 @@ HTACCESS;
         ],
       ],
     ]);
+
+    // ── Demo / Showcase Mode endpoints (§4.2) ─────────────────────────────
+    // Public (no auth): a buyer's browser calls these with the session header.
+    // They are no-ops unless demo mode is active for the request, so exposing
+    // them on a non-demo install is harmless.
+    //   GET    /demo/status   → { demoMode, sessionActive, hasOverrides, ttl }
+    //   DELETE /demo/session  → destroy this session's overlay ("Reset my demo"
+    //                           and the unload beacon target). Idempotent.
+    register_rest_route('digital-newspaper/v1', '/demo/status', [
+      'methods'             => 'GET',
+      'callback'            => [$this, 'demo_status_endpoint'],
+      'permission_callback' => '__return_true',
+    ]);
+    register_rest_route('digital-newspaper/v1', '/demo/session', [
+      'methods'             => 'DELETE',
+      'callback'            => [$this, 'demo_delete_session_endpoint'],
+      'permission_callback' => '__return_true',
+    ]);
+  }
+
+  /**
+   * GET /demo/status — lightweight introspection for the Angular demo UX.
+   * Never leaks data; only booleans + the TTL.
+   */
+  public function demo_status_endpoint(WP_REST_Request $request): WP_REST_Response {
+    $this->add_public_security_headers();
+    $enabled = (bool) get_option(self::OPTION_DEMO_MODE, false);
+    $active  = $this->dn_demo_active();
+    $hasOverrides = false;
+    if ($active) {
+      $manifest = get_transient($this->dn_manifest_key());
+      $hasOverrides = is_array($manifest) && !empty($manifest);
+    }
+    return new WP_REST_Response([
+      'demoMode'      => $enabled,
+      'sessionActive' => $active,
+      'hasOverrides'  => $hasOverrides,
+      'ttl'           => self::DEMO_TTL,
+    ], 200);
+  }
+
+  /**
+   * DELETE /demo/session — destroy the caller's demo overlay (§4.2). Used by
+   * the "Reset my demo" button and the beforeunload beacon. Idempotent and
+   * safe: only ever touches the caller's own session-namespaced transients.
+   */
+  public function demo_delete_session_endpoint(WP_REST_Request $request): WP_REST_Response {
+    $this->add_public_security_headers();
+
+    // Fast path: header-authenticated demo session (fetch from "Reset my demo").
+    if ($this->dn_demo_active()) {
+      $this->dn_demo_destroy_session();
+      return new WP_REST_Response(['success' => true, 'cleared' => true], 200);
+    }
+
+    // Beacon path: navigator.sendBeacon() cannot set headers, so the client
+    // passes the token as ?sid=. Only honoured while demo mode is enabled and
+    // the token passes the same strict 32-hex validation.
+    if ((bool) get_option(self::OPTION_DEMO_MODE, false)) {
+      $sid = trim((string) ($request->get_param('sid') ?? ''));
+      if (preg_match('/^[a-f0-9]{32}$/', $sid)) {
+        // Point the per-request caches at this token, then destroy its overlay.
+        $this->demo_session_id_cache = $sid;
+        $this->demo_active_cache     = true;
+        $this->dn_demo_destroy_session();
+        return new WP_REST_Response(['success' => true, 'cleared' => true], 200);
+      }
+    }
+
+    // Not a demo session — nothing to destroy. Report success (idempotent).
+    return new WP_REST_Response(['success' => true, 'cleared' => false], 200);
   }
 
   /**
@@ -4638,13 +5208,13 @@ HTML;
     $new_version = (float) microtime(true);
 
     // ── Write 1: granular dn_settings option (primary read path) ──────────
-    update_option(self::OPTION_SETTINGS, $settings, false);
+    $this->dn_set(self::OPTION_SETTINGS, $settings);
 
     // ── Write 2: bump dataVersion in dn_data_index ────────────────────────
     $index = get_option(self::OPTION_INDEX);
     if (is_array($index)) {
       $index['dataVersion'] = $new_version;
-      update_option(self::OPTION_INDEX, $index, false);
+      $this->dn_set(self::OPTION_INDEX, $index);
     }
 
     // ── Write 3: patch settings key inside the dn_data blob (back-compat) ─
@@ -4655,7 +5225,7 @@ HTML;
     if (is_array($blob)) {
       $blob['settings']    = $settings;
       $blob['dataVersion'] = $new_version;
-      update_option(self::OPTION_KEY, $blob, false);
+      $this->dn_set(self::OPTION_KEY, $blob);
       unset($blob);
     }
 
@@ -5614,7 +6184,7 @@ HTML;
 
           // autoload=false — these can grow large and must NOT be loaded
           // on every WP request.
-          $ok = update_option($this->edition_option_key($date), $editions, false);
+          $ok = $this->dn_set($this->edition_option_key($date), $editions);
           if (!$ok) {
             // Verify whether the write actually landed (same pattern as write_per_date_storage).
             // update_option() returns false for two reasons:
@@ -5659,13 +6229,14 @@ HTML;
       $unionDates    = array_values(array_unique(array_merge($existingDates, $writtenDates)));
       rsort($unionDates);
       $rebuildVersion = (float) microtime(true);
-      update_option(self::OPTION_INDEX, [
+      $this->dn_set(self::OPTION_INDEX, [
         'dates'       => $unionDates,
         'dataVersion' => $rebuildVersion,
-      ], false);
+      ]);
 
       // STEP 5 — Mark migration done so future loads use the granular path.
-      if (!get_option(self::OPTION_MIGRATED_V2)) {
+      // Skipped in demo (global install-wide flag, not per-session).
+      if (!$this->dn_demo_active() && !get_option(self::OPTION_MIGRATED_V2)) {
         update_option(self::OPTION_MIGRATED_V2, true);
       }
 
@@ -6458,6 +7029,16 @@ HTML;
     $payload = $request->get_json_params();
     if (!is_array($payload)) {
       return new WP_REST_Response(['error' => 'Invalid payload'], 400);
+    }
+
+    // §2.3 / §7.6 — Abuse cap for demo mode only. A full POST /data is also the
+    // landing path for the bulk-XML import, so bound the payload size to keep a
+    // buyer (or the well-known demo login) from exhausting transient storage.
+    if ($this->dn_demo_active()) {
+      $cap = $this->demo_payload_cap_error($payload);
+      if ($cap !== null) {
+        return $cap;
+      }
     }
 
     // SECURITY: normalise ?force to a strict boolean. Only the exact strings
@@ -7367,6 +7948,30 @@ HTML;
       return new WP_REST_Response(['error' => 'Missing credentials'], 400);
     }
 
+    // ── §2A.1 — Scoped demo login ──────────────────────────────────────────
+    // When demo mode is enabled, the fixed demo credentials mint a demo-scoped
+    // Bearer token that is NOT tied to any real manage_options user. The token
+    // grants only enough capability (via demo_grant_caps) to drive the admin
+    // REST API against the per-session overlay; all destructive/global ops are
+    // already blocked (§1.8, §2.5). No real privileged account is exposed.
+    if ((bool) get_option(self::OPTION_DEMO_MODE, false)
+        && hash_equals(self::DEMO_LOGIN_USER, (string) $username)
+        && hash_equals(self::DEMO_LOGIN_PASS, (string) $password)) {
+      delete_transient($rate_key);
+      $token = $this->generate_demo_token();
+      return rest_ensure_response([
+        'token' => $token,
+        'user'  => [
+          'id'          => 0,
+          'username'    => self::DEMO_LOGIN_USER,
+          'email'       => '',
+          'displayName' => $this->demo_identity['name'],
+          'role'        => $this->demo_identity['role'],
+          'demo'        => true,
+        ],
+      ]);
+    }
+
     $user = wp_authenticate($username, $password);
     if (is_wp_error($user)) {
       // Increment failure counter (10-minute window, auto-expires)
@@ -7411,6 +8016,17 @@ HTML;
   }
 
   public function me(WP_REST_Request $request): WP_REST_Response {
+    // §2A — the scoped demo token has no real WP user; report the demo identity.
+    if ($this->is_demo_auth) {
+      return rest_ensure_response([
+        'id'          => 0,
+        'username'    => self::DEMO_LOGIN_USER,
+        'email'       => '',
+        'displayName' => $this->demo_identity['name'],
+        'role'        => $this->demo_identity['role'],
+        'demo'        => true,
+      ]);
+    }
     $user = wp_get_current_user();
     if (!$user || !$user->ID) {
       return new WP_REST_Response(['error' => 'Unauthorized'], 401);
@@ -7565,6 +8181,19 @@ HTML;
       return new WP_REST_Response(['error' => 'File too large (max 10 MB)'], 413);
     }
 
+    // §7.1 — Demo uploads are session-tagged, capped, and swept on cleanup so a
+    // buyer (or the well-known demo login) can't fill the disk or permanently
+    // host arbitrary files. Count this session's existing uploads first.
+    if ($this->dn_demo_active()) {
+      $used = (int) get_transient(self::DEMO_KEY_PREFIX . $this->dn_demo_session_id() . '_mediacount');
+      if ($used >= 25) {
+        return new WP_REST_Response([
+          'error'   => 'Demo mode upload limit reached (25 images per session).',
+          'demoCap' => 'media',
+        ], 413);
+      }
+    }
+
     // Sanitize filename to prevent path-traversal attacks
     $file['name'] = sanitize_file_name($file['name']);
 
@@ -7634,6 +8263,16 @@ HTML;
     $meta = wp_generate_attachment_metadata($attach_id, $uploaded['file']);
     wp_update_attachment_metadata($attach_id, $meta);
 
+    // §7.1 — Tag demo uploads with the session token and increment the per-session
+    // counter so they can be swept on session-cleanup and by the cron backstop.
+    if ($this->dn_demo_active()) {
+      update_post_meta($attach_id, '_dn_demo_session', $this->dn_demo_session_id());
+      update_post_meta($attach_id, '_dn_demo_uploaded_at', time());
+      $ck   = self::DEMO_KEY_PREFIX . $this->dn_demo_session_id() . '_mediacount';
+      $used = (int) get_transient($ck);
+      set_transient($ck, $used + 1, self::DEMO_TTL);
+    }
+
     $url = wp_get_attachment_url($attach_id);
     return new WP_REST_Response([
       'id'         => $attach_id,
@@ -7656,6 +8295,16 @@ HTML;
       $args['s'] = $search;
     }
 
+    // §7.1 — In demo, hide OTHER sessions' uploads: show the seed library
+    // (un-tagged attachments) plus this session's own uploads only.
+    if ($this->dn_demo_active()) {
+      $args['meta_query'] = [
+        'relation' => 'OR',
+        ['key' => '_dn_demo_session', 'compare' => 'NOT EXISTS'],
+        ['key' => '_dn_demo_session', 'value' => $this->dn_demo_session_id(), 'compare' => '='],
+      ];
+    }
+
     $query = new WP_Query($args);
     $items = array_map(function ($post) {
       return [
@@ -7674,6 +8323,15 @@ HTML;
       return new WP_REST_Response(['error' => 'Invalid id'], 400);
     }
 
+    // §7.1 — Demo sessions may only delete their OWN uploads; the shared seed
+    // library and other buyers' files are protected.
+    if ($this->dn_demo_active()) {
+      $owner = (string) get_post_meta($id, '_dn_demo_session', true);
+      if ($owner !== $this->dn_demo_session_id()) {
+        return new WP_REST_Response(['error' => 'Disabled in demo — you can only delete images you uploaded.'], 403);
+      }
+    }
+
     $result = wp_delete_attachment($id, true);
     if (!$result) {
       return new WP_REST_Response(['error' => 'Attachment not found or could not be deleted'], 404);
@@ -7689,7 +8347,20 @@ HTML;
     }
 
     $payload = $this->verify_token($token);
-    if (!$payload || empty($payload['sub'])) {
+    if (!$payload) {
+      return new WP_Error('dn_unauthorized', 'Invalid token', ['status' => 401]);
+    }
+
+    // §2A.4 — Scoped demo token: accepted only while demo mode is enabled.
+    if (!empty($payload['demo'])) {
+      if (!(bool) get_option(self::OPTION_DEMO_MODE, false)) {
+        return new WP_Error('dn_unauthorized', 'Demo token not accepted on this build', ['status' => 401]);
+      }
+      $this->is_demo_auth = true;
+      return true; // content caps granted via demo_grant_caps()
+    }
+
+    if (empty($payload['sub'])) {
       return new WP_Error('dn_unauthorized', 'Invalid token', ['status' => 401]);
     }
 
@@ -7740,7 +8411,25 @@ HTML;
     // resolved even when two different users share the same browser (one logged
     // into WP admin via cookie, the other sending a different JWT).
     $payload = $this->verify_token($token);
-    if (!$payload || empty($payload['sub'])) {
+    if (!$payload) {
+      return new WP_Error('dn_unauthorized', 'Invalid token', ['status' => 401]);
+    }
+
+    // ── §2A.4 — Scoped demo token ──────────────────────────────────────────
+    // Accepted ONLY while demo mode is enabled (a demo token replayed against a
+    // non-demo build is rejected). Grants a virtual identity with no real WP
+    // user; capabilities are limited by demo_grant_caps().
+    if (!empty($payload['demo'])) {
+      if (!(bool) get_option(self::OPTION_DEMO_MODE, false)) {
+        return new WP_Error('dn_unauthorized', 'Demo token not accepted on this build', ['status' => 401]);
+      }
+      $this->is_demo_auth = true;
+      // Leave the current user as 0 (no real account); demo_grant_caps() grants
+      // manage_options for this request only.
+      return true;
+    }
+
+    if (empty($payload['sub'])) {
       return new WP_Error('dn_unauthorized', 'Invalid token', ['status' => 401]);
     }
 
@@ -7751,6 +8440,41 @@ HTML;
 
     wp_set_current_user($user->ID);
     return true;
+  }
+
+  /**
+   * §2A — Capability filter for the scoped demo token. Grants ONLY
+   * manage_options (enough to drive the admin REST API) and explicitly denies
+   * account/plugin/theme management. Active only for a request authenticated by
+   * a demo token while demo mode is enabled. A no-op for every normal request.
+   */
+  public function demo_grant_caps($allcaps, $caps, $args, $user) {
+    if (!$this->is_demo_auth) {
+      return $allcaps;
+    }
+    // Hard-deny anything that could escalate or damage the install, even if
+    // some endpoint maps a request onto these caps.
+    $deny = [
+      'create_users', 'edit_users', 'delete_users', 'promote_users', 'list_users',
+      'remove_users', 'add_users', 'edit_plugins', 'install_plugins', 'activate_plugins',
+      'delete_plugins', 'update_plugins', 'edit_themes', 'install_themes', 'switch_themes',
+      'update_themes', 'delete_themes', 'edit_files', 'update_core', 'unfiltered_html',
+    ];
+    foreach ($deny as $d) {
+      $allcaps[$d] = false;
+    }
+    // Grant just enough to pass admin_required (manage_options) and to create /
+    // edit the content the buyer is demoing. All writes land in the per-session
+    // overlay; nothing here touches real data or global config.
+    foreach ([
+      'manage_options', 'read',
+      'edit_posts', 'edit_others_posts', 'edit_published_posts', 'publish_posts',
+      'delete_posts', 'delete_others_posts', 'delete_published_posts',
+      'upload_files', 'edit_pages', 'publish_pages',
+    ] as $grant) {
+      $allcaps[$grant] = true;
+    }
+    return $allcaps;
   }
 
   public function add_cors_headers($served, $result, $request, $server) {
@@ -7881,6 +8605,29 @@ HTML;
       return trim($matches[1]);
     }
     return null;
+  }
+
+  /**
+   * §2A — Mint a demo-scoped JWT: sub=0 (no real user), demo=true. Verified and
+   * accepted only while demo mode is enabled (see authenticate_rest_request).
+   */
+  private function generate_demo_token(): string {
+    $header = ['alg' => 'HS256', 'typ' => 'JWT'];
+    $payload = [
+      'iss'  => get_site_url(),
+      'iat'  => time(),
+      'exp'  => time() + self::DEMO_TTL,
+      'sub'  => 0,
+      'demo' => true,
+    ];
+    $segments = [
+      $this->base64url_encode(json_encode($header)),
+      $this->base64url_encode(json_encode($payload)),
+    ];
+    $signing_input = implode('.', $segments);
+    $signature = hash_hmac('sha256', $signing_input, $this->get_secret(), true);
+    $segments[] = $this->base64url_encode($signature);
+    return implode('.', $segments);
   }
 
   private function generate_token(int $user_id): string {
@@ -8099,8 +8846,27 @@ HTML;
     string $role         = '',
     string $session_id   = ''
   ): void {
-    $this->maybe_create_activity_table();
     $raw_ip = $_SERVER['REMOTE_ADDR'] ?? '';
+    // §2.2 — In demo mode the activity log is session-scoped: write to a
+    // per-session transient and NEVER touch the real dn_activity_log table, so
+    // the buyer sees only their own actions and the real log stays clean.
+    if ($this->dn_demo_active()) {
+      $this->dn_demo_log_append([
+        'id'          => 0,
+        'userId'      => $user_id,
+        'displayName' => $display_name,
+        'role'        => $role,
+        'action'      => $action,
+        'label'       => $label ?: $action,
+        'details'     => $details,
+        'ip'          => $this->anonymize_ip($raw_ip),
+        'userAgent'   => substr($_SERVER['HTTP_USER_AGENT'] ?? '', 0, 500),
+        'sessionId'   => $session_id,
+        'createdAt'   => gmdate('Y-m-d H:i:s'),
+      ]);
+      return;
+    }
+    $this->maybe_create_activity_table();
     $this->db_insert_entry(
       $user_id,
       $display_name,
@@ -8127,6 +8893,12 @@ HTML;
 
   /** Log the currently authenticated REST-request user. */
   private function log_auth_user_action(string $action, string $label = '', array $details = []): void {
+    // §2A/§2.2 — the scoped demo token has no real user; log the demo identity
+    // into the session-scoped log so the activity view still reflects actions.
+    if ($this->is_demo_auth) {
+      $this->log_activity($action, $label ?: $action, $details, 0, $this->demo_identity['name'], $this->demo_identity['role']);
+      return;
+    }
     $user = wp_get_current_user();
     if (!$user || !$user->ID) return;
     $roles = (array) $user->roles;
@@ -8162,6 +8934,11 @@ HTML;
     $from_f    = sanitize_text_field((string) ($request->get_param('from')    ?? ''));
     $to_f      = sanitize_text_field((string) ($request->get_param('to')      ?? ''));
     $search_f  = sanitize_text_field((string) ($request->get_param('search')  ?? ''));
+
+    // §2.2 — Demo mode reads the session-scoped log (never the real table).
+    if ($this->dn_demo_active()) {
+      return $this->demo_list_activity_log($page, $per_page, $sort_by, $sort_dir, $action_f, $user_f, $from_f, $to_f, $search_f);
+    }
 
     // Build WHERE
     $where  = '1=1';
@@ -8228,8 +9005,72 @@ HTML;
     ], 200);
   }
 
+  /**
+   * §2.2 — In-memory filter/sort/paginate of the session activity log, matching
+   * the shape of list_activity_log()'s response.
+   */
+  private function demo_list_activity_log(
+    int $page, int $per_page, string $sort_by, string $sort_dir,
+    string $action_f, int $user_f, string $from_f, string $to_f, string $search_f
+  ): WP_REST_Response {
+    $rows = $this->dn_demo_log_read();
+
+    $rows = array_values(array_filter($rows, static function ($r) use ($action_f, $user_f, $from_f, $to_f, $search_f) {
+      if ($action_f !== '' && (string) ($r['action'] ?? '') !== $action_f) return false;
+      if ($user_f   !== 0  && (int) ($r['userId'] ?? 0) !== $user_f) return false;
+      $created = (string) ($r['createdAt'] ?? '');
+      if ($from_f !== '' && $created < ($from_f . ' 00:00:00')) return false;
+      if ($to_f   !== '' && $created > ($to_f . ' 23:59:59')) return false;
+      if ($search_f !== '' && stripos((string) ($r['displayName'] ?? ''), $search_f) === false) return false;
+      return true;
+    }));
+
+    $map = ['created_at' => 'createdAt', 'user_id' => 'userId', 'action' => 'action', 'display_name' => 'displayName'];
+    $field = $map[$sort_by] ?? 'createdAt';
+    usort($rows, static function ($a, $b) use ($field, $sort_dir) {
+      $av = $a[$field] ?? ''; $bv = $b[$field] ?? '';
+      $cmp = ($av == $bv) ? 0 : (($av < $bv) ? -1 : 1);
+      return $sort_dir === 'ASC' ? $cmp : -$cmp;
+    });
+
+    $total  = count($rows);
+    $offset = ($page - 1) * $per_page;
+    $slice  = array_slice($rows, $offset, $per_page);
+    foreach ($slice as &$r) {
+      $r['details'] = is_array($r['details'] ?? null) ? $r['details'] : (object) [];
+      if (!empty($r['createdAt'])) {
+        try { $r['createdAt'] = (new \DateTime((string) $r['createdAt'], new \DateTimeZone('UTC')))->format('c'); }
+        catch (\Throwable $e) { /* leave as-is */ }
+      }
+    }
+    unset($r);
+
+    // Distinct users present in the session log for the filter dropdown.
+    $users = [];
+    foreach ($rows as $r) {
+      $uid = (int) ($r['userId'] ?? 0);
+      $users[$uid] = ['userId' => $uid, 'displayName' => (string) ($r['displayName'] ?? '')];
+    }
+
+    return new WP_REST_Response([
+      'total'    => $total,
+      'page'     => $page,
+      'per_page' => $per_page,
+      'sort_by'  => $sort_by,
+      'sort_dir' => $sort_dir,
+      'entries'  => $slice,
+      'users'    => array_values($users),
+    ], 200);
+  }
+
   /** DELETE /activity-log */
   public function clear_activity_log(WP_REST_Request $request): WP_REST_Response {
+    // §2.2 / §2.5 — Demo sessions may only clear their OWN session log; the real
+    // dn_activity_log table is never truncated from a demo session.
+    if ($this->dn_demo_active()) {
+      delete_transient($this->dn_demo_log_key());
+      return new WP_REST_Response(['cleared' => true, 'scope' => 'session'], 200);
+    }
     $this->maybe_create_activity_table();
     global $wpdb;
     $table = $wpdb->prefix . self::DB_TABLE_SUFFIX;
@@ -8304,7 +9145,24 @@ HTML;
         }
       }
 
-      $this->db_insert_entry($user->ID, $display, $role, $action, $label, $details, $safe_ip, $ua, $session_id, $created_at);
+      // §2.2 — demo sessions write to their own session log, not the real table.
+      if ($this->dn_demo_active()) {
+        $this->dn_demo_log_append([
+          'id'          => 0,
+          'userId'      => $user->ID,
+          'displayName' => $display,
+          'role'        => $role,
+          'action'      => $action,
+          'label'       => $label ?: $action,
+          'details'     => $details,
+          'ip'          => $safe_ip,
+          'userAgent'   => $ua,
+          'sessionId'   => $session_id,
+          'createdAt'   => $created_at ?: gmdate('Y-m-d H:i:s'),
+        ]);
+      } else {
+        $this->db_insert_entry($user->ID, $display, $role, $action, $label, $details, $safe_ip, $ua, $session_id, $created_at);
+      }
       $logged++;
     }
 
@@ -8323,6 +9181,13 @@ HTML;
    * resource is validated against a strict whitelist pattern before use.
    */
   private function lock_transient_key(string $resource): string {
+    // §2.1 — In demo mode namespace the lock resource with the session token so
+    // buyers never collide on the same lock. Two tabs sharing a token (e.g. a
+    // duplicated tab) still collide → the two-tab lock banner remains demoable
+    // within the buyer's own session.
+    if ($this->dn_demo_active()) {
+      $resource = $this->dn_demo_session_id() . ':' . $resource;
+    }
     // Transient keys are limited to 172 chars; resource is already short-safe.
     return 'dn_lock_' . substr(md5($resource), 0, 12);
   }
@@ -8432,6 +9297,13 @@ HTML;
     $existing      = get_transient($transient_key);
     $force         = $request->get_param('force') === '1';
 
+    // §2.5 — Demo sessions may never force-release a lock (locks are already
+    // namespaced per session, so a force could only ever target the buyer's own
+    // lock, but we disable it explicitly to keep the "destructive" surface off).
+    if ($force && $this->dn_demo_active()) {
+      $force = false;
+    }
+
     // Only the lock holder (or an admin using ?force=1) may release.
     if ($existing && is_array($existing)) {
       if (!$force && (int) $existing['userId'] !== $user->ID) {
@@ -8473,11 +9345,33 @@ HTML;
     return new WP_REST_Response(['renewed' => true, 'expiresAt' => $existing['expiresAt']], 200);
   }
 
+  /**
+   * Read the active-locks index. §2.1 — in demo mode this is a per-session
+   * transient so a buyer only ever sees/prunes their OWN locks; outside demo it
+   * is the global dn_lock_index option (unchanged behaviour).
+   */
+  private function get_lock_index(): array {
+    if ($this->dn_demo_active()) {
+      $idx = get_transient(self::DEMO_KEY_PREFIX . $this->dn_demo_session_id() . '_lockindex');
+      return is_array($idx) ? $idx : [];
+    }
+    $idx = get_option('dn_lock_index', []);
+    return is_array($idx) ? $idx : [];
+  }
+
+  /** Persist the active-locks index (session transient in demo, option otherwise). */
+  private function set_lock_index(array $index): void {
+    if ($this->dn_demo_active()) {
+      set_transient(self::DEMO_KEY_PREFIX . $this->dn_demo_session_id() . '_lockindex', $index, self::DEMO_TTL);
+      return;
+    }
+    update_option('dn_lock_index', $index, false);
+  }
+
   /** GET /locks — list all currently active locks (admin only). */
   public function list_locks(WP_REST_Request $request): WP_REST_Response {
     $now        = time();
-    $lock_keys  = get_option('dn_lock_index', []);
-    if (!is_array($lock_keys)) $lock_keys = [];
+    $lock_keys  = $this->get_lock_index();
 
     $active = [];
     $prune  = [];
@@ -8498,26 +9392,25 @@ HTML;
     // Prune stale keys from the index
     if ($prune) {
       $clean = array_values(array_diff($lock_keys, $prune));
-      update_option('dn_lock_index', $clean, false);
+      $this->set_lock_index($clean);
     }
 
     return new WP_REST_Response(['locks' => $active], 200);
   }
 
   private function register_lock_key(string $key): void {
-    $index = get_option('dn_lock_index', []);
-    if (!is_array($index)) $index = [];
+    $index = $this->get_lock_index();
     if (!in_array($key, $index, true)) {
       $index[] = $key;
-      update_option('dn_lock_index', $index, false);
+      $this->set_lock_index($index);
     }
   }
 
   private function unregister_lock_key(string $key): void {
-    $index = get_option('dn_lock_index', []);
-    if (!is_array($index)) return;
+    $index = $this->get_lock_index();
+    if (empty($index)) return;
     $index = array_values(array_filter($index, fn($k) => $k !== $key));
-    update_option('dn_lock_index', $index, false);
+    $this->set_lock_index($index);
   }
 }
 

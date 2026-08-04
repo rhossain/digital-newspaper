@@ -1,5 +1,7 @@
 import { HttpInterceptorFn, HttpRequest, HttpResponse, HttpEvent } from '@angular/common/http';
 import { Observable, of, tap } from 'rxjs';
+import { inject } from '@angular/core';
+import { DemoService } from '../services/demo.service';
 
 /**
  * In-memory HTTP response cache for the Digital Newspaper public read endpoints.
@@ -203,7 +205,12 @@ export const httpCacheInterceptor: HttpInterceptorFn = (
     return next(req);
   }
 
-  const cacheKey = toCacheKey(req.url);
+  // §3.7 — namespace the cache key by the demo session token so an edited
+  // session's cached reads never collide with the golden/other sessions.
+  // No-op on non-demo builds (empty prefix).
+  const demo = inject(DemoService);
+  const nsPrefix = demo.enabled && demo.hasOverrides() ? `demo:${demo.getToken()}|` : '';
+  const cacheKey = nsPrefix + toCacheKey(req.url);
   const cached = _cache.get(cacheKey);
 
   // ── Cache hit (fresh) ────────────────────────────────────────────────────

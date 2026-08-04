@@ -11,6 +11,7 @@ import { SettingsService } from './settings.service';
 import { DateIndexService } from './date-index.service';
 import { EditionCacheService } from './edition-cache.service';
 import { BootstrapStateService, InlineBootstrapState } from './bootstrap-state.service';
+import { DemoService } from './demo.service';
 
 export interface NewsSection {
   id: string;
@@ -362,6 +363,12 @@ export class NewspaperDataService {
 
   private readonly platformId = inject(PLATFORM_ID);
   private get isBrowser(): boolean { return isPlatformBrowser(this.platformId); }
+  private readonly demo = inject(DemoService);
+  /** §3.8 — edited demo sessions probe the live REST version (session dataVersion),
+   *  not the golden static version.json which would never reflect their edits. */
+  private get _versionProbeUrl(): string {
+    return (this.demo.enabled && this.demo.hasOverrides()) ? this.versionUrl : this.versionStaticUrl;
+  }
 
   constructor(
     private http: HttpClient,
@@ -684,7 +691,7 @@ export class NewspaperDataService {
     this._inlineRevalidated = true;
 
     const run = () => {
-      this.http.get<{ dataVersion: number }>(this.versionStaticUrl).pipe(
+      this.http.get<{ dataVersion: number }>(this._versionProbeUrl).pipe(
         catchError(() => this.http.get<{ dataVersion: number }>(this.versionUrl)),
         catchError(() => of({ dataVersion: 0 })),
       ).subscribe(res => {
@@ -809,7 +816,9 @@ export class NewspaperDataService {
     // (settings.json / dates.json / version.json) with REST fallback — no PHP on
     // the initial paint. The admin editor (lightFirst=false) always reads the
     // authoritative REST endpoints so it can never save from a stale snapshot.
-    const preferStatic = lightFirst;
+    // §3.8 — an edited demo session must not prefer the golden static snapshots
+    // (settings/dates/version) or it would mask the buyer's edits.
+    const preferStatic = lightFirst && !(this.demo.enabled && this.demo.hasOverrides());
     const version$ = preferStatic
       ? this.http.get<{ dataVersion: number }>(this.versionStaticUrl).pipe(
           catchError(() => this.http.get<{ dataVersion: number }>(this.versionUrl)),

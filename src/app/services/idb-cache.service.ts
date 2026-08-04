@@ -1,6 +1,7 @@
-import { Injectable } from '@angular/core';
+import { Injectable, inject } from '@angular/core';
 import { openDB, IDBPDatabase } from 'idb';
 import { NewspaperEdition } from './newspaper-data.service';
+import { DemoService } from './demo.service';
 
 /**
  * IndexedDB-backed persistent cache for per-date edition payloads.
@@ -44,6 +45,21 @@ const STORE_NAME = 'editions';
 export class IdbCacheService {
 
   private _dbPromise: Promise<IDBPDatabase> | null = null;
+  private readonly demo = inject(DemoService);
+
+  /**
+   * §3.4 — In demo mode the edition cache is namespaced per session token so a
+   * buyer's cached (possibly edited) editions never leak to another buyer's tab
+   * and repeat-load speed stays real WITHIN a session. Non-demo builds use the
+   * shared golden cache exactly as before.
+   */
+  private _dbName(): string {
+    if (this.demo.enabled) {
+      const token = this.demo.getToken();
+      return token ? `${DB_NAME}-demo-${token}` : DB_NAME;
+    }
+    return DB_NAME;
+  }
 
   // ── DB access ──────────────────────────────────────────────────────────────
 
@@ -54,7 +70,7 @@ export class IdbCacheService {
   private _db(): Promise<IDBPDatabase> | null {
     if (!this._isAvailable()) return null;
     if (!this._dbPromise) {
-      this._dbPromise = openDB(DB_NAME, DB_VERSION, {
+      this._dbPromise = openDB(this._dbName(), DB_VERSION, {
         upgrade(db) {
           if (!db.objectStoreNames.contains(STORE_NAME)) {
             db.createObjectStore(STORE_NAME, { keyPath: 'date' });

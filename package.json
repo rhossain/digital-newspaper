@@ -10,6 +10,8 @@
     "compress": "node scripts/compress-dist.js",
     "build:staging": "ng build --configuration staging && node scripts/compress-dist.js",
     "serve:staging": "ng serve --configuration staging",
+    "build:demo": "ng build --configuration demo && node scripts/compress-dist.js",
+    "serve:demo": "ng serve --configuration demo",
     "watch": "ng build --watch --configuration development",
     "deploy": "node deploy.js",
     "webhook": "node webhook-server.js"

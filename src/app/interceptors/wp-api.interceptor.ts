@@ -1,4 +1,6 @@
 import { HttpInterceptorFn } from '@angular/common/http';
+import { inject } from '@angular/core';
+import { DemoService } from '../services/demo.service';
 
 /**
  * Intercepts every WordPress REST API request and applies WAF-bypass
@@ -66,6 +68,25 @@ export const wpApiInterceptor: HttpInterceptorFn = (req, next) => {
     return next(req);
   }
 
+  // ── Demo / Showcase Mode (§3.3, §3.8) ──────────────────────────────────────
+  // Attach the per-tab session token so every edit lands in the private,
+  // ephemeral server-side overlay. Gated so a clean (un-edited) session sends
+  // NO header on public read endpoints, keeping them CDN-shareable exactly as in
+  // production. Entirely inert on non-demo builds (demoService.enabled === false).
+  let demoHeaders: Record<string, string> | undefined;
+  const demo = inject(DemoService);
+  if (demo.enabled) {
+    const publicRead = isPublicReadEndpoint(req.url, req.method);
+    // Any mutating call marks the session as "has overrides" so subsequent
+    // reads reconcile against the session copy (stale-while-revalidate).
+    if (req.method !== 'GET') {
+      demo.markOverride();
+    }
+    if (demo.shouldAttachHeader(req.url, req.method, publicRead)) {
+      demoHeaders = { 'X-DN-Demo-Session': demo.getToken() };
+    }
+  }
+
   // Split off any existing query string before rewriting so we don't end up
   // with two '?' characters in the final URL.
   // e.g. /wp/wp-json/digital-newspaper/v1/data?_t=123
@@ -89,6 +110,7 @@ export const wpApiInterceptor: HttpInterceptorFn = (req, next) => {
     withCredentials: sendCredentials,
     setHeaders: {
       'X-Requested-With': 'XMLHttpRequest',
+      ...(demoHeaders ?? {}),
     },
   });
 

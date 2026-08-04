@@ -1,9 +1,10 @@
-import { Injectable, signal, Signal } from '@angular/core';
+import { Injectable, signal, Signal, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable, of } from 'rxjs';
 import { tap, map, catchError, timeout } from 'rxjs/operators';
 import { GlobalSettings } from './newspaper-data.service';
 import { WP_BASE_URL } from '../config';
+import { DemoService } from './demo.service';
 
 /**
  * Dedicated service for global settings (logo, social links, language, etc.).
@@ -59,6 +60,8 @@ export class SettingsService {
    */
   readonly settings: Signal<GlobalSettings> = this._settings.asReadonly();
 
+  private readonly demo = inject(DemoService);
+
   constructor(private readonly http: HttpClient) {}
 
   // ── Public API ─────────────────────────────────────────────────────────────
@@ -77,6 +80,12 @@ export class SettingsService {
    * @returns Observable<GlobalSettings> for callers that need to chain work.
    */
   fetch(preferStatic = false): Observable<GlobalSettings> {
+    // §3.8 — an edited demo session must not read the golden static snapshot
+    // (it would mask the buyer's settings changes). Force the authoritative REST
+    // read, which carries the demo session header.
+    if (this.demo.enabled && this.demo.hasOverrides()) {
+      preferStatic = false;
+    }
     // Authoritative REST read, with the original cached-fallback behaviour.
     const rest$ = this._get(this._endpoint).pipe(
       catchError(err => {

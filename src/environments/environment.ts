@@ -4,4 +4,6 @@
 export const environment = {
   production: false,
   wpBaseUrl: 'https://epaper.dailysangram.com/wp',
+  // Demo / Showcase Mode. OFF for normal builds — see environment.demo.ts.
+  demo: false,
 };

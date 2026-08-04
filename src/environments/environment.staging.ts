@@ -4,4 +4,5 @@
 export const environment = {
   production: true,
   wpBaseUrl: 'https://nepaper.dailysangram.com/wp',
+  demo: false,
 };

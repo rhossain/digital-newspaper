@@ -6,6 +6,7 @@ import { tap, map, catchError, switchMap, timeout } from 'rxjs/operators';
 import { NewspaperEdition } from './newspaper-data.service';
 import { WP_BASE_URL } from '../config';
 import { IdbCacheService } from './idb-cache.service';
+import { DemoService } from './demo.service';
 
 /**
  * Per-date edition cache with a four-layer storage hierarchy.
@@ -90,7 +91,19 @@ export class EditionCacheService {
   constructor(
     private readonly http: HttpClient,
     private readonly idbCache: IdbCacheService,
+    private readonly demo: DemoService,
   ) {}
+
+  /**
+   * §3.4/§3.8 — In a demo session that has made edits, the golden static
+   * snapshots would MASK the buyer's changes (they're flat files served by
+   * Apache with no demo header). Once the session has overrides we must read
+   * live from REST (which carries X-DN-Demo-Session and returns the session
+   * overlay). A clean/un-edited session still uses the fast static path.
+   */
+  private get _bypassStatic(): boolean {
+    return this.demo.enabled && this.demo.hasOverrides();
+  }
 
   // ── Public API ─────────────────────────────────────────────────────────────
 
@@ -174,6 +187,10 @@ export class EditionCacheService {
     if (lsEditions) {
       this._setMem(date, lsEditions);
       return of({ editions: lsEditions, light: false });
+    }
+    // §3.8 — edited demo sessions skip the golden light snapshot and read live.
+    if (this._bypassStatic) {
+      return this.getEditionsForDate(date).pipe(map(full => ({ editions: full, light: false })));
     }
     return this.http
       .get<{ editions: NewspaperEdition[] }>(`${this._staticBase}/${date}.light.json`)
@@ -310,6 +327,12 @@ export class EditionCacheService {
    * fall through to REST. Never throws.
    */
   private _tryStatic(date: string): Observable<NewspaperEdition[]> {
+    // §3.8 — edited demo sessions must not read the golden snapshot (it would
+    // hide their edits). Returning empty forces the REST fallback, which carries
+    // the demo session header and returns the buyer's overlay data.
+    if (this._bypassStatic) {
+      return of([] as NewspaperEdition[]);
+    }
     return this.http
       .get<{ date: string; editions: NewspaperEdition[]; dataVersion: number }>(
         `${this._staticBase}/${date}.json`,

@@ -1,8 +1,9 @@
-import { Injectable, signal, Signal } from '@angular/core';
+import { Injectable, signal, Signal, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable, of } from 'rxjs';
 import { tap, map, catchError, timeout } from 'rxjs/operators';
 import { WP_BASE_URL } from '../config';
+import { DemoService } from './demo.service';
 
 /**
  * Manages the list of available edition dates from `/data/dates`.
@@ -68,6 +69,8 @@ export class DateIndexService {
    */
   readonly latestDate: Signal<string> = this._latestDate.asReadonly();
 
+  private readonly demo = inject(DemoService);
+
   constructor(private readonly http: HttpClient) {}
 
   // ── Public API ─────────────────────────────────────────────────────────────
@@ -90,6 +93,11 @@ export class DateIndexService {
    * @returns Observable<string[]> — the sorted list of available dates.
    */
   fetch(preferStatic = false): Observable<string[]> {
+    // §3.8 — an edited demo session must read live REST (not the golden dates
+    // snapshot) so a newly-created date appears in navigation.
+    if (this.demo.enabled && this.demo.hasOverrides()) {
+      preferStatic = false;
+    }
     // Authoritative REST read, with the original "list unchanged" fallback.
     const rest$ = this._get(this._endpoint).pipe(
       catchError(err => {
