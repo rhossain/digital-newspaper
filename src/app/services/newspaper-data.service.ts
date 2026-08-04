@@ -11,6 +11,7 @@ import { SettingsService } from './settings.service';
 import { DateIndexService } from './date-index.service';
 import { EditionCacheService } from './edition-cache.service';
 import { BootstrapStateService, InlineBootstrapState } from './bootstrap-state.service';
+import { normalizePageLabelValue } from '../shared/utils/page-label.util';
 
 export interface NewsSection {
   id: string;
@@ -1435,9 +1436,9 @@ export class NewspaperDataService {
   getPageDisplayLabel(page: NewspaperPage, lang: string): string {
     if (page.pageLabels) {
       const label = page.pageLabels[lang];
-      if (label) return label;
+      if (label) return normalizePageLabelValue(label);
       const fallback = Object.values(page.pageLabels).find(v => v);
-      if (fallback) return fallback;
+      if (fallback) return normalizePageLabelValue(fallback);
     }
     return '';
   }

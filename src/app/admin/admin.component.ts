@@ -17,6 +17,7 @@ import { BulkXmlImportComponent } from './bulk-xml-import/bulk-xml-import.compon
 import { Observable, Subscription, Subject, of } from 'rxjs';
 import { map, switchMap, takeUntil } from 'rxjs/operators';
 import { resizeImageToWidth } from '../shared/utils/image-resize.util';
+import { normalizePageLabelValue } from '../shared/utils/page-label.util';
 
 @Component({
   selector: 'app-admin',
@@ -208,7 +209,7 @@ export class AdminComponent implements OnInit, OnDestroy {
     { bn: 'খেলার খবর',   en: 'Sports'         },
     { bn: 'শেষের পাতা',   en: 'Last Page'     },
     { bn: 'নীল সবুজের হাট', en: 'For Kids'   },
-    { bn: 'বিষেশ সংখ্যা', en: 'Supplement'   },
+    { bn: 'বিশেষ সংখ্যা', en: 'Supplement'   },
     { bn: 'ঈদুল ফিতর',   en: 'Eid al-Fitr'   },
     { bn: 'ঈদুল আজহা',   en: 'Eid al-Adha'   },
   ];
@@ -1162,8 +1163,8 @@ export class AdminComponent implements OnInit, OnDestroy {
 
   /** Display label for a page in the admin UI (EN / BN side-by-side). */
   getPageLabel(page: NewspaperPage): string {
-    const en = page.pageLabels?.['en'] ?? '';
-    const bn = page.pageLabels?.['bn'] ?? '';
+    const en = normalizePageLabelValue(page.pageLabels?.['en']);
+    const bn = normalizePageLabelValue(page.pageLabels?.['bn']);
     if (en || bn) {
       return en && bn ? `${en} / ${bn}` : en || bn;
     }
@@ -1405,9 +1406,9 @@ export class AdminComponent implements OnInit, OnDestroy {
 
   newPage() {
     this.isEditingPage = true;
-    // Pick the first unused ID in the 1-15 range; fall back to 1 if all are taken.
+    // Pick the first unused ID in the 1-30 range; fall back to 1 if all are taken.
     const usedIds = new Set(this.pages.map(p => p.id));
-    const firstAvailable = Array.from({ length: 15 }, (_, i) => i + 1).find(id => !usedIds.has(id)) ?? 1;
+    const firstAvailable = Array.from({ length: 30 }, (_, i) => i + 1).find(id => !usedIds.has(id)) ?? 1;
     this.pageForm = {
       id: firstAvailable,
       thumbnail: '',
@@ -1437,7 +1438,16 @@ export class AdminComponent implements OnInit, OnDestroy {
         return;
       }
       this.isEditingPage = true;
-      this.pageForm = { ...page, pageLabels: { en: page.pageLabels?.['en'] ?? '', bn: page.pageLabels?.['bn'] ?? '' } };
+      // Legacy labels are corrected as the page is loaded into the form, so the
+      // Page Name dropdown resolves to its predefined option instead of falling
+      // back to "Custom" — and the corrected spelling is persisted on next save.
+      this.pageForm = {
+        ...page,
+        pageLabels: {
+          en: normalizePageLabelValue(page.pageLabels?.['en']),
+          bn: normalizePageLabelValue(page.pageLabels?.['bn']),
+        },
+      };
       this.initPageNameSelects();
       this.fullImageInputMode = 'file';
       this.fullImageHiResInputMode = 'url';
@@ -3941,7 +3951,7 @@ export class AdminComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * Returns options for the Page ID dropdown (1–15).
+   * Returns options for the Page ID dropdown (1–30).
    * Options already used by other pages on the same date/edition are flagged disabled.
    * When editing an existing page the current page's own ID is excluded from the
    * "used" set so it doesn't appear as taken in the (disabled) select.
@@ -3952,7 +3962,7 @@ export class AdminComponent implements OnInit, OnDestroy {
     if (this.isEditingExistingPage() && this.pageForm.id) {
       usedIds.delete(this.pageForm.id);
     }
-    return Array.from({ length: 15 }, (_, i) => ({
+    return Array.from({ length: 30 }, (_, i) => ({
       id: i + 1,
       disabled: usedIds.has(i + 1)
     }));
