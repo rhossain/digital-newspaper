@@ -36,7 +36,7 @@ const zlib = require('zlib');
 // are already compressed and are intentionally excluded. This set is kept in
 // lock-step with the rewrite/header rules in src/.htaccess — only files those
 // rules can serve are compressed, so no orphan .br/.gz are produced.
-const COMPRESSIBLE_EXT = new Set(['.js', '.mjs', '.css', '.json', '.svg', '.webmanifest']);
+const COMPRESSIBLE_EXT = new Set(['.js', '.mjs', '.css', '.json', '.svg', '.webmanifest', '.html']);
 
 // Files below this size don't benefit enough to justify the extra request shape.
 const MIN_BYTES = 1024;

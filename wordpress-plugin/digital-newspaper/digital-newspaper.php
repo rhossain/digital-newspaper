@@ -1856,7 +1856,17 @@ HTACCESS;
     // content negotiation so LiteSpeed — which won't gzip application/json on
     // the fly — still delivers a small payload. Best-effort; failures are
     // ignored (the plain .json remains the fallback).
-    if (substr($absPath, -5) === '.json') {
+    // HTML is included alongside JSON because maybe_rewrite_index_html() rewrites
+    // the served app shell through this method. Without it, the .br/.gz siblings
+    // produced by the last `npm run build` would keep being served by the
+    // .htaccess negotiation INSTEAD of the freshly rewritten shell.
+    $ext = strtolower((string) pathinfo($absPath, PATHINFO_EXTENSION));
+    if ($ext === 'json' || $ext === 'html') {
+      // Delete first, write second. A stale sibling next to fresh content is
+      // worse than no sibling at all: the negotiation would serve the stale one,
+      // whereas a missing one simply falls back to the plain file we just wrote.
+      @unlink($absPath . '.gz');
+      @unlink($absPath . '.br');
       if (function_exists('gzencode')) {
         $gz = @gzencode($contents, 6);
         if ($gz !== false) { $this->atomic_write($absPath . '.gz', $gz); }

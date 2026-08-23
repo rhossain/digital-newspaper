@@ -74,26 +74,30 @@ Every item carries a **Done when** line. If you can't tick it, the item isn't fi
 
 ### The LCP chain — strict order
 
-- [ ] **P1-1 · Add `.html` to the compression path** — `S`
+- [x] **P1-1 · Add `.html` to the compression path** — `S`
   Three coordinated changes: `COMPRESSIBLE_EXT` in `scripts/compress-dist.js:39`; the `html` alternation in `.htaccess:36` and `:39`; and a `<FilesMatch "\.html\.(?:br|gz)$">` block setting `Content-Type: text/html` and `Cache-Control: no-cache` (the existing `^index(\.csr)?\.html$` match at `:120` will **not** match `index.csr.html.br`).
   **Done when:** `curl -sI -H 'Accept-Encoding: br' <site>/ | grep -i content-encoding` returns `br`.
 
-- [ ] **P1-2 · Teach `atomic_write()` to compress `.html`** — `S`
+  **Status: DONE** (23 Aug 2026) — `.html` added to `compress-dist.js`, to both `.htaccess` rewrite alternations, and to the `Content-Encoding`/`Vary` blocks; a new `*.html.(br|gz)` block sets `Content-Type: text/html` **and repeats `Cache-Control: no-cache`** (the existing `^index(\.csr)?\.html$` block does not match `.br`, and a stale-cached shell is the blank-page failure). `E=no-gzip:1` added so the server cannot re-compress already-compressed bytes — the existing `SetEnvIf` only sees the original request URI and cannot cover an internal rewrite. No duplicated fallback rules were needed: mod_rewrite re-runs the ruleset on the rewritten URI, so `/` and SPA routes reach the negotiation on the second pass; on a host that does not re-enter, nothing matches and the plain shell is served.
+- [x] **P1-2 · Teach `atomic_write()` to compress `.html`** — `S`
   `digital-newspaper.php:1839` only writes `.br`/`.gz` siblings for `.json`, but `maybe_rewrite_index_html()` calls it on a `.html` path at `:2161`.
   ⚠ **blocked by** P1-1.
   **Why:** without this, the stale `.br` from the last `npm run build` is served *instead of* the freshly-inlined HTML — a silent correctness bug the moment both features are on.
   **Done when:** after a snapshot regeneration, the served HTML contains the current `dn-initial-state` payload, not the previous build's.
 
-- [ ] **P1-3 · Defer `EditionCacheService._persistAll` off the boot path** — `S`
+  **Status: DONE** (23 Aug 2026) — switched from a `substr(-5) === '.json'` test to a `pathinfo()` extension check covering `json` and `html`. Siblings are now **deleted before** the fresh ones are written: a stale `.br` beside fresh content is worse than none, because the negotiation would serve the stale one whereas a missing one falls back to the plain file. This also fixes the same latent bug for JSON. Verified no runaway recursion on `.gz`/`.br` paths.
+- [x] **P1-3 · Defer `EditionCacheService._persistAll` off the boot path** — `S`
   Wrap in `requestIdleCallback` (with a `setTimeout` fallback) at `edition-cache.service.ts:213, 322, 345`.
   **Why:** harmless today, but P1-4 moves this synchronous ~50 KB `JSON.stringify` + `localStorage.setItem` into the service constructor, before first paint. **Do this before flipping the flag, not after.**
   **Done when:** no synchronous `localStorage` write occurs during `NewspaperDataService` construction.
 
-- [ ] **P1-4 · Resolve the `epaper` vs `nepaper` contradiction** — `S`
+  **Status: DONE** (23 Aug 2026) — added `_persistAllDeferred()` (requestIdleCallback with a setTimeout fallback and an SSR guard) and switched all three call sites. The in-memory cache is still set synchronously, so nothing a render depends on changed.
+- [x] **P1-4 · Resolve the `epaper` vs `nepaper` contradiction** — `S`
   `src/app/config.ts:8` says production is `nepaper`; `environment.prod.ts:7` says `epaper`. Determine the deployed WordPress `home_url()` and make all three agree.
   **Why:** the plugin writes preload hrefs normalised to `home_url()`; Angular's `resolveImageUrl()` rewrites to `wpBaseUrl`'s origin. **If they disagree, every reader double-downloads the full page image once P1-5 is on.**
   **Done when:** the stale comment is corrected and `home_url()`, `wpBaseUrl` and `canonicalOrigin` all name the same host.
 
+  **Status: DONE** (23 Aug 2026) — the *code* was already correct: `environment.ts` and `environment.prod.ts` both point at epaper, `environment.staging.ts` at nepaper. Only the comment in `config.ts` was wrong. Corrected, with the staging line added and the grep command for checking which host a built bundle targets. No behaviour change.
 - [ ] **P1-5 · Turn on the four plugin flags** — `S`
   `OPTION_STATIC_SNAPSHOTS`, `OPTION_INLINE_INDEX`, `OPTION_PRELOAD_LCP`, `OPTION_UPLOADS_CACHE` (`digital-newspaper.php:394-397`, all default `false`).
   ⚠ **blocked by** P1-1, P1-2, P1-3, P1-4.

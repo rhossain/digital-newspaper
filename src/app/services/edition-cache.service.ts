@@ -213,7 +213,7 @@ export class EditionCacheService {
       // Only seed if not already in cache (don't overwrite a fresh HTTP entry)
       if (!this._memCache.has(date)) {
         this._setMem(date, editions);
-        this._persistAll(date, editions);
+        this._persistAllDeferred(date, editions);
       }
     });
   }
@@ -320,7 +320,7 @@ export class EditionCacheService {
         tap(editions => {
           if (editions.length > 0) {
             this._setMem(date, editions);
-            this._persistAll(date, editions);
+            this._persistAllDeferred(date, editions);
           }
         }),
         catchError(() => of([] as NewspaperEdition[])),
@@ -348,7 +348,7 @@ export class EditionCacheService {
         map(res => Array.isArray(res.editions) ? res.editions : []),
         tap(editions => {
           this._setMem(date, editions);
-          this._persistAll(date, editions);
+          this._persistAllDeferred(date, editions);
         }),
         catchError(err => {
           console.warn(
@@ -444,6 +444,28 @@ export class EditionCacheService {
    * Past dates continue to be persisted to both localStorage (permanent,
    * no TTL) and IndexedDB (overflow backstop for large datasets).
    */
+  /**
+   * Schedule _persistAll() off the critical path.
+   *
+   * Persisting an edition is a synchronous JSON.stringify plus localStorage
+   * write of ~50 KB — 5-20 ms of blocking main-thread work on a low-end phone.
+   * The in-memory cache set alongside it is what the first paint actually reads;
+   * persistence is purely a next-visit optimisation, so it has no business
+   * running before the page has painted.
+   *
+   * This matters most once the inline-bootstrap flag is enabled, because
+   * seedFromLoadedData() then runs inside NewspaperDataService's constructor —
+   * i.e. during dependency injection, before anything renders at all.
+   */
+  private _persistAllDeferred(date: string, editions: NewspaperEdition[]): void {
+    if (!this.isBrowser) return; // SSR — nothing to persist
+    const ric = (window as unknown as {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+    }).requestIdleCallback;
+    if (typeof ric === 'function') ric(() => this._persistAll(date, editions), { timeout: 2000 });
+    else setTimeout(() => this._persistAll(date, editions), 0);
+  }
+
   private _persistAll(date: string, editions: NewspaperEdition[]): void {
     if (!editions.length) return;
     // localStorage: all dates (TTL enforced for today inside _persistToLocalStorage).
