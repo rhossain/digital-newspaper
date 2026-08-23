@@ -4592,6 +4592,171 @@ HTML;
     ]);
   }
 
+
+  // ── Settings sanitisation (security) ─────────────────────────────────────
+  // GlobalSettings is echoed to every public reader via GET /data/settings.
+  // Exactly ONE key — headScripts — reaches an HTML/script sink in the Angular
+  // app: app.component.ts injectHeadScripts() assigns it to innerHTML and then
+  // re-creates the <script> nodes into <head>. That is the field's documented
+  // purpose (analytics snippets), so it cannot be escaped — it must be gated.
+  // Every other settings value is rendered through Angular interpolation or
+  // attribute binding and is escaped by Angular's own sanitiser.
+  //
+  // Hence two rules:
+  //   1. headScripts may only be CHANGED by a user trusted with raw HTML
+  //      (manage_options or unfiltered_html).
+  //   2. Every other value is type-normalised on the way in. This is defence
+  //      in depth, not the primary control, so it is deliberately conservative:
+  //      it must never alter a legitimate value. Bools/ints/floats/null pass
+  //      through untouched, and a non-URL-looking string in a URL field is left
+  //      as text rather than being rewritten.
+
+  /** Settings keys whose value is a URL, at any nesting depth. */
+  private const SETTINGS_URL_KEYS = [
+    'url', 'link', 'website', 'favicon', 'headerAdBanner', 'footerAdBanner',
+    'facebook', 'twitter', 'linkedin', 'whatsapp', 'instagram', 'youtube',
+  ];
+
+  /** Settings keys whose value may legitimately contain newlines. */
+  private const SETTINGS_MULTILINE_KEYS = [
+    'maintenanceMessage', 'line1', 'line2', 'tagline', 'taglineBengali',
+    'metaDescription',
+  ];
+
+  /**
+   * Sanitise a settings value that is expected to be a URL.
+   *
+   * esc_url_raw() is only applied when the value actually looks like a URL.
+   * Some fields legitimately hold something else — socialLinks.whatsapp is
+   * often a bare phone number — and esc_url_raw() would rewrite "8801712345678"
+   * to "http://8801712345678". A value with a scheme still goes through
+   * esc_url_raw(), which drops "javascript:" (not an allowed protocol) while
+   * preserving "tel:", "mailto:" and query strings with raw "&".
+   */
+  private function sanitize_settings_url(string $value): string {
+    $trimmed = trim($value);
+    if ($trimmed === '') {
+      return '';
+    }
+    if (!preg_match('#^(?:[a-z][a-z0-9+.\-]*:|//|/|\#|\?)#i', $trimmed)) {
+      return sanitize_text_field($value);
+    }
+    return esc_url_raw($trimmed);
+  }
+
+  /**
+   * Recursively normalise a settings subtree.
+   *
+   * NOTE: headScripts must never be passed to this method — it is handled
+   * separately by guard_and_sanitize_settings().
+   *
+   * @param mixed  $value
+   * @param string $key   The key $value was stored under, for type dispatch.
+   * @return mixed
+   */
+  private function sanitize_settings_tree($value, string $key = '') {
+    // Scalars carrying no markup risk pass through untouched so that a
+    // legitimate save round-trips byte for byte.
+    if (is_bool($value) || is_int($value) || is_float($value) || $value === null) {
+      return $value;
+    }
+
+    if (is_array($value)) {
+      $out = [];
+      foreach ($value as $k => $v) {
+        if (is_int($k)) {
+          $out[$k] = $this->sanitize_settings_tree($v, $key);
+          continue;
+        }
+        // Nothing in GlobalSettings uses a key outside this character set;
+        // rejecting the rest keeps junk out of the stored option.
+        if (!is_string($k) || !preg_match('/^[A-Za-z0-9_\-]{1,64}$/', $k)) {
+          continue;
+        }
+        $out[$k] = $this->sanitize_settings_tree($v, $k);
+      }
+      return $out;
+    }
+
+    if (!is_string($value)) {
+      // Objects and resources have no place in this option.
+      return '';
+    }
+
+    if (in_array($key, self::SETTINGS_URL_KEYS, true)) {
+      return $this->sanitize_settings_url($value);
+    }
+    if (in_array($key, self::SETTINGS_MULTILINE_KEYS, true)) {
+      return sanitize_textarea_field($value);
+    }
+    return sanitize_text_field($value);
+  }
+
+  /**
+   * Validate and sanitise a client-supplied GlobalSettings array.
+   *
+   * Call this at every REST boundary that accepts settings from a client —
+   * currently patch_settings_endpoint() and post_data_endpoint_inner().  It is
+   * deliberately NOT called inside save_data(), because save_data() also runs
+   * on internal paths (atomic page/section writes, restore) where the settings
+   * come from storage rather than from a request, and where there may be no
+   * current user to check a capability against.
+   *
+   * @param array $incoming Raw settings from the request body.
+   * @return array|WP_Error Sanitised settings, or a 403 WP_Error when the
+   *                        caller tried to change headScripts without the
+   *                        capability to do so.
+   */
+  private function guard_and_sanitize_settings(array $incoming) {
+    $stored = get_option(self::OPTION_SETTINGS);
+    if (!is_array($stored)) {
+      $stored = [];
+    }
+    $stored_head = (isset($stored['headScripts']) && is_string($stored['headScripts']))
+      ? $stored['headScripts']
+      : '';
+
+    $head_present  = array_key_exists('headScripts', $incoming);
+    $incoming_head = ($head_present && is_string($incoming['headScripts']))
+      ? $incoming['headScripts']
+      : '';
+
+    unset($incoming['headScripts']);
+    $clean = $this->sanitize_settings_tree($incoming);
+
+    if (!$head_present) {
+      // Omitting the key is not a request to change it. Carry the stored value
+      // forward so an omission can neither silently wipe an administrator's
+      // analytics tags nor act as a bypass.
+      if ($stored_head !== '') {
+        $clean['headScripts'] = $stored_head;
+      }
+      return $clean;
+    }
+
+    if ($incoming_head === $stored_head) {
+      // Unchanged. The Angular admin sends the complete settings object on
+      // every save, so a non-privileged editor must still be able to save
+      // unrelated settings without being blocked on a value they never touched.
+      $clean['headScripts'] = $stored_head;
+      return $clean;
+    }
+
+    if (!current_user_can('manage_options') && !current_user_can('unfiltered_html')) {
+      return new WP_Error(
+        'dn_forbidden_head_scripts',
+        'Changing headScripts requires an administrator, or a role with the unfiltered_html capability.',
+        ['status' => 403]
+      );
+    }
+
+    // Privileged change: stored verbatim. Injecting raw <script> tags is this
+    // field's entire purpose, so it is deliberately not passed through the
+    // sanitiser above.
+    $clean['headScripts'] = $incoming_head;
+    return $clean;
+  }
+
   /**
    * PATCH /digital-newspaper/v1/data/settings
    *
@@ -4633,6 +4798,23 @@ HTML;
       'imageFormat',
     ];
     $settings = array_intersect_key($incoming, array_flip($allowed_keys));
+
+    // SECURITY: headScripts is injected into <head> as executable <script> for
+    // every public reader, so only a user trusted with raw HTML may change it.
+    // All other values are type-normalised. See guard_and_sanitize_settings().
+    $guarded = $this->guard_and_sanitize_settings($settings);
+    if (is_wp_error($guarded)) {
+      $this->log_auth_user_action(
+        'patch_settings_blocked',
+        'Blocked headScripts change (insufficient capability)'
+      );
+      $err_data = $guarded->get_error_data();
+      return new WP_REST_Response(
+        ['error' => $guarded->get_error_message(), 'code' => $guarded->get_error_code()],
+        (int) (is_array($err_data) && isset($err_data['status']) ? $err_data['status'] : 403)
+      );
+    }
+    $settings = $guarded;
 
     // Stamp a new version so the client can detect the update.
     $new_version = (float) microtime(true);
@@ -6618,6 +6800,24 @@ HTML;
     // ExportPayload (with a "meta" key) instead of a plain NewspaperData
     // object; removing it here keeps the stored structure clean.
     unset($payload['meta']);
+
+    // SECURITY: POST /data can also carry a settings object, so it needs the
+    // same headScripts capability gate as PATCH /data/settings.
+    if (isset($payload['settings']) && is_array($payload['settings'])) {
+      $guarded_settings = $this->guard_and_sanitize_settings($payload['settings']);
+      if (is_wp_error($guarded_settings)) {
+        $this->log_auth_user_action(
+          'save_data_blocked',
+          'Blocked headScripts change (insufficient capability)'
+        );
+        $err_data = $guarded_settings->get_error_data();
+        return new WP_REST_Response(
+          ['error' => $guarded_settings->get_error_message(), 'code' => $guarded_settings->get_error_code()],
+          (int) (is_array($err_data) && isset($err_data['status']) ? $err_data['status'] : 403)
+        );
+      }
+      $payload['settings'] = $guarded_settings;
+    }
 
     $save_result    = $this->save_data($payload, $saved_by);
     $sectionPostIds = $save_result['postIds'];
