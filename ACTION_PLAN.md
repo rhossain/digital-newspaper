@@ -38,11 +38,12 @@ Every item carries a **Done when** line. If you can't tick it, the item isn't fi
   **Done when:** `git grep -i "$OLD_PASSWORD" $(git rev-list --all)` returns only historical commits, no tracked file contains a credential literal, and `npm run deploy` fails with a clear message when `.env` is absent.
   **Note:** decide separately whether to rewrite history. If the repo is or may become shared, assume the old credential is permanently public regardless.
 
-- [ ] **P0-3 · Capability check on media delete and upload** — `S`
+- [x] **P0-3 · Capability check on media delete and upload** — `S`
   Add `current_user_can('delete_post', $id)` to `delete_media_item`; require `upload_files` (not `edit_posts`) in `upload_media`.
   `digital-newspaper.php:7671-7682, 7552`
   **Why:** `wp_delete_attachment($id, true)` performs no capability check of its own — a Contributor looping `/media/1..N` permanently removes every page scan from disk.
   **Done when:** a Contributor gets 403 on both; an Editor/Admin is unaffected.
+  **Status: DONE** (23 Aug 2026) — delete now requires `upload_files` + WordPress's own `delete_post` meta capability, and is restricted to *image* attachments so the endpoint can no longer be used to remove PDFs, exports or other plugins' files. Upload requires `upload_files`, widenable via the `dn_media_upload_capability` filter. 18 role-matrix assertions pass; the 44 P0-1 assertions still pass.
 
 - [ ] **P0-4 · Rate-limit `/section-crop` and bound its output** — `S`
   Call `check_public_get_rate_limit()` in the handler, validate crop coordinates against the stored section list rather than accepting arbitrary floats, and cap the generated-file count.

@@ -7750,6 +7750,24 @@ HTML;
   }
 
   public function upload_media(WP_REST_Request $request): WP_REST_Response {
+    // SECURITY: adding to the media library requires upload_files, the
+    // WordPress standard capability for it. auth_required() only proves
+    // edit_posts (Contributor and up), and this endpoint calls
+    // wp_handle_upload() directly, bypassing the check WordPress would
+    // normally apply. Filterable so a site can widen it without editing
+    // the plugin: add_filter('dn_media_upload_capability', fn() => 'edit_posts');
+    $upload_cap = apply_filters('dn_media_upload_capability', 'upload_files');
+    if (!current_user_can($upload_cap)) {
+      $this->log_auth_user_action(
+        'media_upload_blocked',
+        'Blocked media upload (insufficient capability)'
+      );
+      return new WP_REST_Response([
+        'error' => 'You do not have permission to upload media.',
+        'code'  => 'dn_forbidden_media_upload',
+      ], 403);
+    }
+
     require_once ABSPATH . 'wp-admin/includes/file.php';
     require_once ABSPATH . 'wp-admin/includes/media.php';
     require_once ABSPATH . 'wp-admin/includes/image.php';
@@ -7872,6 +7890,48 @@ HTML;
     $id = (int) $request->get_param('id');
     if (!$id) {
       return new WP_REST_Response(['error' => 'Invalid id'], 400);
+    }
+
+    // SECURITY: wp_delete_attachment() performs NO capability check of its own.
+    // Without the guards below, any user with edit_posts (Contributor and up)
+    // could walk /media/{id} and permanently delete every attachment on the
+    // site — including every newspaper page scan — files and all.
+    $post = get_post($id);
+    if (!$post || $post->post_type !== 'attachment') {
+      return new WP_REST_Response(['error' => 'Attachment not found'], 404);
+    }
+
+    // This endpoint exists to manage newspaper imagery. Refusing anything that
+    // is not an image stops it being used to delete PDFs, exports, or files
+    // belonging to other plugins.
+    $mime = (string) get_post_mime_type($post);
+    if (strpos($mime, 'image/') !== 0) {
+      return new WP_REST_Response([
+        'error' => 'Only image attachments can be deleted through this endpoint.',
+        'code'  => 'dn_forbidden_media_delete',
+      ], 403);
+    }
+
+    // Gate on upload_files (media access at all) plus WordPress's own
+    // delete_post meta capability, which resolves to "own attachments" for
+    // Authors and "any attachment" for Editors and Administrators. The normal
+    // admin workflows — cleaning up orphaned uploads from the current session,
+    // replacing an image you just uploaded — are all own-attachment deletes.
+    $may_delete = current_user_can('upload_files')
+      && (current_user_can('delete_post', $id)
+          || current_user_can('delete_others_posts')
+          || current_user_can('manage_options'));
+
+    if (!$may_delete) {
+      $this->log_auth_user_action(
+        'media_delete_blocked',
+        'Blocked attachment delete (insufficient capability)',
+        ['attachmentId' => (string) $id]
+      );
+      return new WP_REST_Response([
+        'error' => 'You do not have permission to delete this attachment.',
+        'code'  => 'dn_forbidden_media_delete',
+      ], 403);
     }
 
     $result = wp_delete_attachment($id, true);
