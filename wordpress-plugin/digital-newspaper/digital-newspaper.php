@@ -4229,6 +4229,137 @@ HTML;
    * Security: only crops images that resolve to THIS site's uploads directory —
    * an arbitrary `src` is rejected (no SSRF / no cropping of off-site images).
    */
+  /**
+   * Resolve the on-disk path and public URL of the cached crop for a section.
+   *
+   * The filename formula is IDENTICAL to the one this plugin has always used,
+   * so every crop generated before this helper existed still resolves to the
+   * same file and no regeneration is triggered.
+   */
+  private function dn_section_crop_paths(string $pageImageUrl, array $section): array {
+    $upload = wp_upload_dir();
+    // Lowercase the id fragment so the generated filename always matches the
+    // [a-z0-9_-] pattern enforced by social_image_endpoint() and
+    // dn_public_social_image_url(); otherwise mixed-case section IDs would be
+    // served via the raw uploads URL and bypass the crawler-safe endpoint.
+    $idPart   = strtolower(preg_replace('/[^a-zA-Z0-9_-]/', '-', (string) ($section['id'] ?? 'unknown')));
+    $cacheKey = substr(md5(
+      $pageImageUrl
+      . '|' . (float) ($section['x'] ?? 0)
+      . '|' . (float) ($section['y'] ?? 0)
+      . '|' . (float) ($section['width'] ?? 0)
+      . '|' . (float) ($section['height'] ?? 0)
+    ), 0, 12);
+    $filename = "dn-social-section-{$idPart}-{$cacheKey}.jpg";
+    return [
+      'filename' => $filename,
+      'path'     => $upload['basedir'] . '/' . $filename,
+      'url'      => $upload['baseurl'] . '/' . $filename,
+    ];
+  }
+
+  /**
+   * Look up a section's AUTHORITATIVE crop rectangle from the dn_section post
+   * mirror, matching on both the section id and the page image it belongs to.
+   *
+   * SECURITY: /section-crop is public. Trusting the caller's x/y/w/h means every
+   * distinct float tuple mints a brand-new JPEG on disk, so a loop over
+   * coordinates fills the disk. Resolving the rectangle from stored data instead
+   * bounds the set of files that can ever be generated to the sections that
+   * actually exist. Returns null when no confident match is found, in which case
+   * the caller falls back to quantised client coordinates + a generation limit.
+   */
+  private function dn_lookup_section_crop(string $sectionId, string $srcUrl): ?array {
+    if ($sectionId === '') {
+      return null;
+    }
+    $wantFile = strtolower(basename((string) parse_url($srcUrl, PHP_URL_PATH)));
+    if ($wantFile === '') {
+      return null;
+    }
+
+    $post_ids = get_posts([
+      'post_type'        => self::SECTION_POST_TYPE,
+      'post_status'      => ['publish', 'draft', 'private', 'pending'],
+      'posts_per_page'   => 5,
+      'fields'           => 'ids',
+      'no_found_rows'    => true,
+      'suppress_filters' => true,
+      'meta_key'         => 'dn_section_id',
+      'meta_value'       => $sectionId,
+    ]);
+    if (empty($post_ids)) {
+      return null;
+    }
+
+    // A section id can repeat across dates, so confirm the candidate belongs to
+    // the page image actually being cropped. Comparing basenames keeps this
+    // working across the site's several host aliases.
+    foreach ($post_ids as $pid) {
+      foreach (['dn_page_full_hires', 'dn_page_full_image'] as $meta_key) {
+        $stored = (string) get_post_meta($pid, $meta_key, true);
+        if ($stored === '') {
+          continue;
+        }
+        if (strtolower(basename((string) parse_url($stored, PHP_URL_PATH))) !== $wantFile) {
+          continue;
+        }
+        $w = (float) get_post_meta($pid, 'dn_crop_w', true);
+        $h = (float) get_post_meta($pid, 'dn_crop_h', true);
+        if ($w <= 0 || $h <= 0) {
+          continue;
+        }
+        return [
+          'x'      => (float) get_post_meta($pid, 'dn_crop_x', true),
+          'y'      => (float) get_post_meta($pid, 'dn_crop_y', true),
+          'width'  => $w,
+          'height' => $h,
+        ];
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Rate limit for crop GENERATION only (cache hits are never throttled).
+   * Allows 60 newly generated crops per IP per 60 seconds — far above what a
+   * reader browsing articles produces, far below what a disk-fill loop needs.
+   *
+   * NOTE: the IP source here has the same X-Forwarded-For weakness as
+   * check_public_get_rate_limit(); ACTION_PLAN P2-4 fixes both.
+   */
+  /**
+   * Site-wide ceiling on crops generated for rectangles that could NOT be matched
+   * to a stored section. Legitimate traffic reaches this path only when the
+   * dn_section mirror is briefly stale, which is rare; a disk-fill loop reaches it
+   * on every request. 200 per rolling hour leaves ample headroom for the former
+   * and caps the latter hard, regardless of how many IPs the caller spreads across.
+   */
+  private function reserve_unverified_crop_budget(): bool {
+    $key   = 'dn_crop_unverified_budget';
+    $count = (int) get_transient($key);
+    if ($count >= 200) {
+      return false;
+    }
+    set_transient($key, $count + 1, HOUR_IN_SECONDS);
+    return true;
+  }
+
+  private function check_section_crop_generation_limit(): bool {
+    $raw_ip    = $_SERVER['HTTP_X_FORWARDED_FOR'] ?? $_SERVER['REMOTE_ADDR'] ?? '';
+    $client_ip = trim(explode(',', (string) $raw_ip)[0]);
+    if ($client_ip === '') {
+      return true;
+    }
+    $key   = 'dn_crop_gen_' . md5($client_ip);
+    $count = (int) get_transient($key);
+    if ($count >= 60) {
+      return false;
+    }
+    set_transient($key, $count + 1, 60);
+    return true;
+  }
+
   public function section_crop_endpoint(WP_REST_Request $request) {
     $this->add_public_security_headers();
 
@@ -4249,13 +4380,62 @@ HTML;
       return new WP_REST_Response(['error' => 'Source image not found in uploads'], 404);
     }
 
-    $url = $this->dn_crop_section_from_page($src, [
+    $section = [
       'id'     => $id !== '' ? $id : 'section',
       'x'      => $x,
       'y'      => $y,
       'width'  => $w,
       'height' => $h,
-    ]);
+    ];
+
+    // FAST PATH: if this exact crop has already been generated, serve it without
+    // touching the database or the rate limiter. Readers browsing articles hit
+    // this path almost every time, so normal traffic is never throttled.
+    $targets = $this->dn_section_crop_paths($src, $section);
+    if (!file_exists($targets['path'])) {
+      // SECURITY: generation is the expensive, disk-consuming path. Bound the
+      // coordinates before spending anything on them.
+      $is_unverified = false;
+      $stored = $this->dn_lookup_section_crop($section['id'], $src);
+      if ($stored !== null) {
+        // Authoritative rectangle from the dn_section mirror. For a legitimate
+        // request these are the very values the client sent, so the filename —
+        // and therefore the existing cache — is unchanged.
+        $section['x']      = $stored['x'];
+        $section['y']      = $stored['y'];
+        $section['width']  = $stored['width'];
+        $section['height'] = $stored['height'];
+      } else {
+        // No stored section matched — either the dn_section mirror is briefly
+        // stale, or this is a fabricated request. Serve it, but first remove every
+        // unbounded dimension the caller controls:
+        //   - the id is dropped from the filename (it is cosmetic; src plus the
+        //     rectangle already identify a crop uniquely), otherwise varying the
+        //     id alone mints a new file on every request;
+        //   - the rectangle is quantised and clamped, so near-identical float
+        //     tuples collapse onto one file instead of one file each.
+        $section['id']      = 'unverified';
+        $section['x']       = round(max(0.0, min(100.0, $section['x'])), 2);
+        $section['y']       = round(max(0.0, min(100.0, $section['y'])), 2);
+        $section['width']   = round(max(0.01, min(100.0, $section['width'])), 2);
+        $section['height']  = round(max(0.01, min(100.0, $section['height'])), 2);
+        $is_unverified      = true;
+      }
+
+      $targets = $this->dn_section_crop_paths($src, $section);
+
+      if (!file_exists($targets['path'])) {
+        $throttled = !$this->check_section_crop_generation_limit()
+          || ($is_unverified && !$this->reserve_unverified_crop_budget());
+        if ($throttled) {
+          $resp = new WP_REST_Response(['error' => 'Too many crop requests. Please wait and try again.'], 429);
+          $resp->header('Retry-After', '60');
+          return $resp;
+        }
+      }
+    }
+
+    $url = $this->dn_crop_section_from_page($src, $section);
 
     if ($url === '') {
       return new WP_REST_Response(['error' => 'Crop generation failed'], 500);
@@ -4288,16 +4468,17 @@ HTML;
       return '';
     }
 
-    $upload = wp_upload_dir();
-    // Lowercase the id fragment so the generated filename always matches the
-    // [a-z0-9_-] pattern enforced by social_image_endpoint() and
-    // dn_public_social_image_url(); otherwise mixed-case section IDs would be
-    // served via the raw uploads URL and bypass the crawler-safe endpoint.
-    $idPart = strtolower(preg_replace('/[^a-zA-Z0-9_-]/', '-', (string) ($section['id'] ?? 'unknown')));
-    $cacheKey = substr(md5($pageImageUrl . '|' . $xPct . '|' . $yPct . '|' . $wPct . '|' . $hPct), 0, 12);
-    $filename = "dn-social-section-{$idPart}-{$cacheKey}.jpg";
-    $path = $upload['basedir'] . '/' . $filename;
-    $url  = $upload['baseurl'] . '/' . $filename;
+    // Filename/URL come from the shared helper so the endpoint's cache check and
+    // the generator can never disagree about where a crop lives.
+    $targets = $this->dn_section_crop_paths($pageImageUrl, [
+      'id'     => $section['id'] ?? 'unknown',
+      'x'      => $xPct,
+      'y'      => $yPct,
+      'width'  => $wPct,
+      'height' => $hPct,
+    ]);
+    $path = $targets['path'];
+    $url  = $targets['url'];
 
     if (file_exists($path)) {
       return $url;

@@ -45,11 +45,12 @@ Every item carries a **Done when** line. If you can't tick it, the item isn't fi
   **Done when:** a Contributor gets 403 on both; an Editor/Admin is unaffected.
   **Status: DONE** (23 Aug 2026) — delete now requires `upload_files` + WordPress's own `delete_post` meta capability, and is restricted to *image* attachments so the endpoint can no longer be used to remove PDFs, exports or other plugins' files. Upload requires `upload_files`, widenable via the `dn_media_upload_capability` filter. 18 role-matrix assertions pass; the 44 P0-1 assertions still pass.
 
-- [ ] **P0-4 · Rate-limit `/section-crop` and bound its output** — `S`
+- [x] **P0-4 · Rate-limit `/section-crop` and bound its output** — `S`
   Call `check_public_get_rate_limit()` in the handler, validate crop coordinates against the stored section list rather than accepting arbitrary floats, and cap the generated-file count.
   `digital-newspaper.php:3099-3105, 4232, 4297, 4342`
   **Why:** unauthenticated, unmetered, and writes a new JPEG per unique coordinate tuple — disk fill plus a full page-scan decode per request.
   **Done when:** the 121st request in 60 s returns 429, and a request with coordinates not matching a stored section is rejected rather than rendered.
+  **Status: DONE** (23 Aug 2026) — implemented slightly differently, and more safely, than specified. Cache hits are never throttled (no DB, no limiter) so readers are unaffected. On a cache miss the rectangle is resolved from the `dn_section` mirror and the caller's coordinates are discarded; the filename formula is unchanged so **no existing cached crop is invalidated**. When no stored section matches, the caller's `id` is dropped from the filename (it was a second unbounded dimension the original spec missed) and the rectangle is quantised, then generation is limited to 60/IP/min plus a site-wide 200/hour ceiling. Measured: 200 attack requests produced 3 files instead of 200; a coordinate sweep is rejected 240/300 with `Retry-After: 60`. 14 assertions; the 62 earlier P0-1/P0-3 assertions still pass.
 
 ### Build pipeline
 
