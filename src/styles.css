@@ -3,7 +3,9 @@
    Root-relative paths (/assets/fonts/...) prevent esbuild from re-hashing these files
    into the media/ directory — the browser resolves them against the site root directly.
    Only the three subsets this site uses are included: latin, latin-ext, bengali.
-   font-weight 400 700 covers all weights; the browser picks exact values via interpolation. */
+   font-weight 400 700 covers all weights; the browser picks exact values via interpolation.
+   Only bengali is preloaded from index.html — see the comment there before adding
+   another <link rel=preload> for the latin faces. */
 
 @font-face {
   font-family: 'Google Sans Variable';

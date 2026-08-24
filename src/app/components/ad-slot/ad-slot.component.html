@@ -6,4 +6,16 @@
     [style.min-height.px]="slot()!.min_height"
     class="dn-ad-container">
   </div>
+} @else if (!adService.ready() && reservedSize()) {
+  <!-- /ads/config is still in flight. Hold the slot's declared size so the real
+       container below replaces this box at an identical height instead of the
+       page expanding from 0 px. Same class, so both boxes size identically.
+       No #adContainer ref: the GPT display script must only ever be injected
+       into the real container. -->
+  <div
+    class="dn-ad-container"
+    aria-hidden="true"
+    [style.min-width.px]="reservedSize()!.width"
+    [style.min-height.px]="reservedSize()!.height">
+  </div>
 }

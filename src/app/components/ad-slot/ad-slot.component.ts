@@ -15,6 +15,28 @@ import { isPlatformBrowser } from '@angular/common';
 import { AdService, AdSlot } from '../../services/ad.service';
 
 /**
+ * Declared container size per slot, mirroring gam_ad_slots()
+ * (digital-newspaper.php:594-685).
+ *
+ * Used for one purpose only: reserving layout space while /ads/config is still
+ * in flight, so an in-flow slot does not expand from 0 px the moment the config
+ * lands. Once AdService is ready the live config's min_width/min_height take
+ * over and this map is never read again — so a stale number here costs a layout
+ * shift, never a broken or mis-sized ad.
+ */
+const RESERVED_SIZES: Readonly<Record<string, { width: number; height: number }>> = {
+  desktop_page_left:           { width: 120, height: 240 },
+  desktop_page_right:          { width: 300, height: 250 },
+  desktop_post_preview_top:    { width: 300, height: 100 },
+  desktop_post_preview_middle: { width: 300, height: 100 },
+  desktop_post_top_image:      { width: 300, height:  60 },
+  desktop_post_top_text:       { width: 300, height:  60 },
+  desktop_post_middle:         { width: 300, height:  60 },
+  mobile_post_top:             { width: 300, height: 100 },
+  mobile_post_middle:          { width: 300, height: 100 },
+};
+
+/**
  * AdSlotComponent — renders a single Google Ad Manager slot.
  *
  * Usage:
@@ -51,7 +73,11 @@ import { AdService, AdSlot } from '../../services/ad.service';
   host: {
     '[class.dn-ad--desktop]': 'isDesktop()',
     '[class.dn-ad--mobile]':  'isMobile()',
-    '[class.dn-ad--hidden]':  '!slot() || !slot()!.enabled || removedByBrowser()',
+    // Deliberately does NOT collapse while AdService is still loading: that is
+    // when the reserved-space placeholder renders, and display:none on the host
+    // would defeat it.
+    '[class.dn-ad--hidden]':
+      'adService.ready() && (!slot() || !slot()!.enabled) || removedByBrowser()',
   },
 })
 export class AdSlotComponent {
@@ -67,6 +93,9 @@ export class AdSlotComponent {
   protected readonly slot = computed<AdSlot | undefined>(() =>
     this.adService.getSlot(this.slotId())
   );
+
+  /** Declared size to reserve before /ads/config resolves; undefined for unknown ids. */
+  protected readonly reservedSize = computed(() => RESERVED_SIZES[this.slotId()]);
 
   readonly isDesktop = computed(() => this.slotId().startsWith('desktop_'));
   readonly isMobile  = computed(() => this.slotId().startsWith('mobile_'));

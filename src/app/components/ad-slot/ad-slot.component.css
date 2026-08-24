@@ -4,8 +4,14 @@
   display: block;
 }
 
-/* Hide the host element when no slot config is available. */
-:host(.dn-ad--hidden) {
+/* Collapse the host when the slot is known to be off, or after Chrome's Heavy Ad
+   Intervention pulled the creative. The compound selectors are load-bearing: the
+   .dn-ad--desktop / .dn-ad--mobile display rules below are equally specific and
+   come later in source order, so a single-class rule here would lose to them and
+   a collapsed desktop slot would keep its reserved height. */
+:host(.dn-ad--hidden),
+:host(.dn-ad--hidden.dn-ad--desktop),
+:host(.dn-ad--hidden.dn-ad--mobile) {
   display: none;
 }
 

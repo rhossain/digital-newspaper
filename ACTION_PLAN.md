@@ -134,17 +134,32 @@ Every item carries a **Done when** line. If you can't tick it, the item isn't fi
   **One deviation:** `updateMode` is `prefetch`, not `lazy`. With `installMode: lazy` a chunk that was never requested is never cached and therefore never updated, so readers still never see the admin chunks — but the Angular-core chunk, once cached, keeps updating eagerly on each release instead of decaying to a network fetch. Mirrors the existing `assets` group.
   **Known nuance, not a regression:** on a *first* visit the core chunk is requested before the SW controls the page, so it lands in the cache on visit 2. A user who visits exactly once and then goes offline gets the shell but not the core chunk. Previously the install prefetch covered this — at the cost of ~214 KiB of admin JS for every reader on every release.
 
-- [ ] **P1-9 · Trim the font preloads** — `S`
+- [x] **P1-9 · Trim the font preloads** — `S`
   Drop `latin-ext` (21,412 B — covers Latin Ext-A/B and IPA, which this site never renders); drop the `latin` *preload* and let it load from CSS; subset the Bengali variable font and instance the `wght` axis.
   `index.html:42-44`, `styles.css:8-33`
   **Why:** 133,328 B currently sits at *Highest* priority, above the module scripts that trigger the LCP image request.
   **Done when:** the preload budget is ~55 KB and no glyph renders in a fallback font on the reader route.
   ⚠ **Watch out:** fonts are deliberately *not* content-hashed and carry a 1-year cache — version the path (`/assets/fonts/v2/…`) or returning visitors are stranded on the old file. See P2-8.
+  **Status: DONE as scoped** (24 Aug 2026) — preloads trimmed; **the subsetting half of this item is withdrawn, it has no headroom.** `index.html` now preloads *only* the bengali face; the latin and latin-ext `@font-face` rules are untouched in `styles.css`, so those files are still served — just discovered from the stylesheet and fetched only when a glyph in their `unicode-range` actually renders. Preload budget: **133,328 B → 75,712 B (−57,616 B, −43%)**, verified in the built `index.csr.html`, which now contains exactly one preload link. No font bytes changed, so **P2-13 does not apply to this change** — nothing to version, no cached client stranded.
+  **Why the ~55 KB target is unreachable** (measured with fontTools 4.63 against the real files):
+  - `google-sans-bengali-wght-normal.woff2` has **421 glyphs but only 101 cmap entries** — the other 320 are conjuncts reached through GSUB, i.e. exactly what Bengali shaping needs. Re-subsetting to the CSS `unicode-range` yields **75,712 → 73,824 B (−2.5%)**; adding `--no-hinting --drop-tables+=STAT,avar` gets 73,568 B. Not worth a committed binary, a regeneration script and a versioned path for 2 KB.
+  - The `wght` axis is **already** `400–700`, matching the `font-weight: 400 700` declaration, so there is nothing to instance — restricting it to `400:700` produces 75,636 B, i.e. no change.
+  - `wght` is also already the smallest fontsource variant: `grad` 76,136 B, `standard`/`opsz` 120,912 B, `full` 121,500 B.
+  **The one way to reach ~43 KB — rejected 24 Aug 2026, do not revisit without new evidence:** pin static instances (bengali **wght 400 = 43,644 B**, **wght 700 = 46,028 B**), preload 400, let 700 load from CSS. Rejected because:
+  1. `.newspaper-title` (`newspaper.component.css:94-98`) is the 28 px bold Bengali masthead, above the fold. It would render in a fallback face on every cold load until the second file landed — the largest text on the page, reflowing when the swap happens. That is a **CLS regression traded for an LCP gain**, while P1-10/P1-11 are simultaneously trying to pull CLS down. 18 more bold/600 declarations exist in the same stylesheet.
+  2. The 32 KB "saved" is mostly bookkeeping: the bold file is not preloaded but is still requested during first layout, so it lands inside the same window as the image — one priority tier lower, not one round trip later.
+  3. Total bytes go **up** ~14 KB for any reader who sees bold text, which is all of them.
+  The single variable file stays. `-43%` on the preload budget is the win this item ships.
 
-- [ ] **P1-10 · Reserve ad-slot height before `/ads/config` resolves** — `S`
+- [x] **P1-10 · Reserve ad-slot height before `/ads/config` resolves** — `S`
   Render a placeholder with the slot's declared dimensions in the `!adService.ready()` branch, using a static map mirroring `gam_ad_slots()` (`digital-newspaper.php:594-685`). Remove `!slot()` from the `dn-ad--hidden` host binding at `ad-slot.component.ts:54` or the placeholder itself gets `display: none`.
   **Why:** slots render 0 px then jump to 250 px — likely the single largest CLS contributor.
   **Done when:** CLS attribution no longer names an ad container.
+  **Status: DONE** (25 Aug 2026) — the placeholder lives inside `AdSlotComponent`, so it covers every call site at once. `RESERVED_SIZES` (`ad-slot.component.ts:17-38`) mirrors all nine `gam_ad_slots()` entries; the template's new `@else if (!adService.ready() && reservedSize())` branch renders a box with the same `dn-ad-container` class and the declared min-width/min-height, deliberately **without** the `#adContainer` ref so the GPT display script can never be injected into it. Host binding is now `adService.ready() && (!slot() || !slot()!.enabled) || removedByBrowser()`.
+  **Verified against the live endpoint** (`/ads/config`, 25 Aug 2026): all nine ids and both dimensions match the static map exactly. In a headless Chrome measurement the reserved box and the real container render **identical 100 px heights**, so the swap at `ready()` is shift-free.
+  **Scope correction — the reader route was already handled, the middle column was not.** `newspaper.component.html:360` already gates `desktop_page_left` on `!adService.ready()` and renders nothing, and `:928` renders a `.placeholder` for `desktop_page_right`; both sit in fixed-width columns (`.left-panel` is `width: 200px; overflow-y: auto`), so neither could shift page content anyway. The slots that actually expand in flow are the five `desktop_post_*` ones in `.section-image-container` and the article modal — and per the live config **all five are enabled**, so the placeholder is never wasted reservation. The three disabled slots cannot cause a reserve-then-collapse shift: `desktop_page_left` never renders `<app-ad-slot>` pre-ready, and `mobile_post_top` / `mobile_post_middle` are not referenced by any template.
+  **Bug found and fixed in passing:** `:host(.dn-ad--hidden)` was `(0,2,0)`-specific and sat *above* the equally-specific `@media (min-width: 768px) { :host(.dn-ad--desktop) { display: block } }`, so it lost on source order. Every slot on this site is a `desktop_` slot, which means **the Heavy Ad Intervention collapse path (`removedByBrowser`) never worked on desktop** — measured: a hidden desktop slot computed `display: block` and held 250 px of blank space. Now `:host(.dn-ad--hidden.dn-ad--desktop)` / `.dn-ad--mobile` compounds take it to `(0,3,0)`; re-measured at `display: none`, 0 px.
+  **Verify in the browser:** the done-when (CLS attribution no longer naming an ad container) needs a field/Lighthouse trace on the real site.
 
 - [ ] **P1-11 · Move the ad `MutationObserver` outside the Angular zone** — `S`
   `ad-slot.component.ts:167-186` — wrap in `zone.runOutsideAngular()`, re-enter with `zone.run()` only for the signal write.
@@ -254,6 +269,7 @@ Every item carries a **Done when** line. If you can't tick it, the item isn't fi
   Fonts are deliberately not content-hashed but carry a 1-year cache.
   ⚠ **blocked by** P1-9 — re-subsetting without this strands returning visitors for up to a year.
   **Done when:** the new subset is at a new path.
+  **Not needed yet** (24 Aug 2026) — P1-9 shipped by trimming preloads only; no font file changed, so no client is stranded. Do this the moment anyone re-subsets or swaps a face.
 
 - [ ] **P2-14 · LRU eviction on edition localStorage keys** — `S`
   `edition-cache.service.ts:464-467` writes one key per date with no TTL and no eviction; `evict()` only runs on admin save or same-day invalidation.
@@ -422,7 +438,7 @@ P1-4 ──→ P2-20
 
 P1-15 ─── must ship with ──→ P1-16 ──→ P3-2
 
-P1-9 ──→ P2-13   (version the font path, or strand cached clients)
+P1-9 ──→ P2-13   (moot: P1-9 shipped without changing any font bytes)
 
 P2-21 ──→ P2-22
 
