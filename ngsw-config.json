@@ -21,11 +21,21 @@
           "/favicon.ico",
           "/assets/favicon.png",
           "/assets/image-unavailable.svg",
-          "/index.html",
           "/index.csr.html",
           "/manifest.webmanifest",
           "/*.css",
-          "/*.js"
+          "/*.js",
+          "!/chunk-*.js"
+        ]
+      }
+    },
+    {
+      "name": "app-chunks",
+      "installMode": "lazy",
+      "updateMode": "prefetch",
+      "resources": {
+        "files": [
+          "/chunk-*.js"
         ]
       }
     },
