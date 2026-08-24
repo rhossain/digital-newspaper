@@ -618,7 +618,7 @@
                   alt=""
                   aria-hidden="true"
                   decoding="async"
-                  fetchpriority="high"
+                  fetchpriority="low"
                   (error)="onMainThumbError()"
                   />
               }
@@ -659,13 +659,13 @@
                   [alt]="ts.t('viewer.page') + ' ' + ts.toLocaleDigits(currentPage.id)"
                   class="main-page-image"
                   [class.is-unavailable]="mainImageFailed"
-                  [attr.fetchpriority]="mainThumbSrc ? 'auto' : 'high'"
+                  [class.is-pending]="!imageLoaded"
+                  fetchpriority="high"
                   decoding="async"
                   [attr.width]="mainImgWidth"
                   [attr.height]="mainImgHeight"
                   (load)="onImageLoad()"
                   (error)="onImageError()"
-                  [style.opacity]="imageLoaded ? '1' : '0'"
                   />
               </picture>
               <!-- Clickable sections overlay -->

@@ -1018,7 +1018,15 @@
   width: 100%;
   height: auto;
   display: block;
-  transition: opacity 0.3s ease;
+}
+
+/* Hidden until loaded via visibility, never opacity: an element that first
+   paints at opacity 0 is permanently disqualified as an LCP candidate in
+   Chrome, which made the blurred thumbnail the measured LCP element. With
+   visibility the image's first paint happens when it becomes visible, so it
+   is recorded normally. */
+.main-page-image.is-pending {
+  visibility: hidden;
 }
 
 /* Progressive blur-up placeholder: the lightweight thumbnail, scaled to fill the

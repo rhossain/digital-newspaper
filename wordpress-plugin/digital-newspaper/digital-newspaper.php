@@ -2235,7 +2235,7 @@ HTACCESS;
     // The full-page image is what the reader came for and what Largest
     // Contentful Paint measures, so it is preloaded FIRST and at high priority.
     // The thumbnail is a decorative blur-up placeholder: it is preloaded second
-    // at default priority, which keeps it early without letting it outrank the
+    // at low priority, which keeps it early without letting it compete with the
     // image it is standing in for.
     $links = '';
 
@@ -2265,7 +2265,7 @@ HTACCESS;
     }
 
     if ($thumbOk) {
-      $links .= '<link rel="preload" as="image" href="' . esc_url($thumb) . '">';
+      $links .= '<link rel="preload" as="image" fetchpriority="low" href="' . esc_url($thumb) . '">';
     }
 
     return $links === '' ? '' : '<!--dn-preload-->' . $links . '<!--/dn-preload-->';
