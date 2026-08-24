@@ -2161,7 +2161,22 @@ HTACCESS;
       if ($preloadOn) {
         $preloadBlock = $this->build_first_page_preload_block($editions);
         if ($preloadBlock !== '') {
-          $injected = preg_replace('#</head>#i', $preloadBlock . '</head>', $newHtml, 1, $hc);
+          // Inject as early in <head> as possible — immediately after the
+          // viewport meta — rather than just before </head>. The preload only
+          // helps if the browser discovers it before the rest of <head>; sitting
+          // last put it behind every stylesheet and font preload above it.
+          $hc       = 0;
+          $injected = preg_replace(
+            '#(<meta[^>]+name=["\']viewport["\'][^>]*>)#i',
+            '$1' . $preloadBlock,
+            $newHtml,
+            1,
+            $hc
+          );
+          if ($injected === null || $hc === 0) {
+            // No viewport meta (unexpected) — fall back to the old anchor.
+            $injected = preg_replace('#</head>#i', $preloadBlock . '</head>', $newHtml, 1, $hc);
+          }
           if ($injected !== null && $hc > 0) {
             $newHtml = $injected;
           }
@@ -2170,7 +2185,8 @@ HTACCESS;
 
       if ($newHtml === $html) return; // already identical — skip the write
 
-      // Reuse the atomic temp-file+rename writer (no .gz siblings for .html).
+      // Reuse the atomic temp-file+rename writer. Since P1-2 this also refreshes
+      // the .br/.gz siblings, so the negotiation can never serve a stale shell.
       $this->atomic_write($path, $newHtml);
     } catch (\Throwable $e) {
       // These are optimisations, never a correctness requirement.
@@ -2207,20 +2223,64 @@ HTACCESS;
     $fullOk    = $fullImage !== '' && $this->is_safe_preload_url($fullImage);
     $thumbOk   = $thumb !== '' && $this->is_safe_preload_url($thumb);
 
-    // The viewer shows the thumbnail as an instant low-res placeholder, then
-    // crossfades in the full image. So preload the THUMBNAIL first at high
-    // priority (it is the first paint) and the full image right after at default
-    // priority. With no thumbnail, the full image is the first paint → high.
+    $variants = (isset($first['imageVariants']) && is_array($first['imageVariants']))
+      ? $first['imageVariants']
+      : [];
+
+    // MUST stay in step with mainImgSizes in newspaper.component.ts. If the two
+    // disagree the browser picks a different candidate than <picture> will, and
+    // the preload becomes a wasted download of a width nothing ever renders.
+    $sizes = '(max-width: 1024px) 100vw, 1600px';
+
+    // The full-page image is what the reader came for and what Largest
+    // Contentful Paint measures, so it is preloaded FIRST and at high priority.
+    // The thumbnail is a decorative blur-up placeholder: it is preloaded second
+    // at default priority, which keeps it early without letting it outrank the
+    // image it is standing in for.
     $links = '';
-    if ($thumbOk) {
-      $links .= '<link rel="preload" as="image" fetchpriority="high" href="' . esc_url($thumb) . '">';
-      if ($fullOk) {
-        $links .= '<link rel="preload" as="image" href="' . esc_url($fullImage) . '">';
-      }
+
+    // Prefer a variant srcset when one exists so the preload resolves to exactly
+    // the candidate <picture> will select. Without this, the moment
+    // imageVariants is populated the browser would fetch the AVIF/WebP for the
+    // <img> AND the preloaded original — a full duplicate download.
+    $variantLink = '';
+    foreach (['avif' => 'image/avif', 'webp' => 'image/webp'] as $key => $mime) {
+      if (empty($variants[$key]) || !is_array($variants[$key])) continue;
+      $entries = array_filter(
+        array_map('trim', array_map('strval', $variants[$key])),
+        [$this, 'is_safe_preload_srcset_entry']
+      );
+      if (empty($entries)) continue;
+      $srcset = implode(', ', array_map('esc_attr', $entries));
+      $variantLink = '<link rel="preload" as="image" type="' . esc_attr($mime) . '"'
+        . ' fetchpriority="high" imagesrcset="' . $srcset . '"'
+        . ' imagesizes="' . esc_attr($sizes) . '">';
+      break; // AVIF wins when both exist, matching <picture> source order.
+    }
+
+    if ($variantLink !== '') {
+      $links .= $variantLink;
     } elseif ($fullOk) {
       $links .= '<link rel="preload" as="image" fetchpriority="high" href="' . esc_url($fullImage) . '">';
     }
+
+    if ($thumbOk) {
+      $links .= '<link rel="preload" as="image" href="' . esc_url($thumb) . '">';
+    }
+
     return $links === '' ? '' : '<!--dn-preload-->' . $links . '<!--/dn-preload-->';
+  }
+
+  /**
+   * Allow-list a single srcset entry ("<url> 1400w"). The descriptor is stripped
+   * and the URL held to the same http(s)-only rule as a plain preload href.
+   */
+  private function is_safe_preload_srcset_entry($entry): bool {
+    if (!is_string($entry)) return false;
+    $entry = trim($entry);
+    if ($entry === '') return false;
+    $url = trim((string) preg_replace('/\s+\S+$/', '', $entry));
+    return $url !== '' && $this->is_safe_preload_url($url);
   }
 
   /**

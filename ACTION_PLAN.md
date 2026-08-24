@@ -104,12 +104,16 @@ Every item carries a **Done when** line. If you can't tick it, the item isn't fi
   **Why:** collapses the cold-load chain from 6 network round trips to 2. The code is already written, shipped and reviewed.
   **Done when:** `dn-initial-state` in the served HTML is non-empty, an LCP `<link rel=preload as=image>` is present, and the image request appears on round trip 2 in a cold-cache waterfall.
   **Rollback:** each flag is independently toggleable; `on_*_toggled` handlers strip their injected blocks on disable.
+  **Status: BLOCKED ON SAZZAD** (23 Aug 2026) — every code prerequisite (P1-1, P1-2, P1-3, P1-4) plus P1-6 is shipped, so this is now four checkboxes in **WP Admin → Settings → Digital Newspaper**. Enable in this order, checking the site after each: (1) *Static JSON Snapshots* — the other two depend on it; (2) *Image Cache Headers*; (3) *Preload First-Page Image*; (4) *Inline Bootstrap State* — biggest win and biggest payload change, so last. Verified in code: `resolve_index_html_path()` already detects `index.csr.html`, so the injection will find the served shell.
 
-- [ ] **P1-6 · Fix the three bugs in `build_first_page_preload_block()`** — `M`
+- [x] **P1-6 · Fix the three bugs in `build_first_page_preload_block()`** — `M`
   (a) high-priority the full image, not the thumbnail; (b) emit `imagesrcset`/`imagesizes` when variants exist; (c) anchor the injection after the viewport meta rather than before `</head>`, so it lands ahead of the font preloads.
   `digital-newspaper.php:2179-2213, 2152`
   **Why:** as written it deprioritizes the LCP element, and it becomes a guaranteed full double-download the moment P2-1 populates `imageVariants`.
   **Done when:** the preload href matches exactly what `<picture>` selects, at `fetchpriority=high`, positioned before the font preloads.
+  **Status: DONE** (23 Aug 2026) — (a) the full-page image is now emitted FIRST at `fetchpriority="high"`; (b) when `imageVariants.avif`/`.webp` are populated the block emits `imagesrcset` + `imagesizes` + `type` instead of the plain href, so the preload resolves to the same candidate `<picture>` picks and cannot double-download (AVIF wins when both exist, matching source order; unsafe srcset entries fall back to the plain href); (c) injection moved from just before `</head>` to immediately after the viewport meta — verified against the real `src/index.html`, it now lands at byte 314 instead of after the font preloads. Also corrected a comment left stale by P1-2.
+  **Deliberate deviation:** the spec said to demote the thumbnail to `fetchpriority="low"`. It is left at **default** instead. Until P1-7 lands, the main image still renders at `opacity: 0` until load, so it is not an LCP candidate at all and the *thumbnail* is what LCP measures — demoting it would have made LCP worse. Once P1-7 ships, lowering the thumbnail to `low` becomes safe and is worth doing.
+  24 assertions; the 82 earlier P0-1/P0-3/P0-4/P1-2 assertions still pass.
 
 ### Front-end quick wins
 
