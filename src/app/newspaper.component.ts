@@ -1012,11 +1012,16 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     // Only advertise sizes when we actually emit a multi-width srcset; for a
     // single-width source the browser ignores it anyway.
     if (this.mainAvifSrcset || this.mainWebpSrcset) {
-      // The center image fills the viewport on narrow screens and is capped at
-      // the site max-width (--site-width: 1600px, minus wrapper padding) on
-      // desktop. `sizes` needs a concrete length — CSS variables are not valid
-      // here — so the 1600px cap is hard-coded to match the stylesheet.
-      this.mainImgSizes = '(max-width: 1024px) 100vw, 1600px';
+      // At ≤1024px both side panels are display:none, so the image fills the
+      // viewport. Above that the centre panel is 800px — 1600px site width less
+      // the 200px left panel, then 12/21 of the remainder (.center-panel flex:12
+      // vs .right-panel flex:9) — rising to ~914px when the left panel is
+      // collapsed. 900px is that upper bound. It was 1600px, which described the
+      // whole site rather than the image's slot and made the browser ask for a
+      // candidate twice the size it renders. `sizes` needs a concrete length, so
+      // this cannot read --site-width and must be kept in step with the CSS —
+      // and with $sizes in the plugin's dn_build_preload_links().
+      this.mainImgSizes = '(max-width: 1024px) 100vw, 900px';
     }
 
     if (typeof variants.width === 'number' && variants.width > 0) {

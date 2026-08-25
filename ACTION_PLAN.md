@@ -261,11 +261,51 @@ Five independent read-only reviews, then every finding re-traced by hand before 
 
 ### The biggest remaining perf item
 
-- [ ] **P2-1 · Generate server-side AVIF/WebP width variants** — `M`
+- [x] **P2-1 · Generate server-side AVIF/WebP width variants** — `M`
   On upload, produce 2–3 widths (800/1200/1600) via `wp_get_image_editor` (Imagick is already used in the social path) and write them into `imageVariants`.
   **Why:** the client-side `<picture>` pipeline at `newspaper.component.html:649-670` is **fully dead code** — nothing populates `.avif`/`.webp`, so `<source>` renders empty and every device downloads the single full-size scan. The front end lights up with **zero client changes**.
   **Done when:** `imageVariants.webp` is non-empty for a newly uploaded page and a narrow viewport downloads a smaller file than a wide one.
   ⚠ **Coordinate with P1-6(b)** — once variants exist, the preload must be variant-aware or it becomes a wasted full download.
+
+  **Status: DONE, with a different ladder than specified** (25 Aug 2026). The `<picture>` pipeline is now live and every device profile downloads fewer bytes than before. Zero client changes beyond one `sizes` correction.
+
+  **The 800/1200/1600 ladder was wrong and was not built.** It assumed readers download the original scan. They do not: `admin.component.ts:3996` already resizes the display copy to **700px** (`resizeImageToWidth(originalFile, 700, …)`) before upload, so 1200/1600 could only come from upscaling — and even sourced from the hi-res original they'd make the LCP element *heavier* than today. Shipped instead (`DN_VARIANT_LADDER`): **AVIF 400/600/800 @ q58, WebP 400/600/700 @ q80**. WebP stops at 700 deliberately — 800w WebP is 297 KB, *more* than the 271 KB those same browsers download today.
+
+  **Measured, 2400×3400 dense-text Bengali page** (baseline = today's single 700w WebP q88 = **271 KB**):
+
+  | width | AVIF q58 | WebP q80 |
+  |---|---|---|
+  | 400w | 65 KB | 79 KB |
+  | 600w | 143 KB | 172 KB |
+  | 700w | 185 KB | 226 KB |
+  | 800w | **245 KB** | 297 KB ✗ |
+
+  Rejected with numbers: **1100w = 300 KB (+11%)**, **1400w = 540 KB (+99%)**. The ladder stops at 800 because the desktop centre panel is 800 CSS px (1600 site − 200 left panel, then 12/21 of the remainder). Retina screens are deliberately served below their device-pixel count; closing that gap costs 2× on the LCP element. The zoom modal remains the path to full detail.
+
+  **Real-browser verification** (Chrome 151 via CDP `setDeviceMetricsOverride`, 11 device profiles, emulated `innerWidth` asserted to match). Every profile is under the 271 KB baseline:
+
+  | profile | slot × DPR | picked | bytes |
+  |---|---|---|---|
+  | narrow DPR1 380css | 380 | `dnv400.avif` | 65 KB (**−76%**) |
+  | Android DPR1.5 360css | 540 | `dnv600.avif` | 143 KB (**−47%**) |
+  | iPhone SE 375×2 | 750 | `dnv800.avif` | 245 KB (−10%) |
+  | iPhone 14 Pro 393×3 | 1179 | `dnv800.avif` | 245 KB (−10%) |
+  | Android DPR1.75/2 412css | 721/824 | `dnv800.avif` | 245 KB (−10%) |
+  | iPad 768×2 / 1024×2 | 1506/2018 | `dnv800.avif` | 245 KB (−10%) |
+  | laptop/desktop DPR1 & retina | 800/1600 | `dnv800.avif` | 245 KB (−10%) |
+
+  **The 600 rung exists because of this emulation.** The first implementation shipped 400/800 only; emulation showed **every mainstream device took the 800w file** and the 400 rung won on nothing, because a browser needs `slot-CSS-px × DPR` (≥ 540 on the narrowest phone still sold). Bytes scale with pixel count, so the gap was a cliff, not a ladder. 600 covers the whole DPR-1.5 phone band at 143 KB instead of 245 KB — a 42% cut for a large slice of real traffic that 400/800 missed entirely. 400 is kept for the DPR-1 tail (narrow desktop windows, DPR-1 webviews), which the `narrow DPR1` row confirms is real.
+
+  **`sizes` was wrong on both sides and is fixed:** `1600px` → `900px` in `newspaper.component.ts` (`updateMainImageSources()`) and in the plugin's `dn_build_preload_links()`. `1600px` described the whole site, not the image's slot, making the browser ask for a candidate twice the size it renders. 900px is the real upper bound (centre panel with the left panel collapsed). These two must stay in step with each other and with the CSS.
+
+  **Security hardening found while testing:** `dn_uploads_url_to_path_any_host()` returns `basedir . '/../../../etc/passwd'` for a crafted URL, which still passes a `$baseDir . '/'` string-prefix test — an authenticated editor could have written `-dnv400.avif` siblings outside the uploads tree, or re-encoded any server-readable image into a public URL via `fullImageHiRes`. New `dn_uploads_relative_path()` uses `realpath()` + `is_file()` + prefix test, applied to **both** `fullImage` and `fullImageHiRes`. Proved with a real 1200px JPEG decoy planted outside uploads and an assertion that nothing was written there.
+
+  **Where it runs:** `put_page_endpoint()`, after the lock check (a rejected save spends no CPU encoding). Client-supplied `imageVariants` is discarded outright — srcsets may only name files this server wrote. Best-effort throughout: any failure yields fewer entries and the viewer falls back to the plain `<img src>`. Generation is idempotent (`file_exists` short-circuit): **1327 ms first save, ~1 ms on re-save** (GD locally; the host has Imagick).
+
+  ⚠ **Backfill:** only pages saved through `PUT /data/page` get variants. Historical pages keep serving the single image until re-saved — no regression, just no gain.
+
+  **Tests:** 38/38 assertions across three suites (happy path + byte assertions, edge cases, path traversal), run against the real methods extracted from the plugin. `php -l` clean.
+  **Not verified:** the WebP-only path in a real non-AVIF browser (selection math is format-independent and the 226 KB worst case is asserted by file size); Imagick-vs-GD encode time on the production host.
 
 ### Deploy correctness
 

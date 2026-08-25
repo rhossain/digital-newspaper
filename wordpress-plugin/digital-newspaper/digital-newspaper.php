@@ -2258,7 +2258,7 @@ HTACCESS;
     // MUST stay in step with mainImgSizes in newspaper.component.ts. If the two
     // disagree the browser picks a different candidate than <picture> will, and
     // the preload becomes a wasted download of a width nothing ever renders.
-    $sizes = '(max-width: 1024px) 100vw, 1600px';
+    $sizes = '(max-width: 1024px) 100vw, 900px';
 
     // The full-page image is what the reader came for and what Largest
     // Contentful Paint measures, so it is preloaded FIRST and at high priority.
@@ -5551,6 +5551,275 @@ HTML;
   }
 
   // ══════════════════════════════════════════════════════════════════════════
+  //  RESPONSIVE PAGE-IMAGE VARIANTS  (P2-1)
+  // ══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Output ladder for the page display image, keyed by MIME type.
+   *
+   * The widths are NOT the plan's 800/1200/1600. That ladder assumed readers
+   * download the original scan; they do not — admin.component.ts resizes the
+   * display copy to 700px wide before upload, so 1200/1600 tiers could only be
+   * produced by upscaling, and even sourced from the hi-res original they would
+   * make the LCP element heavier than it is today. Measured on a 2400×3400
+   * dense-text page (bytes for one page image):
+   *
+   *   today  700w WebP q88   271 KB   ← baseline
+   *          400w AVIF q58    65 KB   −76%
+   *          800w AVIF q58   245 KB   −10%   (and 1.14× sharper than today)
+   *         1100w AVIF q58   300 KB   +11%
+   *         1400w AVIF q58   540 KB   +99%
+   *
+   * So the ladder stops at 800 — the desktop centre panel is 800 CSS px wide
+   * (1600 site − 200 left panel, then 12/21 of the remainder). Every viewport
+   * ends up with fewer bytes than today at equal or better resolution. Retina
+   * screens are still served below their device-pixel count; closing that gap
+   * costs 2× the bytes on the LCP element, which this plan is not willing to
+   * spend. The zoom modal remains the path to full detail.
+   *
+   * WebP stops at 700 on purpose: 800w WebP q80 is 297 KB, i.e. MORE than the
+   * 271 KB the same browsers download today. AVIF-capable clients get the 800w
+   * tier; the rest keep today's bytes at today's resolution.
+   *
+   * The 600 rung exists because device emulation (Chrome 151, CDP
+   * setDeviceMetricsOverride across eight profiles) showed a 400/800 ladder
+   * hands the 800w file to EVERY mainstream device — a browser needs
+   * slot-CSS-px × DPR, which is ≥ 540 on the narrowest phone anyone still
+   * ships, so the 400 rung never won and the gap above it was a cliff. Bytes
+   * scale with pixel count, so the intermediate tiers are cheap:
+   *
+   *          400w AVIF  65 KB     600w AVIF 143 KB     800w AVIF 245 KB
+   *          400w WebP  80 KB     600w WebP 174 KB     700w WebP 226 KB
+   *
+   * 600 covers the whole DPR-1.5 phone band (360–400 CSS px → 540–600 device
+   * px) at 143 KB instead of 245 KB — a 42% cut for a large slice of real
+   * traffic that a 400/800 ladder missed entirely. 400 is kept for the DPR-1
+   * tail (narrow desktop windows, DPR-1 webviews); emulation confirms no
+   * mainstream phone selects it, but it is the cheapest rung to produce.
+   */
+  private const DN_VARIANT_LADDER = [
+    'image/avif' => ['ext' => 'avif', 'quality' => 58, 'widths' => [400, 600, 800]],
+    'image/webp' => ['ext' => 'webp', 'quality' => 80, 'widths' => [400, 600, 700]],
+  ];
+
+  /**
+   * Replace a page's `imageVariants` srcsets with freshly derived ones.
+   *
+   * Called from the page-save endpoint, never from a read path: encoding the
+   * six ladder rungs takes ~1–2 s and an editor saving a page can absorb that,
+   * while a reader fetching an edition cannot.
+   *
+   * Whatever the client sent under `imageVariants` is discarded outright —
+   * `width`/`height` are re-derived from disk on every read by
+   * dn_attach_page_dimensions(), and the srcsets must only ever name files this
+   * server actually wrote.
+   */
+  private function dn_apply_page_image_variants(array $page): array {
+    unset($page['imageVariants']);
+    try {
+      $generated = $this->dn_build_page_image_variants($page);
+    } catch (\Throwable $e) {
+      error_log('[DigitalNewspaper] page image variant generation failed: ' . $e->getMessage());
+      return $page;
+    }
+    if (!empty($generated)) {
+      $page['imageVariants'] = $generated;
+    }
+    return $page;
+  }
+
+  /**
+   * Generate (or reuse) the AVIF/WebP width variants for one page and return
+   * them as `['avif' => ['<url> 400w', …], 'webp' => [...]]`.
+   *
+   * Best-effort throughout: any failure yields fewer entries, never an error.
+   * An empty return means the viewer renders the plain `<img src>` exactly as
+   * it does today.
+   *
+   * @param array $page Page payload with `fullImage` (+ optional `fullImageHiRes`).
+   */
+  private function dn_build_page_image_variants(array $page): array {
+    $display = isset($page['fullImage']) ? trim((string) $page['fullImage']) : '';
+    if ($display === '') {
+      return [];
+    }
+
+    $upload  = wp_upload_dir();
+    $baseDir = rtrim((string) ($upload['basedir'] ?? ''), '/');
+    $baseUrl = rtrim((string) ($upload['baseurl'] ?? ''), '/');
+    if ($baseDir === '' || $baseUrl === '') {
+      return [];
+    }
+
+    // Derived filenames hang off the DISPLAY image's path, so replacing a page
+    // image (which always yields a new upload URL) produces a new variant set
+    // instead of silently serving the previous image's pixels.
+    $rel = $this->dn_uploads_relative_path($display, $baseDir);
+    if ($rel === '') {
+      return [];
+    }
+    $displayPath = $baseDir . '/' . $rel;
+
+    $dir = (string) pathinfo($rel, PATHINFO_DIRNAME);
+    if ($dir === '.' || $dir === DIRECTORY_SEPARATOR) {
+      $dir = '';
+    }
+    $dir  = trim(str_replace('\\', '/', $dir), '/');
+    $stem = (string) pathinfo($rel, PATHINFO_FILENAME);
+    if ($stem === '') {
+      return [];
+    }
+    $prefix = ($dir !== '' ? $dir . '/' : '') . $stem;
+
+    // Pixels come from the widest local copy: the hi-res crop original when the
+    // page has one, else the 700px display copy. Widths above the source are
+    // skipped — an upscaled variant is more bytes for no more detail.
+    $source = $this->dn_widest_local_image_source($page, $displayPath, $baseDir);
+    if ($source === null) {
+      return [];
+    }
+    [$srcPath, $srcWidth] = $source;
+
+    $avifSupported = wp_image_editor_supports(['mime_type' => 'image/avif']);
+
+    $variants = [];
+    foreach (self::DN_VARIANT_LADDER as $mime => $job) {
+      if ($mime === 'image/avif' && !$avifSupported) {
+        continue;
+      }
+      // Clamp each rung to the source width rather than dropping the ones above
+      // it. A page with no hi-res original has only the 700px display copy to
+      // work from, and skipping the 800 rung outright would cap AVIF clients at
+      // the 600w tier — so a desktop reader needing 800 would fall through to
+      // the 700w WebP source at 226 KB instead of taking a 700w AVIF at 185 KB.
+      // min() still never upscales, which is the only thing the ladder must
+      // guarantee; unique+sort then collapses the clamped duplicate.
+      $widths = array_map(static function ($w) use ($srcWidth) { return min((int) $w, $srcWidth); }, $job['widths']);
+      $widths = array_values(array_unique(array_filter($widths, static function ($w) { return $w > 0; })));
+      sort($widths);
+
+      $entries = [];
+      foreach ($widths as $width) {
+        $relOut  = $prefix . '-dnv' . $width . '.' . $job['ext'];
+        $outPath = $baseDir . '/' . $relOut;
+        if (!file_exists($outPath)
+            && !$this->dn_write_image_variant($srcPath, $width, $mime, (int) $job['quality'], $outPath)) {
+          continue;
+        }
+        $url = $baseUrl . '/' . $relOut;
+        // Whitespace anywhere in the URL makes the whole srcset unparseable, so
+        // the entry is dropped rather than shipped broken. sanitize_file_name()
+        // already rules this out for uploads; this is the belt to that braces.
+        if (preg_match('/\s/', $url)) {
+          continue;
+        }
+        $entries[] = $url . ' ' . $width . 'w';
+      }
+      if (!empty($entries)) {
+        $variants[$job['ext']] = $entries;
+      }
+    }
+
+    return $variants;
+  }
+
+  /**
+   * Resolve an uploads URL to its canonical path RELATIVE to the uploads
+   * basedir, or '' when it does not name an existing file inside that directory.
+   *
+   * realpath() is what makes this safe: image URLs come from an authenticated
+   * editor's page payload, and a value like
+   * `…/wp-content/uploads/../../../tmp/x.jpg` still has the basedir as a string
+   * prefix, so a prefix test alone would let the derived `-dnv400.avif` siblings
+   * be written outside the uploads tree. Resolving first collapses `..` and
+   * symlinks, so the caller can only ever build paths under basedir.
+   */
+  private function dn_uploads_relative_path(string $url, string $baseDir): string {
+    $candidate = $this->dn_uploads_url_to_path_any_host($url);
+    if ($candidate === '') {
+      return '';
+    }
+    $realBase = realpath($baseDir);
+    $realPath = realpath($candidate);
+    if ($realBase === false || $realPath === false) {
+      return '';
+    }
+    $realBase = rtrim(str_replace('\\', '/', $realBase), '/');
+    $realPath = str_replace('\\', '/', $realPath);
+    if (!is_file($realPath) || strpos($realPath, $realBase . '/') !== 0) {
+      return '';
+    }
+    return ltrim(substr($realPath, strlen($realBase)), '/');
+  }
+
+  /**
+   * Pick the widest locally readable source image for a page: the hi-res crop
+   * original when present and measurable, otherwise the display copy.
+   *
+   * @return array{0:string,1:int}|null [absolute path, pixel width] or null.
+   */
+  private function dn_widest_local_image_source(array $page, string $displayPath, string $baseDir): ?array {
+    $paths = [];
+    $hires = isset($page['fullImageHiRes']) ? trim((string) $page['fullImageHiRes']) : '';
+    if ($hires !== '') {
+      // Held to the same inside-uploads rule as the display image: without it a
+      // crafted hi-res URL could re-encode any image the server can read into a
+      // publicly reachable variant file.
+      $hiResRel = $this->dn_uploads_relative_path($hires, $baseDir);
+      if ($hiResRel !== '') {
+        $paths[] = rtrim($baseDir, '/') . '/' . $hiResRel;
+      }
+    }
+    $paths[] = $displayPath;
+
+    $best = null;
+    foreach ($paths as $path) {
+      $info = @getimagesize($path);
+      if (!is_array($info) || empty($info[0])) {
+        continue;
+      }
+      $width = (int) $info[0];
+      if ($best === null || $width > $best[1]) {
+        $best = [$path, $width];
+      }
+    }
+    return $best;
+  }
+
+  /**
+   * Write one resized re-encode of $srcPath to $destPath. Returns false on any
+   * failure, including a save that landed somewhere other than $destPath — the
+   * URL handed to the browser is derived, not read back, so a corrected
+   * extension would name a file that does not exist.
+   */
+  private function dn_write_image_variant(
+    string $srcPath,
+    int $width,
+    string $mime,
+    int $quality,
+    string $destPath
+  ): bool {
+    $editor = wp_get_image_editor($srcPath);
+    if (is_wp_error($editor)) {
+      return false;
+    }
+    $editor->set_quality($quality);
+    // null height + crop=false → height follows the source aspect ratio.
+    if (is_wp_error($editor->resize($width, null, false))) {
+      return false;
+    }
+    $saved = $editor->save($destPath, $mime);
+    if (is_wp_error($saved) || empty($saved['path'])) {
+      return false;
+    }
+    if ($saved['path'] !== $destPath) {
+      @unlink($saved['path']);
+      return false;
+    }
+    return file_exists($destPath) && filesize($destPath) > 0;
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
   //  HEALTH ENDPOINT  (FP-5)
   // ══════════════════════════════════════════════════════════════════════════
 
@@ -7628,6 +7897,11 @@ HTML;
       if ((int)($page['id'] ?? 0) > 0 && !$this->lock_belongs_to_current_user($resource)) {
         return $this->locked_response($resource);
       }
+
+      // Derive the responsive AVIF/WebP widths for the display image (P2-1).
+      // This is the only page-mutation path the admin uses, and it runs after
+      // the lock check so a rejected save never spends CPU encoding images.
+      $page = $this->dn_apply_page_image_variants($page);
 
       // PERF: read ONLY this date's slice (settings + dn_edition_{date}) instead
       // of deserialising the full ~30 MB dn_data blob.  Combined with the blob-
