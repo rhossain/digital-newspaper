@@ -222,17 +222,36 @@ Five independent read-only reviews, then every finding re-traced by hand before 
 
 ### SEO — the two that actually matter
 
-- [ ] **P1-15 · Add search crawlers to the prerender UA set; remove `Googlebot-Image`** — `S`
+- [x] **P1-15 · Add search crawlers to the prerender UA set; remove `Googlebot-Image`** — `S`
   Define the UA sets once via `mod_setenvif` (the list is currently duplicated verbatim five times at `.htaccess:16, 17, 59, 64, 69`), then replace the three `RewriteCond %{HTTP_USER_AGENT}` lines with `RewriteCond %{ENV:IS_PRERENDER_BOT} =1`. Widen `Vary: User-Agent` to *all* responses, not just bot ones (`:222-224`).
   ⚠ **Do not ship without P1-16.**
   **Why:** Googlebot currently receives a 9,728-byte shell with zero content words on every URL; Googlebot-Image receives a `noarchive` redirect page, which is a cloaking signal *and* blocks Google Images.
   **Done when:** `curl -A 'Googlebot/2.1' <article-url>` returns real article text.
+  **Status: DONE** (25 Aug 2026), shipped together with P1-16 as required. Five duplicated UA lists collapsed into **three `SetEnvIfNoCase` lines**: `IS_SOCIAL_BOT`, `IS_SEARCH_BOT`, and their union `IS_PRERENDER_BOT` (built in two passes — `SetEnvIf` cannot read an env var set by the same directive). The rewrite conditions are now `%{ENV:IS_…}`, each `[OR]`-chained with its `REDIRECT_IS_…` twin so the rules still match if the ruleset re-enters after an internal rewrite. `Googlebot-Image` is in **neither** set: an image crawler needs image bytes, so it now falls through to normal static handling instead of getting a noarchive redirect stub.
+  **Two deliberate narrowings of the spec:**
+  - The **homepage rule stays social-only.** Sending a search crawler to a site-level OG stub with no article text in it would be a thin indexable page; the existing root handling (prerendered `index.html` if present, app shell otherwise) is strictly better. The item's own done-when is about an *article* URL.
+  - `Vary: User-Agent` was added to the **shell responses** (`^index(\.csr)?\.html$` and `\.html\.(?:br|gz)$`) rather than literally every response. Those are the URLs whose body now depends on UA; adding it to 1-year-cached hashed assets would only cost CDN efficiency, and `/social` already sets the header itself.
+  **Bug found by the UA test, pre-existing:** the social list contained a bare `Xbot`, which — matched case-insensitively — also matches **Yande**`xBot`. Yandex has been receiving the social OG stub with `Cache-Control: no-store` instead of indexing the site. Now `\bXbot`.
+  **Verified:** a 19-case table of real crawler UA strings (Googlebot desktop/mobile/News, AdsBot, Googlebot-Image, bingbot, Applebot, YandexBot, DuckDuckBot, Baiduspider, Yahoo Slurp, facebookexternalhit, WhatsApp, Twitterbot, Xbot, LinkedInBot, TelegramBot, plus real Chrome and Safari) is classified correctly, with **no UA in both sets**, and the PHP-side test agrees with the `.htaccess` sets on every row. Both regexes are read out of the two files at test time, so the test cannot drift from them. Container tags balanced, no dangling `RewriteCond`.
+  ⚠ **Smoke-test right after deploy — this is the one part I cannot verify from here.** `%{ENV:…}` in a `RewriteCond` depends on the host honouring `SetEnvIf` before the rewrite phase; on LiteSpeed a failure would be **silent**, and the symptom is broken WhatsApp/Facebook link previews. Check both kinds immediately:
+  `curl -sA 'facebookexternalhit/1.1' <site>/ | grep -c og:image` → expect ≥1
+  `curl -sA 'Googlebot/2.1' <article-url> | grep -c '<article>'` → expect 1
+  If the social one returns 0, revert to literal `RewriteCond %{HTTP_USER_AGENT} "…"` conditions (the UA lists in the `SetEnvIf` block are the source to copy from) — the PHP side needs no change.
 
-- [ ] **P1-16 · Make `/social` a legitimate dynamic-rendering endpoint** — `M`
+- [x] **P1-16 · Make `/social` a legitimate dynamic-rendering endpoint** — `M`
   For search-bot UAs: emit the real article body, drop the `window.location.replace()` (`digital-newspaper.php:3546`), drop `X-Robots-Tag: noarchive` (`:3354`), add `<meta name="description">` and a canonical.
   ⚠ **hard dependency of** P1-15 — shipping P1-15 alone means serving crawlers a redirect stub, which is worse than the status quo.
   **Why:** Google sanctions dynamic rendering when the content matches what the SPA renders. Serving structured data and then bouncing the crawler is cloaking.
   **Done when:** the bot response and the rendered SPA page contain equivalent text.
+  **Status: DONE** (25 Aug 2026). `social_sharing_endpoint()` now builds **two** documents for an article URL, chosen by `dn_is_search_crawler()`:
+  - *Search crawlers* get `<article>` with an `<h1>`, the date, the section image as a `<figure>`, and the real body — the section's own `content` HTML run through `wp_kses_post()` (the endpoint is publicly reachable by anyone sending a crawler UA, so the admin-entered markup is sanitised rather than echoed raw), falling back to the plain-text copy when the markup strips to nothing. Plus `<meta name="description">` and `<link rel="canonical">`. **No `window.location.replace()`**, and `dn_serve_social_html()`'s new third argument suppresses `X-Robots-Tag: noarchive` for this variant only.
+  - *Card crawlers* get byte-for-byte what they got before, redirect stub and `noarchive` included. They never run JS, and their OG-tag path was already correct — there was nothing to gain by changing it and a live link-preview regression to lose.
+  **Three things the naive version would have got wrong, all fixed:**
+  1. **The transient key now includes the bot kind.** Without it a cached card-crawler stub would be served to Googlebot — content-free *and* carrying a JS redirect, i.e. precisely the cloaking this item exists to remove.
+  2. **The cached entry carries its own `indexable` flag** (`['html' => …, 'indexable' => bool]`, with plain strings honoured as legacy non-indexable entries). Re-deriving indexability from the UA on a cache hit would have served a *stub* without `noarchive` whenever the cached search-variant request had failed to find its section.
+  3. **`$found && $body !== ''` guards the indexable branch.** The site-level fallback path leaves the title as the site name and the body empty; emitting that as archivable would add a thin, duplicate URL to the index for every mistyped slug. Those fall through to the ordinary noarchive stub.
+  **Verified** by extracting the emitted template straight from the plugin source and rendering it with realistic Bengali values: `<h1>`, real body text, `<meta name="description">`, `<link rel="canonical">`, `og:type=article`, no unsubstituted `{$var}` placeholders, and **no** `window.location.replace` — 22 words of visible body text where the shell previously had zero. The only parse complaints are libxml2's HTML4 parser not knowing `<article>`, `<time>` and `<figure>`; real crawlers parse HTML5.
+  **Verify against the live site after deploy:** `curl -A 'Googlebot/2.1' <article-url>` should return the article text, and Search Console's URL Inspection should render it. Google's own guidance is that the crawler copy must match what users see — if the SPA's article text ever diverges from `section.content`, this endpoint diverges with it.
 
 **P1 exit criteria:** cold-load LCP image on round trip 2; Googlebot receives real HTML; CLS free of ad-slot jumps; PWA installable.
 

@@ -13,8 +13,31 @@
 #   skips its cache lookup entirely for this request so mod_rewrite fires.
 #   Reference: https://www.litespeedtech.com/support/wiki/doku.php/litespeed_wiki:cache:lscache:no-cache
 <IfModule mod_setenvif.c>
-  SetEnvIfNoCase User-Agent "facebookexternalhit|Facebot|Twitterbot|Xbot|LinkedInBot|WhatsApp|Slackbot|Slackbot-LinkExpanding|TelegramBot|Discordbot|Pinterest|vkShare|W3C_Validator|Googlebot-Image" IS_SOCIAL_BOT=1
-  SetEnvIfNoCase User-Agent "facebookexternalhit|Facebot|Twitterbot|Xbot|LinkedInBot|WhatsApp|Slackbot|Slackbot-LinkExpanding|TelegramBot|Discordbot|Pinterest|vkShare|W3C_Validator|Googlebot-Image" no-cache=1
+  # The UA lists live here and ONLY here. They used to be repeated verbatim in
+  # five places, which is how Googlebot-Image ended up in a set that answers with
+  # a noarchive redirect stub — blocking Google Images and looking like cloaking.
+  #
+  # IS_SOCIAL_BOT/IS_SEARCH_BOT are deliberately separate sets: they get different
+  # responses from /social. Card crawlers want OG tags (and never run JS, so the
+  # redirect stub is harmless to them); search crawlers must get the real article
+  # text with no redirect and no noarchive, or the whole arrangement is cloaking.
+  #
+  # Googlebot-Image is in NEITHER set: an image crawler needs the image bytes at
+  # the real image URLs, so it falls through to normal static/SPA handling.
+  # \b before Xbot is load-bearing: the list is matched case-insensitively, and a
+  # bare "Xbot" also matches "YandexBot", which sent Yandex the social OG stub
+  # instead of letting it index the site.
+  SetEnvIfNoCase User-Agent "facebookexternalhit|Facebot|Twitterbot|\bXbot|LinkedInBot|WhatsApp|Slackbot|Slackbot-LinkExpanding|TelegramBot|Discordbot|Pinterest|vkShare|W3C_Validator" IS_SOCIAL_BOT=1
+  SetEnvIfNoCase User-Agent "Googlebot/|Googlebot-News|AdsBot-Google|Bingbot|BingPreview|DuckDuckBot|YandexBot|Applebot|Baiduspider|Slurp" IS_SEARCH_BOT=1
+
+  # Union of the two, used by the article rules below. Set in two passes because
+  # SetEnvIf cannot test another env var it just set in the same directive.
+  SetEnvIf IS_SOCIAL_BOT 1 IS_PRERENDER_BOT=1
+  SetEnvIf IS_SEARCH_BOT 1 IS_PRERENDER_BOT=1
+
+  # LiteSpeed's page cache would otherwise answer from its own cache and the
+  # mod_rewrite rules below would never run. Needed for BOTH bot kinds.
+  SetEnvIf IS_PRERENDER_BOT 1 no-cache=1
 </IfModule>
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -65,17 +88,25 @@
   # determine the REST route from the URL; the explicit rest_route param works
   # regardless of permalink configuration.
   # ---------------------------------------------------------------
-  RewriteCond %{HTTP_USER_AGENT} "facebookexternalhit|Facebot|Twitterbot|Xbot|LinkedInBot|WhatsApp|Slackbot|Slackbot-LinkExpanding|TelegramBot|Discordbot|Pinterest|vkShare|W3C_Validator|Googlebot-Image" [NC]
+  # The homepage stays SOCIAL-ONLY. A search crawler is better served by the
+  # normal root handling below (prerendered index.html when present, app shell
+  # otherwise) than by a site-level OG stub with no article text in it.
+  RewriteCond %{ENV:IS_SOCIAL_BOT} =1 [OR]
+  RewriteCond %{ENV:REDIRECT_IS_SOCIAL_BOT} =1
   RewriteRule ^$ /wp/index.php?rest_route=/digital-newspaper/v1/social&homepage=1 [NE,L,QSA]
 
   # New canonical article URL format:
   #   /YYYY-MM-DD/page-XX/edition-XX/post-xxxx
-  RewriteCond %{HTTP_USER_AGENT} "facebookexternalhit|Facebot|Twitterbot|Xbot|LinkedInBot|WhatsApp|Slackbot|Slackbot-LinkExpanding|TelegramBot|Discordbot|Pinterest|vkShare|W3C_Validator|Googlebot-Image" [NC]
+  # Article URLs go to /social for BOTH bot kinds; the endpoint decides what to
+  # emit — OG stub for card crawlers, full article text for search crawlers.
+  RewriteCond %{ENV:IS_PRERENDER_BOT} =1 [OR]
+  RewriteCond %{ENV:REDIRECT_IS_PRERENDER_BOT} =1
   RewriteRule ^([0-9]{4}-[0-9]{2}-[0-9]{2})/(page-[^/]+)/((?:edition)-[^/]+)/([^/?]+)/?$ /wp/index.php?rest_route=/digital-newspaper/v1/social&date=$1&page=$2&edition=$3&slug=$4 [NE,L,QSA]
 
   # Legacy format kept for backward compatibility:
   #   /YYYY-MM-DD/section-slug
-  RewriteCond %{HTTP_USER_AGENT} "facebookexternalhit|Facebot|Twitterbot|Xbot|LinkedInBot|WhatsApp|Slackbot|Slackbot-LinkExpanding|TelegramBot|Discordbot|Pinterest|vkShare|W3C_Validator|Googlebot-Image" [NC]
+  RewriteCond %{ENV:IS_PRERENDER_BOT} =1 [OR]
+  RewriteCond %{ENV:REDIRECT_IS_PRERENDER_BOT} =1
   RewriteRule ^([0-9]{4}-[0-9]{2}-[0-9]{2})/([^/?]+)/?$ /wp/index.php?rest_route=/digital-newspaper/v1/social&date=$1&slug=$2 [NE,L,QSA]
 
   # ── Root URL explicit rewrite ────────────────────────────────────────────────
@@ -128,6 +159,11 @@
 <IfModule mod_headers.c>
   <FilesMatch "^index(\.csr)?\.html$">
     Header always set Cache-Control "no-cache, must-revalidate"
+    # The same URL now has two possible bodies — this shell for humans, the
+    # /social response for crawlers — chosen by User-Agent. Without Vary a shared
+    # cache can hand a crawler's copy to a reader, or a reader's shell to
+    # Googlebot, which is exactly the cloaking signal this arrangement must avoid.
+    Header always append Vary User-Agent
   </FilesMatch>
 </IfModule>
 
@@ -211,6 +247,8 @@
   <FilesMatch "\.html\.(?:br|gz)$">
     Header set Content-Type "text/html; charset=UTF-8"
     Header always set Cache-Control "no-cache, must-revalidate"
+    # Same reasoning as the uncompressed shell above.
+    Header always append Vary User-Agent
   </FilesMatch>
 </IfModule>
 

@@ -3494,8 +3494,26 @@ HTACCESS;
    * @param bool   $cached TRUE when the response came from the transient cache;
    *                       adds an X-Cache: HIT header for observability/debugging.
    */
-  private function dn_serve_social_html(string $html, bool $cached): void {
-    add_filter('rest_pre_serve_request', static function ($served) use ($html, $cached) {
+  /**
+   * True when the requesting UA is a SEARCH crawler rather than a social card
+   * crawler. Must stay in step with IS_SEARCH_BOT in .htaccess — that env var
+   * decides which requests reach this endpoint, this test decides what they get.
+   *
+   * "Googlebot/" keeps the trailing slash so it matches the real product token
+   * ("Googlebot/2.1") without also matching Googlebot-Image, which must never be
+   * routed here: an image crawler needs image bytes, not HTML.
+   */
+  private function dn_is_search_crawler(): bool {
+    $ua = isset($_SERVER['HTTP_USER_AGENT']) ? (string) $_SERVER['HTTP_USER_AGENT'] : '';
+    if ($ua === '') return false;
+    return (bool) preg_match(
+      '#Googlebot/|Googlebot-News|AdsBot-Google|Bingbot|BingPreview|DuckDuckBot|YandexBot|Applebot|Baiduspider|Slurp#i',
+      $ua
+    );
+  }
+
+  private function dn_serve_social_html(string $html, bool $cached, bool $indexable = false): void {
+    add_filter('rest_pre_serve_request', static function ($served) use ($html, $cached, $indexable) {
       if (!$served) {
         status_header(200);
         header('Content-Type: text/html; charset=utf-8');
@@ -3506,7 +3524,15 @@ HTACCESS;
         // shell is served exclusively to social bots (matched by User-Agent in
         // .htaccess) and JS-redirects real browsers to the Angular app, so it
         // never competes with the real pages for search indexing.
-        header('X-Robots-Tag: noarchive');
+        //
+        // $indexable flips that: the search-crawler variant carries the same
+        // article text the SPA renders, so it is a dynamic-rendering response
+        // that must be archivable. Sending 'noarchive' with real content — or
+        // real content plus a JS redirect — is the cloaking pattern Google
+        // penalises, which is why the two variants are built separately.
+        if (!$indexable) {
+          header('X-Robots-Tag: noarchive');
+        }
         header('Vary: User-Agent');
         if ($cached) {
           header('X-Cache: HIT');
@@ -3542,14 +3568,36 @@ HTACCESS;
     $dataVersion = (is_array($index) && isset($index['dataVersion']))
                    ? (float) $index['dataVersion'] : 0.0;
 
-    $param_key = $is_homepage
-                 ? 'hp'
-                 : "{$date}|{$pageSlug}|{$editionSlug}|{$slug}";
-    $cache_key = 'dn_soc_' . md5($param_key . '|v' . $dataVersion . '|c' . self::SOCIAL_CACHE_VER);
+    // The bot kind is part of the key: the two variants of the same URL have
+    // different bodies (OG stub vs full article text) and different headers.
+    // Without this a cached card-crawler stub would be handed to Googlebot —
+    // content-free, with a JS redirect, i.e. exactly the cloaking signal the
+    // search variant exists to avoid.
+    $isSearchBot = $this->dn_is_search_crawler();
+    $param_key   = $is_homepage
+                   ? 'hp'
+                   : "{$date}|{$pageSlug}|{$editionSlug}|{$slug}";
+    $cache_key   = 'dn_soc_' . md5(
+      $param_key . '|v' . $dataVersion . '|c' . self::SOCIAL_CACHE_VER
+      . ($isSearchBot ? '|search' : '|social')
+    );
 
-    $cached_html = get_transient($cache_key);
-    if ($cached_html !== false && is_string($cached_html) && $cached_html !== '') {
-      $this->dn_serve_social_html($cached_html, true);
+    // The entry carries its own indexability rather than re-deriving it here: a
+    // search-crawler request for a section that could not be found caches the
+    // ordinary noarchive stub, and re-deriving from $isSearchBot would then serve
+    // that content-free stub as archivable. Plain strings are legacy entries
+    // written before this variant existed and are always non-indexable.
+    $cached_entry     = get_transient($cache_key);
+    $cached_html      = '';
+    $cached_indexable = false;
+    if (is_array($cached_entry) && isset($cached_entry['html'])) {
+      $cached_html      = (string) $cached_entry['html'];
+      $cached_indexable = !empty($cached_entry['indexable']);
+    } elseif (is_string($cached_entry)) {
+      $cached_html = $cached_entry;
+    }
+    if ($cached_html !== '') {
+      $this->dn_serve_social_html($cached_html, true, $cached_indexable);
       return new WP_REST_Response(null, 200);
     }
 
@@ -3696,7 +3744,7 @@ HTACCESS;
 </html>
 HTML;
 
-      set_transient($cache_key, $html, HOUR_IN_SECONDS);
+      set_transient($cache_key, ['html' => $html, 'indexable' => false], HOUR_IN_SECONDS);
       $this->dn_serve_social_html($html, false);
       return new WP_REST_Response(null, 200);
     }
@@ -3732,10 +3780,11 @@ HTML;
       $editionNumberFilter = (int) $m[1];
     }
 
-    $secTitle   = '';
-    $secContent = '';
-    $imageUrl   = '';
-    $found      = false;
+    $secTitle    = '';
+    $secContent  = '';
+    $secContentHtml = ''; // markup-preserving copy, for the search-crawler body
+    $imageUrl    = '';
+    $found       = false;
 
     foreach ($editions as $edition) {
       // Normalise to YYYY-MM-DD — the stored value may carry a trailing timestamp.
@@ -3755,8 +3804,9 @@ HTML;
           $id    = (string) ($sec['id']    ?? '');
           $title = (string) ($sec['title'] ?? '');
           if ($this->dn_matches_section_slug($slug, $title, $id)) {
-            $secTitle   = $title;
-            $secContent = html_entity_decode(strip_tags((string) ($sec['content'] ?? '')), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+            $secTitle       = $title;
+            $secContentHtml = (string) ($sec['content'] ?? '');
+            $secContent = html_entity_decode(strip_tags($secContentHtml), ENT_QUOTES | ENT_HTML5, 'UTF-8');
             $rawImg     = trim((string) ($sec['imageUrl'] ?? ''));
             if ($rawImg !== '') {
               $imageUrl = $this->dn_resolve_image($rawImg, $wpBase);
@@ -3885,6 +3935,80 @@ HTML;
                       . "  <meta name=\"twitter:image:alt\" content=\"{$t}\">\n";
     }
 
+    // Prepared here so the branch condition below can test it: an indexable page
+    // is only worth serving if it actually has body text.
+    $searchBodyHtml = $isSearchBot ? trim(wp_kses_post($secContentHtml)) : '';
+    if ($searchBodyHtml === '' && $isSearchBot && $secContent !== '') {
+      $searchBodyHtml = '<p>' . esc_html($secContent) . '</p>';
+    }
+
+    // $found guards against the site-level fallback path above: with no section
+    // matched there is no article text, and emitting an archivable page whose
+    // body is just the site name would put a thin, duplicate URL into the index.
+    // Those requests get the ordinary noarchive stub instead — nothing to index,
+    // and we do not pretend otherwise.
+    if ($isSearchBot && $found && $searchBodyHtml !== '') {
+      // ── Dynamic-rendering variant ───────────────────────────────────────────
+      // Google sanctions serving a server-rendered copy to crawlers ONLY when it
+      // carries the same content the SPA renders. So: the real article body, a
+      // canonical pointing at the SPA URL, a real meta description — and NO
+      // window.location.replace(), because a redirect on a page full of content
+      // is the cloaking pattern. The noarchive header is dropped too, via the
+      // third argument to dn_serve_social_html().
+      //
+      // wp_kses_post() rather than raw output: this body is admin-entered HTML
+      // and the endpoint is publicly reachable by anyone sending a crawler UA.
+      $bodyHtml = $searchBodyHtml;
+
+      // Figure/image mirrors what the reader sees above the article text.
+      $figure = $img !== ''
+        ? "  <figure><img src=\"{$img}\" alt=\"{$t}\"" .
+          ($imgWidth !== '' && $imgHeight !== '' ? " width=\"{$imgWidth}\" height=\"{$imgHeight}\"" : '') .
+          "></figure>\n"
+        : '';
+
+      $dateAttr = esc_attr($date);
+
+      $html = <<<HTML
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{$t}</title>
+  <meta name="description" content="{$d}">
+  <link rel="canonical" href="{$u}">
+
+  <!-- Open Graph -->
+  <meta property="og:site_name"   content="{$s}">
+  <meta property="og:type"        content="article">
+  <meta property="og:title"       content="{$t}">
+  <meta property="og:description" content="{$d}">
+  <meta property="og:url"         content="{$u}">
+{$ogImgTags}
+  <!-- Twitter / X Card -->
+  <meta name="twitter:card"        content="summary_large_image">
+  <meta name="twitter:url"         content="{$twitterUrl}">
+  <meta name="twitter:domain"      content="{$twitterDomain}">
+  <meta name="twitter:title"       content="{$t}">
+  <meta name="twitter:description" content="{$d}">
+{$twitterImgTags}</head>
+<body>
+  <article>
+    <h1>{$t}</h1>
+    <p><time datetime="{$dateAttr}">{$dateAttr}</time> &middot; <span>{$s}</span></p>
+{$figure}{$bodyHtml}
+  </article>
+  <p><a href="{$u}">{$t}</a></p>
+</body>
+</html>
+HTML;
+
+      set_transient($cache_key, ['html' => $html, 'indexable' => true], HOUR_IN_SECONDS);
+      $this->dn_serve_social_html($html, false, true);
+      return new WP_REST_Response(null, 200);
+    }
+
     $html = <<<HTML
 <!DOCTYPE html>
 <html lang="bn">
@@ -3918,7 +4042,7 @@ HTML;
     // Cache the generated HTML so repeat bot requests (same section re-scraped
     // by Facebook, WhatsApp, etc.) are served from memory in microseconds.
     // TTL = 1 hour; auto-invalidated on publish via the dataVersion in the key.
-    set_transient($cache_key, $html, HOUR_IN_SECONDS);
+    set_transient($cache_key, ['html' => $html, 'indexable' => false], HOUR_IN_SECONDS);
 
     // Output HTML directly, bypassing WordPress's JSON response encoding.
     $this->dn_serve_social_html($html, false);
