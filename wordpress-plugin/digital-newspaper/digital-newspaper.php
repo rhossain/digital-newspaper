@@ -2145,7 +2145,18 @@ HTACCESS;
         // out of the preload step below on its account.
         $replacement = '<script id="dn-initial-state" type="application/json">' . $safe . '</script>';
         $pattern     = '#<script id="dn-initial-state"[^>]*>.*?</script>#s';
-        $tmp         = preg_replace($pattern, $replacement, $newHtml, 1, $count);
+        // preg_replace_callback, NOT preg_replace: the replacement carries article
+        // JSON, and preg_replace interprets `$1`/`\1` inside a replacement string
+        // as backreferences. A body containing e.g. "$100" would have it silently
+        // deleted (this pattern has no capture groups), producing invalid JSON and
+        // killing the inline-bootstrap path for that publish.
+        $tmp         = preg_replace_callback(
+          $pattern,
+          static function () use ($replacement) { return $replacement; },
+          $newHtml,
+          1,
+          $count
+        );
         if ($tmp !== null && $count > 0) {
           $newHtml = $tmp;
         }
@@ -2165,17 +2176,25 @@ HTACCESS;
           // viewport meta — rather than just before </head>. The preload only
           // helps if the browser discovers it before the rest of <head>; sitting
           // last put it behind every stylesheet and font preload above it.
+          // Callback form for the same reason as the state block above: an image
+          // URL containing `$1` would otherwise be read as a backreference.
           $hc       = 0;
-          $injected = preg_replace(
-            '#(<meta[^>]+name=["\']viewport["\'][^>]*>)#i',
-            '$1' . $preloadBlock,
+          $injected = preg_replace_callback(
+            '#<meta[^>]+name=["\']viewport["\'][^>]*>#i',
+            static function (array $m) use ($preloadBlock) { return $m[0] . $preloadBlock; },
             $newHtml,
             1,
             $hc
           );
           if ($injected === null || $hc === 0) {
             // No viewport meta (unexpected) — fall back to the old anchor.
-            $injected = preg_replace('#</head>#i', $preloadBlock . '</head>', $newHtml, 1, $hc);
+            $injected = preg_replace_callback(
+              '#</head>#i',
+              static function (array $m) use ($preloadBlock) { return $preloadBlock . $m[0]; },
+              $newHtml,
+              1,
+              $hc
+            );
           }
           if ($injected !== null && $hc > 0) {
             $newHtml = $injected;
@@ -2203,23 +2222,32 @@ HTACCESS;
   private function build_first_page_preload_block(array $editions): string {
     if (empty($editions)) return '';
 
-    // Prefer edition number 1; fall back to the first edition present.
+    // Prefer edition number 1; fall back to the first edition present. A missing
+    // or zero `edition` counts as 1 — that is how the viewer reads it
+    // (`(e.edition || 1) === editionNumber`, newspaper-data.service.ts:1350).
+    // Requiring the key to be present made PHP fall through to $editions[0],
+    // which can be a DIFFERENT edition than the one the reader sees, so the
+    // preload would fetch a page that is never rendered.
     $chosen = null;
     foreach ($editions as $ed) {
-      if (is_array($ed) && isset($ed['edition']) && (int) $ed['edition'] === 1) { $chosen = $ed; break; }
+      if (is_array($ed) && ((int) ($ed['edition'] ?? 0) ?: 1) === 1) { $chosen = $ed; break; }
     }
     if ($chosen === null) $chosen = is_array($editions[0] ?? null) ? $editions[0] : null;
     if (!$chosen || empty($chosen['pages']) || !is_array($chosen['pages'])) return '';
 
-    // Lowest page id = the page shown first.
+    // Lowest page id = the page shown first. Pages with no usable id sort LAST,
+    // matching build_light_editions(); defaulting them to 0 put them first and
+    // pointed the preload at a page the viewer would not show.
     $pages = $chosen['pages'];
     usort($pages, static function ($a, $b) {
-      return ((int) ($a['id'] ?? 0)) <=> ((int) ($b['id'] ?? 0));
+      $ida = isset($a['id']) && (int) $a['id'] > 0 ? (int) $a['id'] : PHP_INT_MAX;
+      $idb = isset($b['id']) && (int) $b['id'] > 0 ? (int) $b['id'] : PHP_INT_MAX;
+      return $ida <=> $idb;
     });
     $first = $pages[0];
 
-    $fullImage = isset($first['fullImage']) ? trim((string) $first['fullImage']) : '';
-    $thumb     = isset($first['thumbnail']) ? trim((string) $first['thumbnail']) : '';
+    $fullImage = $this->normalize_preload_url(isset($first['fullImage']) ? trim((string) $first['fullImage']) : '');
+    $thumb     = $this->normalize_preload_url(isset($first['thumbnail']) ? trim((string) $first['thumbnail']) : '');
     $fullOk    = $fullImage !== '' && $this->is_safe_preload_url($fullImage);
     $thumbOk   = $thumb !== '' && $this->is_safe_preload_url($thumb);
 
@@ -2246,10 +2274,17 @@ HTACCESS;
     $variantLink = '';
     foreach (['avif' => 'image/avif', 'webp' => 'image/webp'] as $key => $mime) {
       if (empty($variants[$key]) || !is_array($variants[$key])) continue;
-      $entries = array_filter(
-        array_map('trim', array_map('strval', $variants[$key])),
-        [$this, 'is_safe_preload_srcset_entry']
+      $candidates = array_map(
+        function ($entry) { return $this->normalize_preload_srcset_entry(trim((string) $entry)); },
+        $variants[$key]
       );
+      $entries    = array_filter($candidates, [$this, 'is_safe_preload_srcset_entry']);
+      // All-or-nothing. Dropping only the bad entries would leave the browser
+      // choosing from a SUBSET of what <picture> offers, so it can preload the
+      // 800w candidate while the page renders the 1600w one — a duplicate
+      // download of the largest image on the page, which is the exact failure
+      // this variant branch exists to avoid.
+      if (count($entries) !== count($candidates)) continue;
       if (empty($entries)) continue;
       $srcset = implode(', ', array_map('esc_attr', $entries));
       $variantLink = '<link rel="preload" as="image" type="' . esc_attr($mime) . '"'
@@ -2258,11 +2293,18 @@ HTACCESS;
       break; // AVIF wins when both exist, matching <picture> source order.
     }
 
+    $hasVariants = !empty($variants['avif']) || !empty($variants['webp']);
+
     if ($variantLink !== '') {
       $links .= $variantLink;
-    } elseif ($fullOk) {
+    } elseif ($fullOk && !$hasVariants) {
       $links .= '<link rel="preload" as="image" fetchpriority="high" href="' . esc_url($fullImage) . '">';
     }
+    // Deliberate: when variants exist but could not be expressed as a safe
+    // srcset, NO image preload is emitted. Falling back to the plain fullImage
+    // href would preload the original while <picture> renders the AVIF/WebP —
+    // downloading the largest asset on the page twice. Losing the preload costs
+    // some LCP; the duplicate costs more, on metered connections especially.
 
     if ($thumbOk) {
       $links .= '<link rel="preload" as="image" fetchpriority="low" href="' . esc_url($thumb) . '">';
@@ -2279,8 +2321,14 @@ HTACCESS;
     if (!is_string($entry)) return false;
     $entry = trim($entry);
     if ($entry === '') return false;
-    $url = trim((string) preg_replace('/\s+\S+$/', '', $entry));
-    return $url !== '' && $this->is_safe_preload_url($url);
+    // Exactly "<url> <descriptor>": one run of whitespace, and a descriptor of
+    // the srcset forms (123w / 2x / 1.5x). Splitting on the LAST whitespace run
+    // alone would accept "https://h/a b.avif 1400w", whose embedded space
+    // survives esc_attr() and makes the whole srcset unparseable — a silently
+    // inert preload. A comma anywhere would also break candidate splitting.
+    if (strpos($entry, ',') !== false) return false;
+    if (!preg_match('/^(\S+)\s+(?:[1-9]\d*w|(?:\d+(?:\.\d+)?)x)$/', $entry, $m)) return false;
+    return $this->is_safe_preload_url($m[1]);
   }
 
   /**
@@ -2295,6 +2343,43 @@ HTACCESS;
     if (!is_string($url)) return false;
     $url = trim($url);
     return $url !== '' && (stripos($url, 'http://') === 0 || stripos($url, 'https://') === 0);
+  }
+
+  /**
+   * Re-home an uploads URL onto this site's origin, mirroring resolveImageUrl()
+   * in newspaper.component.ts.
+   *
+   * The viewer rewrites the origin of EVERY absolute URL whose path contains
+   * /wp-content/uploads/ to the WordPress origin, whereas normalize_domain_urls()
+   * only rewrites hosts that appear in the domain-alias option. A URL on any other
+   * host — a CDN, or an alias that was pruned from the option — therefore reaches
+   * the preload verbatim while the <img> requests the re-homed URL: two full
+   * downloads of the same image, one of them the LCP element.
+   *
+   * Non-uploads URLs are returned untouched: they are not rewritten by the viewer
+   * either, so preload href and img src already agree.
+   */
+  private function normalize_preload_url(string $url): string {
+    if ($url === '' || stripos($url, '/wp-content/uploads/') === false) return $url;
+    if (!$this->is_safe_preload_url($url)) return $url; // relative — leave for the caller to reject
+
+    $parts = wp_parse_url($url);
+    if (empty($parts['path'])) return $url;
+
+    $home = wp_parse_url(home_url());
+    if (empty($home['scheme']) || empty($home['host'])) return $url;
+
+    $origin = $home['scheme'] . '://' . $home['host'];
+    if (!empty($home['port'])) $origin .= ':' . $home['port'];
+
+    return $origin . $parts['path'] . (isset($parts['query']) ? '?' . $parts['query'] : '');
+  }
+
+  /** normalize_preload_url() applied to the URL half of a "<url> <descriptor>" pair. */
+  private function normalize_preload_srcset_entry(string $entry): string {
+    if ($entry === '') return $entry;
+    if (!preg_match('/^(\S+)(\s+\S+)$/', $entry, $m)) return $entry;
+    return $this->normalize_preload_url($m[1]) . $m[2];
   }
 
   /**

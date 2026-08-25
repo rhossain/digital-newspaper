@@ -1,7 +1,9 @@
 import {
   ChangeDetectionStrategy,
   Component,
+  DestroyRef,
   ElementRef,
+  NgZone,
   Renderer2,
   computed,
   effect,
@@ -88,6 +90,8 @@ export class AdSlotComponent {
   protected readonly adService = inject(AdService);
   private  readonly platformId = inject(PLATFORM_ID);
   private  readonly renderer   = inject(Renderer2);
+  private  readonly zone       = inject(NgZone);
+  private  readonly destroyRef = inject(DestroyRef);
 
   /** Resolved slot definition (undefined while AdService is loading). */
   protected readonly slot = computed<AdSlot | undefined>(() =>
@@ -123,6 +127,14 @@ export class AdSlotComponent {
   readonly removedByBrowser = signal(false);
 
   constructor() {
+    // Slots are destroyed and recreated routinely — the right-panel slot goes
+    // away on every section click — so without this the MutationObserver and the
+    // detached GPT iframe it holds a reference to leak once per cycle.
+    this.destroyRef.onDestroy(() => {
+      this._cleanupObserver?.();
+      this._cleanupObserver = undefined;
+    });
+
     /**
      * This effect tracks two signals:
      *   slot()         — resolves when AdService completes its HTTP fetch
@@ -141,6 +153,7 @@ export class AdSlotComponent {
         this._scriptInjected = false;
         this.removedByBrowser.set(false);
         this._cleanupObserver?.();
+        this._cleanupObserver = undefined;
         return;
       }
 
@@ -193,25 +206,34 @@ export class AdSlotComponent {
 
     const iframeSelector = `iframe[id*="${divId}"], iframe[name*="${divId}"]`;
 
-    const observer = new MutationObserver(() => {
-      const iframePresent = !!container.querySelector(iframeSelector);
+    // Constructed outside the Angular zone, which is what keeps this cheap:
+    // zone.js binds a MutationObserver callback to the zone that was current
+    // when the observer was created, and {childList, subtree} on a GPT container
+    // fires dozens to hundreds of times while the SafeFrame is built. Inside the
+    // zone that would be one full change-detection pass per mutation.
+    this.zone.runOutsideAngular(() => {
+      const observer = new MutationObserver(() => {
+        const iframePresent = !!container.querySelector(iframeSelector);
 
-      if (iframePresent) {
-        // Normal ad load — record that the iframe arrived.
-        iframeWasPresent = true;
-        return;
-      }
+        if (iframePresent) {
+          // Normal ad load — record that the iframe arrived.
+          iframeWasPresent = true;
+          return;
+        }
 
-      // iframe is gone — only act if it was previously confirmed present.
-      // This distinguishes Chrome's Heavy Ad removal from the normal period
-      // between script injection and GPT completing the SafeFrame build.
-      if (iframeWasPresent) {
-        this.removedByBrowser.set(true);
-        observer.disconnect();
-      }
+        // iframe is gone — only act if it was previously confirmed present.
+        // This distinguishes Chrome's Heavy Ad removal from the normal period
+        // between script injection and GPT completing the SafeFrame build.
+        if (iframeWasPresent) {
+          observer.disconnect();
+          // The one place a tick is wanted: re-enter so the host binding that
+          // collapses the slot is picked up immediately.
+          this.zone.run(() => this.removedByBrowser.set(true));
+        }
+      });
+
+      observer.observe(container, { childList: true, subtree: true });
+      this._cleanupObserver = () => observer.disconnect();
     });
-
-    observer.observe(container, { childList: true, subtree: true });
-    this._cleanupObserver = () => observer.disconnect();
   }
 }

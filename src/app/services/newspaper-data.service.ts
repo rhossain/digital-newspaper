@@ -2090,19 +2090,39 @@ export class NewspaperDataService {
     this.stopVersionPoll();
     // exhaustMap: if the previous version check hasn't resolved by the time
     // the next interval fires, the new tick is ignored — no request stacking.
-    this.versionPollSub = interval(intervalMs).pipe(
-      exhaustMap(() =>
-        this.http.get<{ dataVersion: number }>(this.versionUrl).pipe(
-          catchError(() => of(null)) // network error → skip silently
-        )
-      )
-    ).subscribe(res => {
-      if (!res) return;
-      const local = this.dataSubject.value.dataVersion ?? 0;
-      if (res.dataVersion > local) {
-        this.remoteDataChanged$.next(res.dataVersion);
-      }
-    });
+    this.versionPollSub = interval(intervalMs)
+      .pipe(exhaustMap(() => this.checkRemoteVersion()))
+      .subscribe(version => {
+        if (version !== null) this.remoteDataChanged$.next(version);
+      });
+  }
+
+  /**
+   * One-shot version check outside the poll cadence, for callers that cannot
+   * wait a full interval — e.g. a tab regaining focus after the poll was
+   * suspended. Emits on `remoteDataChanged$` exactly like a poll tick does, so
+   * subscribers need no special case, and resolves with the new version (or
+   * null when the server is not ahead / the request failed) so the caller knows
+   * when the check has settled.
+   */
+  checkVersionNow(): Observable<number | null> {
+    return this.checkRemoteVersion().pipe(
+      tap(version => {
+        if (version !== null) this.remoteDataChanged$.next(version);
+      })
+    );
+  }
+
+  /** GET /data/version; resolves to the server's version only if it is ahead. */
+  private checkRemoteVersion(): Observable<number | null> {
+    return this.http.get<{ dataVersion: number }>(this.versionUrl).pipe(
+      catchError(() => of(null)), // network error → skip silently
+      map(res => {
+        if (!res) return null;
+        const local = this.dataSubject.value.dataVersion ?? 0;
+        return res.dataVersion > local ? res.dataVersion : null;
+      })
+    );
   }
 
   stopVersionPoll(): void {

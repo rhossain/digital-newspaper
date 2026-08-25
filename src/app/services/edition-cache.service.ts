@@ -84,6 +84,13 @@ export class EditionCacheService {
 
   private readonly _memCache = new Map<string, MemCacheEntry>();
 
+  /**
+   * date → cancel fn for a persist that has been scheduled but not yet run.
+   * Without this, an eviction cannot stop an already-queued write, and the write
+   * would restore the pre-eviction editions seconds later.
+   */
+  private readonly _pendingPersists = new Map<string, () => void>();
+
   private readonly platformId = inject(PLATFORM_ID);
   private get isBrowser(): boolean { return isPlatformBrowser(this.platformId); }
 
@@ -236,6 +243,12 @@ export class EditionCacheService {
    *   "new page isn't saving / not syncing with backend" complaint.
    */
   evict(date: string): void {
+    // FIRST: kill any queued write for this date. Persisting is deferred to an
+    // idle callback, so a write scheduled before this save is still pending and
+    // would re-create the localStorage key below — with a fresh fetchedAt, i.e.
+    // a full TTL on pre-save data. That is the exact "new page isn't saving"
+    // failure this method exists to prevent.
+    this._cancelPendingPersist(date);
     this._memCache.delete(date);
     // Layer 2a: localStorage — synchronous, safe to call even if the key
     // doesn't exist (no-op).  Errors (private-browsing mode, quota issues)
@@ -266,6 +279,8 @@ export class EditionCacheService {
    * were already a pre-existing concern for restore/rebuild operations.
    */
   clearMemory(): void {
+    // Same reasoning as evict(): a queued persist would outlive the clear.
+    for (const date of [...this._pendingPersists.keys()]) this._cancelPendingPersist(date);
     this._memCache.clear();
     // Evict today's localStorage entry so the next read goes to HTTP.
     if (this.isBrowser) {
@@ -459,11 +474,47 @@ export class EditionCacheService {
    */
   private _persistAllDeferred(date: string, editions: NewspaperEdition[]): void {
     if (!this.isBrowser) return; // SSR — nothing to persist
-    const ric = (window as unknown as {
+
+    // Supersede any write still queued for this date. Two reasons this is not
+    // optional: a queued callback holds a reference to the OLD editions array and
+    // would overwrite newer data, and evict() must be able to cancel it — see
+    // _cancelPendingPersist().
+    this._cancelPendingPersist(date);
+
+    const run = () => {
+      this._pendingPersists.delete(date);
+      this._persistAll(date, editions);
+    };
+
+    const w = window as unknown as {
       requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
-    }).requestIdleCallback;
-    if (typeof ric === 'function') ric(() => this._persistAll(date, editions), { timeout: 2000 });
-    else setTimeout(() => this._persistAll(date, editions), 0);
+      cancelIdleCallback?: (handle: number) => void;
+    };
+
+    if (typeof w.requestIdleCallback === 'function') {
+      const handle = w.requestIdleCallback(run, { timeout: 2000 });
+      this._pendingPersists.set(date, () => w.cancelIdleCallback?.(handle));
+    } else {
+      // No requestIdleCallback (Safari before 17.4 — precisely the low-end
+      // devices this deferral exists for). A bare setTimeout(0) is a macrotask
+      // that still runs BEFORE first paint, so it would not defer anything;
+      // rAF fires just before a paint, so a timeout scheduled from inside it
+      // lands just after that paint.
+      let inner = 0;
+      const frame = requestAnimationFrame(() => { inner = window.setTimeout(run, 0); });
+      this._pendingPersists.set(date, () => {
+        cancelAnimationFrame(frame);
+        clearTimeout(inner);
+      });
+    }
+  }
+
+  /** Drop a queued persist for `date`, if any. Safe to call unconditionally. */
+  private _cancelPendingPersist(date: string): void {
+    const cancel = this._pendingPersists.get(date);
+    if (!cancel) return;
+    cancel();
+    this._pendingPersists.delete(date);
   }
 
   private _persistAll(date: string, editions: NewspaperEdition[]): void {

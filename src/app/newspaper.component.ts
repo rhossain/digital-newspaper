@@ -70,6 +70,17 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   /** Which panel is active in the mobile image modal: 'image' or 'text'. */
   mobileModalView: 'image' | 'text' = 'image';
   private resizeListener?: () => void;
+  private visibilityListener?: () => void;
+
+  /**
+   * Newest server dataVersion seen while the reader was looking at the page.
+   * Held here instead of reloading on the spot; applied on the next return to
+   * the tab by applyPendingRemoteChange().
+   */
+  private _pendingRemoteVersion: number | null = null;
+
+  /** In-flight one-shot version check started by the last return to the tab. */
+  private _versionCheckSub?: Subscription;
   private resizeDebounceTimer?: ReturnType<typeof setTimeout>;
 
   // Performance caches
@@ -322,19 +333,39 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     // SSR: do not start polling on the server — setInterval has no meaning
     // in a single-pass server render and the interval would leak.
     if (this.isBrowser) {
-      this.dataService.startVersionPoll(300_000);
-      const versionSub = this.dataService.remoteDataChanged$.subscribe(() => {
-        // Only reload if the user is not viewing a modal (section detail / image)
-        if (!this.showContentModal && !this.showImageModal) {
-          // Targeted reload: fetch only the currently-displayed date's edition plus
-          // the dates index. This is much cheaper than the full /data blob and
-          // handles both "today's content changed" and "new date published" cases.
-          // Falls back to loadData() automatically if the granular endpoints fail.
-          this.dataService.reloadCurrentDateOnly(this.selectedDate).subscribe();
-          // dataService.data$ subscriber above handles UI refresh automatically
-        }
+      // A tab opened in the background (cmd-click, session restore) starts
+      // hidden; the visibilitychange handler below starts the poll when it is
+      // actually looked at.
+      if (this.document.visibilityState !== 'hidden') {
+        this.dataService.startVersionPoll(300_000);
+      }
+      const versionSub = this.dataService.remoteDataChanged$.subscribe(version => {
+        // Never re-render underneath someone who is reading. A reload re-runs
+        // renderCurrentEdition() over every page and section, which is a long
+        // task, and it can move the page out from under the reader. Record the
+        // version instead and apply it when they come back to the tab.
+        this._pendingRemoteVersion = version;
       });
       this.subscriptions.push(versionSub);
+
+      // Poll only while the tab is in the foreground: a backgrounded tab
+      // otherwise fires a request every 5 minutes for content nobody is looking
+      // at (~96 over an 8-hour day).
+      this.visibilityListener = () => {
+        if (this.document.visibilityState === 'hidden') {
+          this.dataService.stopVersionPoll();
+          return;
+        }
+        this.dataService.startVersionPoll(300_000);
+        // The reader may have been away for hours, so don't make them wait a
+        // full interval. checkVersionNow() emits on remoteDataChanged$ first,
+        // which sets _pendingRemoteVersion, so by the time this callback runs
+        // there is something for applyPendingRemoteChange() to apply.
+        this._versionCheckSub?.unsubscribe(); // drop a check still in flight from an earlier focus
+        this._versionCheckSub = this.dataService.checkVersionNow()
+          .subscribe(() => this.applyPendingRemoteChange());
+      };
+      this.document.addEventListener('visibilitychange', this.visibilityListener);
     }
 
     // Detect mobile/tablet view and keep it updated on resize (browser only)
@@ -351,6 +382,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   ngOnDestroy() {
     this._viewDestroyed = true;
     this.subscriptions.forEach(sub => sub.unsubscribe());
+    this._versionCheckSub?.unsubscribe();
     this.dataService.stopVersionPoll();
     this.clearSlowConnectionTimer();
     this.paginationObserver?.disconnect();
@@ -359,6 +391,32 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     if (this.isBrowser && this.resizeListener) {
       window.removeEventListener('resize', this.resizeListener);
     }
+    if (this.isBrowser && this.visibilityListener) {
+      this.document.removeEventListener('visibilitychange', this.visibilityListener);
+    }
+  }
+
+  /**
+   * Pulls in a server-side change that was detected while the reader was on the
+   * page, at a moment when re-rendering costs them nothing.
+   *
+   * Called from: the hidden → visible transition (their attention was elsewhere),
+   * date navigation (a re-render is happening regardless), and both modal closes.
+   * The modal closes matter because the guard below defers the version rather than
+   * dropping it, and a reader who never backgrounds the tab would otherwise never
+   * spend it — stale content indefinitely.
+   */
+  private applyPendingRemoteChange(): void {
+    if (this._pendingRemoteVersion === null) return;
+    if (this.showContentModal || this.showImageModal) return;
+
+    this._pendingRemoteVersion = null;
+    // Targeted reload: fetch only the currently-displayed date's edition plus
+    // the dates index. This is much cheaper than the full /data blob and
+    // handles both "today's content changed" and "new date published" cases.
+    // Falls back to loadData() automatically if the granular endpoints fail.
+    // The data$ subscriber in ngOnInit handles the UI refresh.
+    this.dataService.reloadCurrentDateOnly(this.selectedDate).subscribe();
   }
 
   private updateIsMobileView() {
@@ -537,6 +595,14 @@ export class NewspaperComponent implements OnInit, OnDestroy {
       this.pages = [...edition.pages].sort((a, b) => a.id - b.id);
       // Rebuild section-ID lookup once here so loadLinkedSections() can do
       // O(1) lookups instead of O(pages × sections) on every section click.
+      // The copy is deliberate, do not "optimise" it into an in-place write of
+      // section.pageId. These section objects are live inside the data service's
+      // BehaviorSubject and inside EditionCacheService's memory cache, which is
+      // JSON.stringify-ed to localStorage/IndexedDB later. Stamping them would
+      // write a viewer-derived field into persisted data, into the admin's save
+      // payload (admin.component.ts spreads these same objects, and the plugin
+      // stores whatever it receives), and would make the admin's page labels
+      // depend on whether the reader route happened to run first.
       this._sectionByIdCache = new Map<string, NewsSection>();
       for (const page of this.pages) {
         for (const section of page.sections) {
@@ -747,6 +813,9 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     this.dataService.setCurrentDate(this.selectedDate);
     this.loadCurrentEdition();
     this.checkIfToday();
+    // Deliberate navigation is a free moment to take a server-side change the
+    // poll spotted while they were reading — a re-render is happening anyway.
+    this.applyPendingRemoteChange();
   }
 
   previousDay() {
@@ -1477,6 +1546,9 @@ export class NewspaperComponent implements OnInit, OnDestroy {
 
   closeContentModal() {
     this.showContentModal = false;
+    // applyPendingRemoteChange() refuses to run while a modal is open, so the
+    // close is where a version held back by that guard gets picked up.
+    this.applyPendingRemoteChange();
   }
 
   openImageModal() {
@@ -1501,6 +1573,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     this.modalImageTitle = '';
     this.modalLinkedSections = [];
     this.mobileModalView = 'image';
+    this.applyPendingRemoteChange();
   }
 
   private getPrintDocument(contentHtml: string, styles: string = ''): string {
