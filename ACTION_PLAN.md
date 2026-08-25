@@ -61,6 +61,7 @@ Every item carries a **Done when** line. If you can't tick it, the item isn't fi
 
 - [ ] **P0-6 · Fix `auto-deploy.sh`'s index.html check** — `S`
   `auto-deploy.sh:59` does `find dist -name index.html`, which matches nothing since the SSR build switched to `index.csr.html`.
+  ↻ **Premise removed by P2-2:** SSR is gone and the build emits `index.html` again, so this `find` now matches. The check is no longer broken — verify against a real build and close it, or harden it to accept either name.
   ⚠ **blocked by** P0-5 (it fails earlier without it).
   **Done when:** the script's build-verification step passes on a real build.
 
@@ -309,14 +310,46 @@ Five independent read-only reviews, then every finding re-traced by hand before 
 
 ### Deploy correctness
 
-- [ ] **P2-2 · Decide SSR: delete it or prerender `/`** — `M`
+- [x] **P2-2 · Decide SSR: delete it or prerender `/`** — `M`
   Either remove `server.ts`, `main.server.ts`, `app.config.server.ts`, the SSR `angular.json` keys and the 6 unused server deps (`express`, `cors`, `helmet`, `compression`, `express-rate-limit`, `@types/express` — four of which are imported nowhere) — or commit to P3-6.
   **Why:** currently built and shipped every deploy, never executed. Honest either way; the middle ground is pure cost.
   **Done when:** either `dist/` has no `server/` directory, or a Node process actually serves it.
 
+  **Status: DONE — deleted** (25 Aug 2026)
+
+  **Decision: delete, not prerender.** Prerendering `/` cannot be done inside this item, and SSR could never have contributed anything:
+  - `app.config.server.ts` routed `''` and `admin` at `RenderMode.Client` — only `**` was `RenderMode.Server`. The root route, the only one that matters for LCP or SEO, was explicitly opted *out* of server rendering. A comment there claimed Client mode "emits a static index.html app shell"; it does not — it emits the same empty shell, renamed.
+  - The build reported **"Prerendered 0 static routes"** and `prerendered-routes.json` was `{"routes":{}}`.
+  - The host is shared LiteSpeed/WordPress with no Node process, so `server/` (3.0 MB of bundles) was uploaded into the public web root every deploy and never executed.
+  - Prerender is blocked on the Imunify360 cookie: prerendering calls `loadNewspaperData()` → the WordPress API → the build machine has no cookie → empty routes. That is **P3-6, size `L`** — it cannot be smuggled into an `M`.
+
+  **Measured:**
+
+  | | before | after |
+  |---|---|---|
+  | `npm run build` (warm cache) | 85.37 s | **16.23 s** (−81%) |
+  | `dist/**/server/` | 3.0 MB | **absent** |
+  | `3rdpartylicenses.txt` | 144 K | **58 034 B** (−60%) |
+  | initial transfer | 147.25 kB | **144.22 kB** (−3.03 kB) |
+  | locked packages | 999 | **995** |
+
+  Client bundles are byte-identical across the SSR removal itself; the −3.03 kB comes from also dropping the now-dead `provideClientHydration()` (`app.config.ts`) — with no server render its HTTP transfer cache is always empty, and the plugin's inline bootstrap state is read by element id, not through `TransferState`.
+
+  **Deviation — `express` is NOT unused, so 5 packages were removed, not 6.** `webhook-server.js:1` does `require('express')`, so it stays in `package.json`. Removed: `@angular/ssr`, `@angular/platform-server`, `helmet`, `cors`, `compression`, `express-rate-limit`, `@types/express` as *direct* deps. The last four remain in the tree as transitive deps of the toolchain (`cors`/`express-rate-limit` ← `@angular/cli` → `@modelcontextprotocol/sdk`; `compression`/`@types/express` ← `build-angular` → `webpack-dev-server`), so only `@angular/ssr`, `@angular/platform-server`, `helmet` and `xhr2` (platform-server's dep) actually left `node_modules`.
+
+  **Consequence the plan didn't mention — the shell is renamed.** With `ssr.entry` present the builder renames the browser shell to `index.csr.html`; without it the shell is emitted as `index.html`. Fixed in `src/.htaccess` (root rule, catch-all, `FilesMatch`, br/gz comments), `ngsw-config.json:24`, and `tsconfig.app.json`. Verified first that `deploy.js:386`, `scripts/promote-ngsw-boot-chunks.js` and the plugin's `resolve_index_html_path()` already tolerate both names. The `.htaccess` root block also collapsed from two tiers to one: it used to prefer a "prerendered" `index.html` over an `index.csr.html` fallback, but the `-f` guard could never pass because nothing ever wrote a prerendered file.
+
+  **Fixed in passing: `npm ci` was already broken at HEAD.** The committed lock was internally inconsistent — `@angular/platform-server@21.2.17` requires peer `@angular/common@21.2.17` but the lock pinned `common@21.1.3`, so `npm ci --dry-run` on a pristine `git show HEAD:` checkout fails with ERESOLVE today, independent of this change. Removing platform-server removes that conflict. `npm install`/`npm prune` could not prune around it, so the lock was regenerated; a plain re-resolve moved the **entire** Angular toolchain 21.1.3 → 21.2.21 (permitted by `^21.0.0`, 999 → 1022 packages), which is an unrelated framework upgrade and was **rejected** — a `--legacy-peer-deps` reinstall from the original lock produced the surgical result instead: 4 packages removed, **0 added, 0 version changes**.
+  ⚠ **One pre-existing skew remains and still breaks `npm ci`:** `@angular/service-worker@21.2.16` needs peer `core@21.2.16`, but core is 21.1.3. Not fixed here — `ngsw-worker.js` ships to readers, so re-pinning it belongs in its own verified change, not as a rider on an SSR deletion. Fix is either pinning service-worker to 21.1.3 or taking the whole toolchain to 21.2.x deliberately.
+
+  **Verified:** `dist/` has no `server/`; shell is `browser/index.html`; `ngsw.json` references only `/index.html`; `.htaccess` passes `httpd -t`; real Apache serves `/`, deep article routes and `/admin/` as the shell while serving real assets directly, crawler UAs still rewrite to the WordPress `/social` endpoint, and Brotli + `no-cache` still apply to `index.html`; headless Chrome boots the app with **0 uncaught exceptions** (`app-root` populated, splash hidden, title set).
+  **Not verified:** production deploy — and it cannot help until **P2-3**, because `deploy.js:159-269` overwrites the deployed `.htaccess` with its own divergent inline copy.
+  **Leftover, deliberately untouched:** the builder still emits an 18-byte `dist/digital-newspaper/prerendered-routes.json` (`{"routes":{}}`) with no SSR config at all. Harmless, and it was there before.
+
 - [ ] **P2-3 · Point deploy at `dist/digital-newspaper/browser`** — `S`
-  `deploy.js:136, 153, 412` and `.github/workflows/deploy.yml` currently copy the whole `dist/digital-newspaper` wholesale, so `browser/` and `server/` land as subdirectories of the web root. Also stop overwriting `src/.htaccess` with the hardcoded copy in `deploy.js:204` (which rewrites to a nonexistent `/index.html`), and drop the dead chmod loop at `:386`.
-  **Done when:** the remote root contains `index.csr.html` at top level and no `server/`.
+  `deploy.js:136, 153, 412` and `.github/workflows/deploy.yml` currently copy the whole `dist/digital-newspaper` wholesale, so `browser/` lands as a subdirectory of the web root. Also stop overwriting `src/.htaccess` with the hardcoded copy in `deploy.js:159-269`, and drop the dead chmod loop at `:386`.
+  ↻ Updated by **P2-2**: `server/` no longer exists, so this is now purely about the `browser/` nesting and the `.htaccess` overwrite. The inline copy's `/index.html` target is no longer wrong — it is now the *correct* name — but it still diverges from `src/.htaccess` in every other respect, so the real `.htaccess` work still never reaches production.
+  **Done when:** the remote root contains `index.html` at top level and no `browser/` subdirectory.
 
 ### Remaining security
 
@@ -466,7 +499,7 @@ Five independent read-only reviews, then every finding re-traced by hand before 
 - [ ] **P3-6 · Real build-time prerender** — `L`
   Feed `getPrerenderParams` from `wp-content/dn-static/editions/*.json` on disk instead of the REST API — this sidesteps the Imunify360 problem that killed `RenderMode.Prerender` (documented at `app.config.server.ts:14-19`).
   **Why:** makes P1-15, P1-16, P3-2 and P3-3 largely redundant, and gives real HTML to every crawler plus a sub-1 s LCP.
-  ⚠ Mutually exclusive with the "delete SSR" branch of P2-2.
+  ↻ **P2-2 took the "delete SSR" branch**, so this item now starts by *re-adding* SSR rather than repairing it: `ng add @angular/ssr`, then set the root route to `RenderMode.Prerender` (it was `RenderMode.Client` before, which is why prerender produced nothing even when it ran). The `app.config.server.ts:14-19` reference is dead — that file was deleted; the Imunify360 rationale it documented is preserved in P2-2's status block above. Note that re-adding SSR renames the shell back to `index.csr.html`, which reverses the `.htaccess` / `ngsw-config.json` edits P2-2 made.
 
 - [ ] **P3-7 · Accessibility pass** — `L`
   24 modal containers in `admin.component.html` and exactly one has dialog semantics. **`.focus()` appears nowhere in any `.ts` or `.html` file** — no focus trap, no focus-on-open, no focus-restore. Escape closes 2 of ~26 modals. 16 non-semantic clickables, including `newspaper.component.html:815, 866` — the *primary* article-image affordances, unreachable by keyboard. The 977-line public viewer has 6 `aria-*` attributes total.
@@ -510,7 +543,7 @@ None of these are tasks in themselves, but several P1/P2 items depend on the ans
 
 | # | Question | Command | Blocks |
 |---|---|---|---|
-| 1 | Is `index.csr.html` served compressed? | `curl -sI -H 'Accept-Encoding: br,gzip' <site>/ \| grep -i content-encoding` | validates P1-1 |
+| 1 | Is `index.html` served compressed? (was `index.csr.html` before P2-2) | `curl -sI -H 'Accept-Encoding: br,gzip' <site>/ \| grep -i content-encoding` | validates P1-1 |
 | 2 | Does `mod_expires` resolve types through `.br`? | `curl -sI <site>/main-<hash>.js \| grep -i cache-control` | P2-12 (moot if done) |
 | 3 | HTTP/2 or /3? | `curl -sI --http2 <site>/ -o /dev/null -w '%{http_version}\n'` | changes P1-9 severity — on HTTP/1.1 the font block is far worse |
 | 4 | Which element does Chrome pick as LCP? | add a `PerformanceObserver` logging `entry.element` | validates P1-7 |

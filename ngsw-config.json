@@ -21,7 +21,7 @@
           "/favicon.ico",
           "/assets/favicon.png",
           "/assets/image-unavailable.svg",
-          "/index.csr.html",
+          "/index.html",
           "/manifest.webmanifest",
           "/*.css",
           "/*.js",

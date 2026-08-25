@@ -1,4 +1,4 @@
-# Redirect all Angular routes to index.csr.html (the Angular SSR browser shell)
+# Redirect all Angular routes to index.html (the Angular browser shell)
 
 # ── Social bot cache bypass ──────────────────────────────────────────────────
 # LiteSpeed page cache and Cloudflare/CDN layers can serve a cached Angular
@@ -56,7 +56,7 @@
   #
   # `html` is included so the SPA shell is served compressed too. Requests for
   # `/` and for SPA routes never carry a .html extension, but the fallback rules
-  # below rewrite them to /index.csr.html, and mod_rewrite re-runs this ruleset
+  # below rewrite them to /index.html, and mod_rewrite re-runs this ruleset
   # on the rewritten URI — so the shell reaches these rules on the second pass.
   # If a host does not re-enter, nothing matches and the plain shell is served.
   # E=no-gzip:1 stops the server re-compressing bytes that are already Brotli or
@@ -116,19 +116,16 @@
   # ignored. This rule handles the root request via mod_rewrite directly.
   # Crawler bots (handled above) have already exited with [L] before reaching here.
   #
-  # Prefer the prerendered homepage (index.html) when it exists — users see
-  # full newspaper content immediately with no blank page or loading spinner.
-  # Fall back to index.csr.html (the CSR app shell) when prerendering failed
-  # or was skipped during build (e.g. WordPress API unreachable at build time).
-  RewriteCond %{DOCUMENT_ROOT}/index.html -f
+  # There is exactly one shell. This used to be a two-tier rule preferring a
+  # "prerendered" index.html over an index.csr.html CSR fallback, but nothing
+  # ever wrote a prerendered index.html — the build reported "Prerendered 0
+  # static routes" and prerendered-routes.json was {"routes":{}}, so the -f
+  # guard always failed and the fallback always won. SSR/prerender is gone
+  # (P2-2) and the browser build now emits index.html under its normal name.
   RewriteRule ^$ /index.html [L]
-  RewriteRule ^$ /index.csr.html [L]
 
-  # Serve existing files and directories directly
-  # Prerendered homepage shell
+  # Serve the shell directly when requested by name.
   RewriteRule ^index\.html$ - [L]
-  # Angular SSR builds rename the browser shell to index.csr.html
-  RewriteRule ^index\.csr\.html$ - [L]
   # Compatibility redirects: if anyone hits root-level WP paths, forward to /wp.
   RewriteRule ^wp-admin/?$ /wp/wp-admin/ [R=302,L,NC]
   RewriteRule ^wp-login\.php$ /wp/wp-login.php [R=302,L,NC]
@@ -143,13 +140,12 @@
   RewriteCond %{REQUEST_URI}      !^/(wp|wp-admin)(?:/|$) [NC]
   RewriteCond %{REQUEST_URI}      !^/wp-login\.php$ [NC]
   RewriteCond %{REQUEST_URI}      !^/xmlrpc\.php$ [NC]
-  # Catch-all: send everything else (including /admin/, /2026-01-01/, etc.) to index.csr.html
-  # (Angular SSR builds rename the app shell from index.html → index.csr.html)
-  RewriteRule ^ /index.csr.html [L]
+  # Catch-all: send everything else (including /admin/, /2026-01-01/, etc.) to index.html
+  RewriteRule ^ /index.html [L]
 </IfModule>
 
-# The SPA HTML shell must NEVER be stale-cached. index.html / index.csr.html
-# reference HASHED JS/CSS bundles that change on every deploy. If a browser keeps
+# The SPA HTML shell must NEVER be stale-cached. index.html
+# references HASHED JS/CSS bundles that change on every deploy. If a browser keeps
 # an old shell (LiteSpeed serves it with max-age=3600 by default), it points at a
 # bundle hash that no longer exists after a deploy → the SPA fallback returns HTML
 # in the script's place → the browser can't execute it → BLANK PAGE for up to an
@@ -157,7 +153,7 @@
 # hashed assets below keep their 1-year cache. `Header always set` is used because
 # LiteSpeed overrides mod_expires for static HTML.
 <IfModule mod_headers.c>
-  <FilesMatch "^index(\.csr)?\.html$">
+  <FilesMatch "^index\.html$">
     Header always set Cache-Control "no-cache, must-revalidate"
     # The same URL now has two possible bodies — this shell for humans, the
     # /social response for crawlers — chosen by User-Agent. Without Vary a shared
@@ -241,8 +237,8 @@
     Header set Content-Type "application/manifest+json; charset=UTF-8"
   </FilesMatch>
   # The compressed app shell. Cache-Control MUST be repeated here: the
-  # ^index(\.csr)?\.html$ block further up does not match index.csr.html.br,
-  # and a stale-cached shell points at hashed bundles that no longer exist
+  # ^index\.html$ block further up does not match index.html.br, and a
+  # stale-cached shell points at hashed bundles that no longer exist
   # after a deploy — the blank-page failure that block exists to prevent.
   <FilesMatch "\.html\.(?:br|gz)$">
     Header set Content-Type "text/html; charset=UTF-8"

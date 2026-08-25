@@ -15,15 +15,10 @@
           "options": {
             "outputPath": {
               "base": "dist/digital-newspaper",
-              "browser": "browser",
-              "server": "server"
+              "browser": "browser"
             },
             "index": "src/index.html",
             "browser": "src/main.ts",
-            "server": "src/main.server.ts",
-            "ssr": {
-              "entry": "src/server.ts"
-            },
             "polyfills": [
               "zone.js"
             ],

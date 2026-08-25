@@ -16,7 +16,6 @@ import {
 } from '@angular/router';
 import { Observable, EMPTY } from 'rxjs';
 import { provideServiceWorker } from '@angular/service-worker';
-import { provideClientHydration } from '@angular/platform-browser';
 import { NewspaperComponent } from './newspaper.component';
 import { wpApiInterceptor } from './interceptors/wp-api.interceptor';
 import { loaderInterceptor } from './interceptors/loader.interceptor';
@@ -67,12 +66,11 @@ class TrailingSlashUrlSerializer extends DefaultUrlSerializer {
 
 export const appConfig: ApplicationConfig = {
   providers: [
-    // Hydration: HTTP transfer cache is enabled by default in provideClientHydration().
-    // Use withNoHttpTransferCache() here only if you want to opt out.
-    provideClientHydration(),
-
-    // HTTP client with fetch (required for SSR — XMLHttpRequest does not exist
-    // on Node.js) and the existing interceptor stack.
+    // No provideClientHydration(): there is no SSR and no prerender (P2-2), so
+    // the app always boots from an empty <app-root> and its HTTP transfer cache
+    // — which only ever holds responses captured during a server render — is
+    // always empty. The plugin's inline bootstrap state is unaffected; it is
+    // read by element id, not through TransferState.
     provideHttpClient(
       withFetch(),
       withInterceptors([httpCacheInterceptor, wpApiInterceptor, loaderInterceptor]),
