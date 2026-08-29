@@ -389,7 +389,9 @@ Two secondary observations:
   available or frequency capping for that unit), not a lifecycle defect. It was blank on open
   #1 in production too. Raise with the GAM network owner rather than treating it as a code bug.
 - **RC-8 is unchanged by this phase**, as expected: the desktop containers still mount on mobile
-  (hidden by CSS) and therefore still register and request. That is Phase 2 / Phase 5 work.
+  (hidden by CSS) and therefore still register and request. Phase 2 fixed the *refresh* half
+  (guard 3, proven by S6); the define-and-fetch-once half is still open and is now written up as
+  §5.3.
 
 No console errors attributable to the app; the only page error was a benign
 `Attestation check for Shared Storage on googleadservices.com failed` from Google's own tag.
@@ -960,30 +962,71 @@ unfilled*. Until that is true, lazy loading has nothing to defer.
 
 ---
 
-## Phase 5 — Mobile slots (product decision required first)
+## Phase 5 — Mobile slots
 
-**Blocked** — needs a decision before any code.
+**Decided by the product owner. Both resolved.**
 
-- [ ] **5.1** Decide the fate of `mobile_post_top` and `mobile_post_middle`
-  ([`digital-newspaper.php:670-685`](wordpress-plugin/digital-newspaper/digital-newspaper.php#L670-L685)).
-  They are `defineSlot`-ed but rendered nowhere. Either:
-  - **(a)** place them in the mobile layout — the correct answer to RC-8, giving mobile users
-    real mobile creatives instead of hidden desktop ones; or
-  - **(b)** remove them from `gam_ad_slots()`.
+- [x] **5.1** **Keep them, and place them.** `mobile_post_top` and `mobile_post_middle`
+  ([`digital-newspaper.php:670-685`](wordpress-plugin/digital-newspaper/digital-newspaper.php#L670-L685))
+  stay in `gam_ad_slots()` — the client may want them later — so option (a) applies and they now
+  have a real placement instead of being defined-but-unrendered.
 
-  Right now they are neither serving nor removed. Option (a) is a new placement and needs
-  design sign-off; (b) is a two-line deletion.
+  Placed in the **image modal**, mirroring their desktop counterparts:
+  - `mobile_post_top` — first child of `.modal-image-scroll-body`, *outside*
+    `.modal-images-container`, so it survives the mobile image/text toggle and is genuinely "top"
+    in both views.
+  - `mobile_post_middle` — inside the image panel immediately after `desktop_post_middle`, so
+    "middle" means the same thing on both. The mobile text view hides it, and GamService then
+    skips it rather than buying an unviewable impression.
 
-- [ ] **5.2** Resolve the open product question: with `desktop_page_left` **enabled**, the ad
-  **replaces the entire thumbnail list**
-  ([`newspaper.component.html:368-371`](src/app/newspaper.component.html#L368-L371) uses
-  `@else if`). Scenario 1 describes navigating *by thumbnails* while also refreshing the
-  left-rail ad — currently mutually exclusive. **Confirmed empirically** while building the
-  Phase 2 harness: with `desktop_page_left` enabled at a 1680 px viewport, `.thumbnail-item`
-  count is **0** — the thumbnail rail is gone entirely, and pagination is the only way to
-  change page. This is why §2.4's Scenario 1 is measured via pagination buttons.
-  Confirm whether that is intended; it determines
-  whether `desktop_page_left` needs refresh-on-page-change at all.
+  **Each is placed exactly once, deliberately.** `openContentModal()` and `openImageModal()` do
+  not close one another ([newspaper.component.ts:1514](src/app/newspaper.component.ts#L1514),
+  [:1549](src/app/newspaper.component.ts#L1549)), so `showImageModal` and `showContentModal` can
+  both be true. Repeating a slot id across both templates would put two divs with the same GAM id
+  on the page — the RC-3 duplicate-div failure again.
+
+  No CSS was needed: `:host(.dn-ad--mobile)` already shows below 768 px and hides above it, and
+  the class is applied from the `mobile_` id prefix
+  ([ad-slot.component.ts:89](src/app/components/ad-slot/ad-slot.component.ts#L89)).
+
+  Admin labels updated — they read "placement coming soon", which is no longer true.
+
+  **Both slots ship `enabled: false`**, so nothing changes for readers until the client turns them
+  on. Verified by **S17** at 390×844 with them force-enabled (`noBill`, so no live impressions):
+
+  ```
+  mobile hosts rendered=2/2  GPT-defined=2/2  visible=["mobile_post_top","mobile_post_middle"]
+  desktop hosts visible on mobile=[]   duplicate divs=[]   errors: (none)   ==> PASS
+  ```
+
+  Both measured 116 px tall — 100 px `min_height` + 16 px padding, consistent with the §6.11 fix.
+
+- [x] **5.2** **Confirmed intended: the ad replaces the thumbnail rail.** Per the product owner —
+  when the admin is configured not to show thumbnails, `desktop_page_left` takes over the whole
+  rail. That is exactly what
+  [`newspaper.component.html:368-371`](src/app/newspaper.component.html#L368-L371) already does via
+  `@else if`, and enabling the slot **is** that configuration: there is no separate "show
+  thumbnails" admin setting (the only related flag, `leftPanelVisible`, is a reader-facing toolbar
+  toggle). **No code change.**
+
+  Consequence for Scenario 1, unchanged: thumbnail navigation and the left-rail ad are mutually
+  exclusive by design, so with the slot enabled `.thumbnail-item` count is 0 and pagination is the
+  only way to change page. This is why §2.4 measures Scenario 1 via pagination buttons, and it does
+  **not** make `desktop_page_left` exempt from refresh — it is the one slot that persists across a
+  page change, so it is the primary thing Scenario 1 refreshes.
+
+### 5.3 Follow-up found while placing the mobile slots — not fixed here
+
+On a 390×844 viewport S17 recorded **6 desktop slots defined and `display()`-ed while
+`display: none`**, contributing to 8 ad requests that no reader can ever see. GamService correctly
+refuses to *refresh* them (guard 3, proven by S6), but they are still **defined and fetched once**
+at mount, and §4.4/S15 established that `enableLazyLoad` does not suppress a hidden slot's fetch.
+
+That is a stream of structurally unviewable impressions on every mobile session, which drags
+viewability down. The fix is to not *define* a slot the current viewport cannot show — i.e. make
+slot definition conditional on the same breakpoint the CSS uses — which is a real change to
+AdSlotComponent's contract and wants its own measured phase. Flagged here rather than folded into
+this one; worth raising with the network owner in 6.7 alongside the other viewability items.
 
 ---
 
@@ -1060,6 +1103,7 @@ served from the snapshot and the config POST aborted. Eleven tests, all green:
 | **S8** Heavy-Ad collapse | 266 → collapsed 0 → **266 again after refresh**; the collapsed slot was in the batch |
 | **S9** 6 navigations | 0 false-positive collapses while an iframe was present |
 | **S16** version poll | see §6.10 |
+| **S17** mobile placement 390×844 | both `mobile_post_*` render, define, `display()`, and are visible; 0 desktop slots visible; 0 duplicate divs; 116 px each — see 5.1 |
 
 S1 reported `INCONCLUSIVE (environment)` on the batch run — `BOOT_FAILED after 3 attempts
 (sections=0 pag=0)`, the §2.4 trap 1 backend outage guard doing its job — and PASSed on a
@@ -1260,10 +1304,16 @@ the codebase, not just this task:
 | [`src/app/components/ad-slot/ad-slot.component.ts`](src/app/components/ad-slot/ad-slot.component.ts) | ● | | ● | | | |
 | [`src/app/newspaper.component.ts`](src/app/newspaper.component.ts) | | ● | | | | ● |
 | `ad-slot.component.css` | | | ● | | | ● |
-| [`wordpress-plugin/.../digital-newspaper.php`](wordpress-plugin/digital-newspaper/digital-newspaper.php) | | | | | ○ | |
-| `newspaper.component.html` | | | | | ○ | |
+| `article-modal.component.html` | | | | | ● | |
+| `admin.component.ts` | | | | | ● | |
+| [`wordpress-plugin/.../digital-newspaper.php`](wordpress-plugin/digital-newspaper/digital-newspaper.php) | | | | | — | |
+| `newspaper.component.html` | | | | | — | |
 
-● changed  ○ only if the corresponding decision goes that way
+● changed  — considered and deliberately left alone
+
+Phase 5's two candidates were both resolved without touching them: the plugin keeps both mobile
+slot definitions (5.1 decided "keep"), and `newspaper.component.html` already implements the
+intended left-rail behaviour (5.2 decided "as-is").
 
 Phase 4 ended up touching **no** files: its one code candidate (`ad.service.ts`, lazy loading) was
 implemented, measured, and reverted — see §4.4.
