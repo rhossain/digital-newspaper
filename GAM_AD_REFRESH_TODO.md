@@ -87,8 +87,12 @@ Three consequences:
   never a bare `pubads().refresh()`. Under SRA a bare call re-requests every defined slot,
   which on mobile would re-request the four hidden desktop slots and multiply the RC-8 waste.
 
-The `collapseEmptyDivs(false)` call proposed in step 1.2.2 must be placed **before**
-`enableServices()`, since GPT ignores it afterwards.
+**The `collapseEmptyDivs(false)` call proposed in step 1.2.2 was deliberately dropped from
+Phase 1.** It is not the no-op it looks like: per the GPT API, `collapseEmptyDivs(false)`
+*enables* collapsing after an empty ad response (only the `true` variant collapses *before*
+fetch). Adding it would therefore collapse slots that currently hold reserved space — a real
+layout change, and one that would have shifted the Phase 1 before/after baseline. Collapse
+behaviour is evaluated deliberately in Phase 4 instead.
 
 ### Correction 4 — an anchor unit exists that this repo does not manage; exclude it
 
@@ -118,7 +122,7 @@ effect of adding proper teardown.
 
 ## Phase 0 — Safety net (do this first, no production code changes)
 
-- [ ] **0.1** Confirm a clean working tree before starting.
+- [x] **0.1** Confirm a clean working tree before starting.
   **Done —** working tree was already clean. The dependency changes were committed separately
   as `33aa7a2e` ("chore: upgrade Angular dependencies to version 21.1.3"), so the ad work
   lands as an isolated, revertible changeset as intended.
@@ -214,12 +218,12 @@ Phase 2 (refreshing a slot whose GPT state is stale would paint into a detached 
 
 ### 1.1 Create the slot registry service
 
-- [ ] **1.1.1** Create `src/app/services/gam.service.ts` as a new
+- [x] **1.1.1** Create `src/app/services/gam.service.ts` as a new
   `@Injectable({ providedIn: 'root' })` service. Follow the conventions already used in
   [`ad.service.ts`](src/app/services/ad.service.ts): `inject()` for DI, `PLATFORM_ID` +
   `isPlatformBrowser` guards, `DOCUMENT` rather than the global `document`.
 
-- [ ] **1.1.2** Define the internal record type and the registry map:
+- [x] **1.1.2** Define the internal record type and the registry map:
   ```ts
   interface LiveSlot {
     id: string;
@@ -231,7 +235,7 @@ Phase 2 (refreshing a slot whose GPT state is stale would paint into a detached 
   private readonly live = new Map<string, LiveSlot>();
   ```
 
-- [ ] **1.1.3** Implement `register(def: AdSlot, el: HTMLElement): void`.
+- [x] **1.1.3** Implement `register(def: AdSlot, el: HTMLElement): void`.
   - Guard on `isPlatformBrowser`.
   - If `this.live.has(def.id)`, return early — a double registration is a bug, not a
     recoverable state. Log via `console.warn` in dev only.
@@ -241,30 +245,31 @@ Phase 2 (refreshing a slot whose GPT state is stale would paint into a detached 
   - **Order matters:** `display()` must be the last call, after the slot is in the map, so a
     `slotRenderEnded` listener firing synchronously can find it.
 
-- [ ] **1.1.4** Implement `unregister(id: string): void`.
+- [x] **1.1.4** Implement `unregister(id: string): void`.
   - Delete from `live` **before** the `cmd.push`, so a remount during the same tick cannot
     see a stale entry.
   - Inside `cmd.push`: `googletag.destroySlots([entry.gptSlot])`.
 
-- [ ] **1.1.5** Do **not** add refresh, targeting, or debounce logic in this phase. Keep the
+- [x] **1.1.5** Do **not** add refresh, targeting, or debounce logic in this phase. Keep the
   diff reviewable. Phase 2 extends this same service.
 
-- [ ] **1.1.6** Add a dev-only guard for the `defineSlot` → `null` case (the duplicate-div-id
+- [x] **1.1.6** Add a dev-only guard for the `defineSlot` → `null` case (the duplicate-div-id
   failure that previously forced the `desktop_post_top` → `_image` / `_text` split, see
   [`digital-newspaper.php:639-644`](wordpress-plugin/digital-newspaper/digital-newspaper.php#L639-L644)).
   Gate it behind Angular's `isDevMode()` so production stays silent.
 
 ### 1.2 Slim down `AdService` to bootstrap only
 
-- [ ] **1.2.1** In [`ad.service.ts`](src/app/services/ad.service.ts), replace `_initGpt(slots)`
+- [x] **1.2.1** In [`ad.service.ts`](src/app/services/ad.service.ts), replace `_initGpt(slots)`
   ([lines 136-171](src/app/services/ad.service.ts#L136-L171)) with a `_bootGpt()` that takes
   **no arguments** and does not build any `defineSlot` strings.
   - **This removes the string-interpolation injection surface (RC-9) entirely.** No
     server-supplied value is ever concatenated into executable JS again.
 
-- [ ] **1.2.2** In `_bootGpt()`, append the `gpt.js` library tag exactly as today (async,
+- [x] **1.2.2** In `_bootGpt()`, append the `gpt.js` library tag exactly as today (async,
   `crossOrigin = 'anonymous'`, same `GPT_SRC`), then configure and enable services via a
-  real function — **not** an injected `<script>` element:
+  real function — **not** an injected `<script>` element. **Implemented without the
+  `collapseEmptyDivs(false)` line** shown below — see Correction 3 for why:
   ```ts
   const w = window as any;
   w.googletag = w.googletag || { cmd: [] };
@@ -278,18 +283,18 @@ Phase 2 (refreshing a slot whose GPT state is stale would paint into a detached 
   - **Do not add `enableLazyLoad` yet** — it changes *when* ads fetch, which would confound
     Phase 1's regression testing. It is Phase 4.
 
-- [ ] **1.2.3** Update the call site in `_fetch()`
+- [x] **1.2.3** Update the call site in `_fetch()`
   ([`ad.service.ts:244-246`](src/app/services/ad.service.ts#L244-L246)) to call `_bootGpt()`.
   - **Keep the `res.enabled === true && slots.length > 0` condition unchanged** so GPT is
     still never loaded when ads are off.
 
-- [ ] **1.2.4** Update the class JSDoc block
+- [x] **1.2.4** Update the class JSDoc block
   ([lines 106-135](src/app/services/ad.service.ts#L106-L135)) — it documents the old
   `defineSlot`-in-head behaviour in detail and will be actively misleading otherwise. This
   codebase comments the *why* heavily; match that density and explain why slot definition
   moved to the component.
 
-- [ ] **1.2.5** Leave `setEnabled()`, `getSlot()`, `slotEnabledMap`, `ready`, `enabled`, and
+- [x] **1.2.5** Leave `setEnabled()`, `getSlot()`, `slotEnabledMap`, `ready`, `enabled`, and
   `slots` **untouched**.
   **Must not break:** the admin GAM panel reads all of these
   ([`admin.component.ts:4243-4300`](src/app/admin/admin.component.ts#L4243-L4300)).
@@ -305,9 +310,9 @@ Phase 2 (refreshing a slot whose GPT state is stale would paint into a detached 
 
 ### 1.3 Rewrite `AdSlotComponent`'s lifecycle
 
-- [ ] **1.3.1** Inject `GamService` alongside the existing `AdService`.
+- [x] **1.3.1** Inject `GamService` alongside the existing `AdService`.
 
-- [ ] **1.3.2** Replace the `_scriptInjected` flag and the injected `<script>` element
+- [x] **1.3.2** Replace the `_scriptInjected` flag and the injected `<script>` element
   ([`ad-slot.component.ts:84`](src/app/components/ad-slot/ad-slot.component.ts#L84),
   [`134-137`](src/app/components/ad-slot/ad-slot.component.ts#L134-L137)) with
   `gam.register(slot, container.nativeElement)`.
@@ -317,7 +322,7 @@ Phase 2 (refreshing a slot whose GPT state is stale would paint into a detached 
   - Track a `_registeredId: string | null` instead of a boolean, so teardown knows which id
     to unregister.
 
-- [ ] **1.3.3** Handle the disabled/unavailable branch
+- [x] **1.3.3** Handle the disabled/unavailable branch
   ([lines 111-116](src/app/components/ad-slot/ad-slot.component.ts#L111-L116)): when
   `!slot || !slot.enabled`, call `gam.unregister(_registeredId)` if set, then clear
   `_registeredId`, reset `removedByBrowser`, and run `_cleanupObserver`.
@@ -326,7 +331,7 @@ Phase 2 (refreshing a slot whose GPT state is stale would paint into a detached 
   **Verify:** toggle `desktop_page_right` off → on in admin; the slot fills again without a
   page reload (this never worked before — it is a bonus fix, not a regression risk).
 
-- [ ] **1.3.4** Add `ngOnDestroy()` and `implements OnDestroy` — **fixes RC-10**:
+- [x] **1.3.4** Add `ngOnDestroy()` and `implements OnDestroy` — **fixes RC-10**:
   ```ts
   ngOnDestroy(): void {
     this._cleanupObserver?.();
@@ -336,17 +341,66 @@ Phase 2 (refreshing a slot whose GPT state is stale would paint into a detached 
   **Must not break:** closing a modal must not throw. `unregister` is a no-op for an unknown
   id by design.
 
-- [ ] **1.3.5** Leave the template
+- [x] **1.3.5** Leave the template
   ([`ad-slot.component.html`](src/app/components/ad-slot/ad-slot.component.html)) and the CSS
   ([`ad-slot.component.css`](src/app/components/ad-slot/ad-slot.component.css)) **completely
   unchanged** in this phase.
   **Must not break:** the `min-width` / `min-height` bindings and the
   desktop/mobile visibility classes are the only thing preventing layout shift today.
 
-- [ ] **1.3.6** Leave `_observeForHeavyAdRemoval` logic unchanged for now. Its re-arming
+- [x] **1.3.6** Leave `_observeForHeavyAdRemoval` logic unchanged for now. Its re-arming
   problem (RC-7) is Phase 3, and it is not a *new* bug introduced here.
 
-### 1.4 Phase 1 regression checklist
+### 1.4 Phase 1 measured result
+
+Verified 2026-08-29 by loading the **production origin** in real Chrome while intercepting
+requests for the app's own JS/HTML and fulfilling them from the local `dist/` build. This keeps
+the WordPress API, CORS, and live GAM ad serving identical to production, so the code change is
+the only variable.
+
+> Two local-only routes were **not** usable and are worth knowing about:
+> `npm start` fails with a pre-existing `NG0401: Missing Platform` SSR error in
+> [`main.server.ts:11`](src/main.server.ts#L11) (unrelated to ads — nothing in the bootstrap path
+> was touched), and serving the build from `localhost` is blocked because the app sends an
+> `X-Requested-With` header that the live WordPress `Access-Control-Allow-Headers` does not permit.
+
+| Metric | Baseline (prod, pre-fix) | Phase 1 | |
+|---|---|---|---|
+| `destroySlots()` calls over 3 modal cycles | **0** | **1 → 3 → 5 → 7 → 9** | fixed |
+| Ad requests on modal open #1 / #2 / #3 | 11 / **11** / **11** | 20 / **24** / **28** | fixed |
+| `Desktop_Post_Middle` on modal open #1 | `iframes=1`, 300x266 | `iframes=1`, 300x266 | unchanged |
+| `Desktop_Post_Middle` on modal open #2 | `iframes=0`, 300x60 (**blank**) | **`iframes=1`, 300x266 (filled)** | **fixed** |
+| `Desktop_Post_Middle` on modal open #3 | `iframes=0`, 300x60 (**blank**) | **`iframes=1`, 300x266 (filled)** | **fixed** |
+| GPT slots defined at initial load | 10 (all, up front) | **2** (only mounted ones) | improved |
+| `refresh()` calls | 0 | 0 | Phase 2 |
+
+**The headline fix holds: the modal ad now fills on every open instead of only the first.**
+Slot count rises to 5 while the modal is open and falls back to 3 on close, confirming the
+define/destroy pairing is 1:1.
+
+Two secondary observations:
+
+- **Bonus fix:** pagination now issues fresh ad requests too (28 → 31), because
+  `desktop_page_right` remounting no longer produces a permanently blank slot. This is the
+  remount path being repaired, **not** refresh — `refresh()` is still 0, as intended for
+  this phase.
+- **`Desktop_Post_Top` still returns empty on repeat opens** despite being correctly destroyed
+  and re-requested each cycle. Since the request now fires, this is GAM-side (no creative
+  available or frequency capping for that unit), not a lifecycle defect. It was blank on open
+  #1 in production too. Raise with the GAM network owner rather than treating it as a code bug.
+- **RC-8 is unchanged by this phase**, as expected: the desktop containers still mount on mobile
+  (hidden by CSS) and therefore still register and request. That is Phase 2 / Phase 5 work.
+
+No console errors attributable to the app; the only page error was a benign
+`Attestation check for Shared Storage on googleadservices.com failed` from Google's own tag.
+
+**UI regression check.** Element counts before/after are structurally identical — left rail
+present, one `app-ad-slot` on load rising to two after selecting a section. Raw thumbnail and
+pagination counts differed between the two runs (15 vs 12) purely because production served a
+**stale SSR page for edition 2026-08-05** while the local build resolved the current edition
+2026-08-29; the two runs were looking at different newspapers, not different layouts.
+
+### 1.5 Phase 1 regression checklist (remaining manual items)
 
 Test with ads **enabled** in admin, on desktop (≥768 px) unless noted.
 

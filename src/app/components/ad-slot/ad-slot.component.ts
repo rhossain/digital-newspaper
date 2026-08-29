@@ -2,7 +2,7 @@ import {
   ChangeDetectionStrategy,
   Component,
   ElementRef,
-  Renderer2,
+  OnDestroy,
   computed,
   effect,
   inject,
@@ -13,6 +13,7 @@ import {
 } from '@angular/core';
 import { isPlatformBrowser } from '@angular/common';
 import { AdService, AdSlot } from '../../services/ad.service';
+import { GamService } from '../../services/gam.service';
 
 /**
  * AdSlotComponent — renders a single Google Ad Manager slot.
@@ -24,21 +25,20 @@ import { AdService, AdSlot } from '../../services/ad.service';
  * - Reads slot config from AdService (which mirrors WordPress /ads/config).
  * - Renders a container div with the exact id, min-width, and min-height
  *   that GAM expects.
- * - After the div is committed to the DOM, injects a <script> tag inside it:
+ * - Once the div is committed to the DOM, hands it to GamService, which defines
+ *   and displays the GPT slot; on teardown it hands the id back so GamService can
+ *   destroy the slot.
  *
- *     <div id="div-gpt-ad-...">
- *       <script>
- *         googletag.cmd.push(function() { googletag.display('div-gpt-ad-...'); });
- *       </script>
- *     </div>
- *
- *   This is the standard GPT placement format. Doing it via Renderer2 after
- *   the viewChild resolves guarantees the div exists in the DOM when the
- *   cmd.push callback runs — regardless of whether gpt.js has finished loading.
+ * The register/unregister pairing is the important part. GPT allows `display()`
+ * at most once per slot per page load, so a container that is destroyed and
+ * recreated — a modal reopening, the right panel closing and opening — must have
+ * its slot destroyed in GPT too. Without that, the second `display()` is silently
+ * ignored and the slot stays blank for the rest of the session. That was the
+ * behaviour before this component delegated to GamService.
  *
  * - Desktop slots (id starts with 'desktop_') are hidden on mobile via CSS.
  * - Mobile slots (id starts with 'mobile_') are hidden on desktop via CSS.
- * - SSR-safe: Renderer2 / script injection is guarded by isPlatformBrowser().
+ * - SSR-safe: registration is guarded by isPlatformBrowser().
  * - Hidden when global GAM is off OR when the individual slot is disabled.
  */
 @Component({
@@ -54,14 +54,14 @@ import { AdService, AdSlot } from '../../services/ad.service';
     '[class.dn-ad--hidden]':  '!slot() || !slot()!.enabled || removedByBrowser()',
   },
 })
-export class AdSlotComponent {
+export class AdSlotComponent implements OnDestroy {
 
   /** Stable slot identifier matching the WordPress gam_ad_slots() id field. */
   readonly slotId = input.required<string>();
 
   protected readonly adService = inject(AdService);
+  private  readonly gam        = inject(GamService);
   private  readonly platformId = inject(PLATFORM_ID);
-  private  readonly renderer   = inject(Renderer2);
 
   /**
    * Resolved slot definition (undefined while AdService is loading).
@@ -91,8 +91,11 @@ export class AdSlotComponent {
   private readonly adContainer =
     viewChild<ElementRef<HTMLDivElement>>('adContainer');
 
-  /** Guard: inject the display script only once per slot instance. */
-  private _scriptInjected = false;
+  /**
+   * The slot id currently registered with GamService, or null.
+   * Tracked as an id rather than a boolean so teardown knows what to unregister.
+   */
+  private _registeredId: string | null = null;
 
   /** Cleanup fn for the MutationObserver watching for Chrome Heavy Ad removal. */
   private _cleanupObserver?: () => void;
@@ -117,41 +120,48 @@ export class AdSlotComponent {
     effect(() => {
       const slot = this.slot();
 
-      // Reset the guard whenever the slot is unavailable or disabled so that
-      // re-enabling a slot within the same session injects a fresh display call.
+      // Release the GPT slot whenever it becomes unavailable or disabled, so that
+      // re-enabling it within the same session gets a genuinely fresh ad rather
+      // than a silently-ignored second display() call.
       if (!slot || !slot.enabled) {
-        this._scriptInjected = false;
-        this.removedByBrowser.set(false);
-        this._cleanupObserver?.();
+        this._release();
         return;
       }
 
       // Wait for Angular to commit the div to the DOM.
       const container = this.adContainer();
-      if (!container || this._scriptInjected) return;
+      if (!container || this._registeredId === slot.id) return;
 
       if (!isPlatformBrowser(this.platformId)) return; // SSR guard
 
-      this._scriptInjected = true;
-
-      // Inject:  <script>googletag.cmd.push(function() {
-      //            googletag.display('div-gpt-ad-...');
-      //          });</script>
-      //
-      // Appending a script element to the DOM causes the browser to execute
-      // it immediately (standard browser behaviour for inline scripts).
-      // Even if gpt.js is still loading, cmd.push queues the callback and
-      // GPT processes it once the library is ready.
-      const script = this.renderer.createElement('script') as HTMLScriptElement;
-      script.text =
-        `googletag.cmd.push(function() { googletag.display('${slot.div}'); });`;
-      this.renderer.appendChild(container.nativeElement, script);
+      this._registeredId = slot.id;
+      this.gam.register(slot, container.nativeElement);
 
       // Watch for Chrome's Heavy Ad Intervention, which replaces the ad iframe
       // with an intervention notice element and leaves the container visible.
       // When detected, collapse the slot so it takes no layout space.
       this._observeForHeavyAdRemoval(container.nativeElement, slot.div);
     });
+  }
+
+  /**
+   * Destroy the GPT slot and stop observing. Paired with the register() call in
+   * the effect above; safe to call when nothing is registered.
+   */
+  private _release(): void {
+    this._cleanupObserver?.();
+    this._cleanupObserver = undefined;
+
+    if (this._registeredId) {
+      this.gam.unregister(this._registeredId);
+      this._registeredId = null;
+    }
+
+    this.removedByBrowser.set(false);
+  }
+
+  ngOnDestroy(): void {
+    this._release();
   }
 
   /**

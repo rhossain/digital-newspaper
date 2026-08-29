@@ -28,6 +28,13 @@ interface AdsConfigResponse {
   slots: AdSlot[];
 }
 
+/** The GPT surface used for bootstrapping only. Slot APIs live in GamService. */
+interface GptBootstrap {
+  cmd: Array<() => void>;
+  setConfig(config: { singleRequest: boolean }): void;
+  enableServices(): void;
+}
+
 /**
  * AdService — fetches Google Ad Manager configuration from the WordPress
  * REST API (/ads/config) once on startup and exposes it as Angular signals.
@@ -67,8 +74,8 @@ export class AdService {
   private readonly _slots   = signal<AdSlot[]>([]);
   private readonly _ready   = signal<boolean>(false);
 
-  /** True once the GPT library tag and defineSlot init block have been injected. */
-  private _gptInitialized = false;
+  /** True once the GPT library tag has been injected and services enabled. */
+  private _gptBooted = false;
 
   /** Whether GAM is globally enabled on the WordPress side. */
   readonly enabled: Signal<boolean> = this._enabled.asReadonly();
@@ -103,71 +110,63 @@ export class AdService {
     this._fetch();
   }
 
-  // ── GPT head-script injection ───────────────────────────────────────────────
+  // ── GPT bootstrap ───────────────────────────────────────────────────────────
 
   /**
-   * Injects the Google Publisher Tag library and slot-definition init block
-   * into <head>, mirroring exactly what the WordPress wp_head hook does.
+   * Loads the Google Publisher Tag library and enables the pubads service.
    *
-   * This is necessary because this is a headless Angular SPA — WordPress's
-   * PHP `wp_head` action never fires in the browser.  Without this call,
-   * `googletag` is undefined and every `googletag.cmd.push(...)` in
-   * AdSlotComponent throws a ReferenceError.
+   * This is necessary because this is a headless Angular SPA — WordPress's PHP
+   * `wp_head` action never fires in the browser, so `inject_gam_head_script()`
+   * is dead code for this app. Without this call `googletag` is undefined and
+   * every `googletag.cmd.push(...)` throws a ReferenceError. This method is the
+   * *only* GPT bootstrap in the application.
+   *
+   * It deliberately does **not** define any slots. Slot definition is owned by
+   * GamService, which pairs each `defineSlot` with a matching `destroySlots`
+   * when the container unmounts. Defining slots up front here is what made
+   * recreated containers (modal reopen, right panel reopen) render permanently
+   * blank: their second `display()` was silently ignored by GPT because the slot
+   * was already displayed and had never been destroyed.
+   *
+   * Two secondary benefits of moving definition out:
+   *
+   *  - No server-supplied value is concatenated into executable JavaScript any
+   *    more. The previous version string-interpolated `unit` and `div` from the
+   *    REST response into an inline <script>, which was a script-injection
+   *    surface if the WordPress options were ever tampered with.
+   *  - `enableServices()` runs once here, not per slot.
+   *
+   * `singleRequest: true` is kept: when several containers mount in the same
+   * tick (the modal mounts two slots at once) GPT batches them into one request.
+   * Because slots are now defined lazily rather than all up front, batching only
+   * covers slots that mount together, which is the intended behaviour.
    *
    * Called once on the first successful /ads/config fetch when enabled === true.
-   * Safe to call multiple times — the `_gptInitialized` guard prevents double-init.
-   *
-   * Script structure mirrors the PHP inject_gam_head_script() output:
-   *
-   *   <script async src="gpt.js" crossorigin="anonymous"></script>
-   *   <script>
-   *     window.googletag = window.googletag || {cmd: []};
-   *     googletag.cmd.push(function() {
-   *       googletag.defineSlot('/unit', [sizes], 'div').addService(googletag.pubads());
-   *       ...
-   *       googletag.setConfig({singleRequest: true});
-   *       googletag.enableServices();
-   *     });
-   *   </script>
-   *
-   * @param slots  Full slot list from /ads/config (all slots, not just enabled ones —
-   *               GPT SRP requires all slots to be defined up front).
+   * Safe to call multiple times — the `_gptBooted` guard prevents double-init.
    */
-  private _initGpt(slots: AdSlot[]): void {
+  private _bootGpt(): void {
     if (!isPlatformBrowser(this.platformId)) return; // SSR guard
-    if (this._gptInitialized) return;
-    this._gptInitialized = true;
+    if (this._gptBooted) return;
+    this._gptBooted = true;
 
-    const head = this.document.head;
-
-    // 1. Async GPT library tag (equivalent to the <script async src="gpt.js"> in wp_head)
     const libScript = this.document.createElement('script');
     libScript.async = true;
     libScript.crossOrigin = 'anonymous';
     libScript.src = AdService.GPT_SRC;
-    head.appendChild(libScript);
+    this.document.head.appendChild(libScript);
 
-    // 2. Inline init block: defineSlot for every slot + setConfig(singleRequest) + enableServices.
-    //    All slots are defined regardless of their per-slot `enabled` flag because
-    //    single-request mode batches the ad call for all defined slots at once.
-    //    Per-slot visibility is controlled by whether display() is called (AdSlotComponent).
-    //    Note: googletag.pubads().enableSingleRequest() was deprecated — replaced by
-    //    googletag.setConfig({singleRequest: true}). See https://goo.gle/gpt-message#170
-    const defineLines = slots.map(s => {
-      const sizesJson = JSON.stringify(s.sizes);
-      return `  googletag.defineSlot('${s.unit}', ${sizesJson}, '${s.div}').addService(googletag.pubads());`;
-    }).join('\n');
+    // Configure via a real function rather than an injected <script> element.
+    const w = this.document.defaultView as (Window & { googletag?: GptBootstrap }) | null;
+    if (!w) return;
 
-    const initScript = this.document.createElement('script');
-    initScript.text = [
-      'window.googletag = window.googletag || {cmd: []};',
-      'googletag.cmd.push(function() {',
-      defineLines,
-      '  googletag.setConfig({singleRequest: true});',
-      '  googletag.enableServices();',
-      '});',
-    ].join('\n');
-    head.appendChild(initScript);
+    const gt = w.googletag ?? ({ cmd: [] } as unknown as GptBootstrap);
+    w.googletag = gt;
+
+    gt.cmd.push(() => {
+      // Deprecated: pubads().enableSingleRequest(). See https://goo.gle/gpt-message#170
+      gt.setConfig({ singleRequest: true });
+      gt.enableServices();
+    });
   }
 
   // ── Public API ──────────────────────────────────────────────────────────────
@@ -239,10 +238,10 @@ export class AdService {
           const slots = Array.isArray(res.slots) ? res.slots : [];
           this._slots.set(slots);
 
-          // Inject GPT library + defineSlot init into <head> when ads are enabled.
-          // This is the headless-Angular equivalent of WordPress's wp_head hook.
+          // Load GPT when ads are enabled. Individual slots are defined by
+          // GamService as their containers mount.
           if (res.enabled === true && slots.length > 0) {
-            this._initGpt(slots);
+            this._bootGpt();
           }
         }
         // Mark ready regardless of success/failure so UI doesn't stay blank.
