@@ -1006,9 +1006,11 @@ unfilled*. Until that is true, lazy loading has nothing to defer.
       §2.4 trap 2.
 - [x] **6.4** `npm run build` (includes `scripts/compress-dist.js`) succeeds — green on every
       build in Phases 2–6, ~9 s, Brotli saving ~1209 KB.
-- [ ] **6.5** Ads **off** in admin: site behaves exactly as a no-ads build. No GPT requests at
-      all, thumbnails and placeholder render normally.
-      *(Verified in Phase 0/1 via `regress.js` T1; re-confirm once more before merge.)*
+- [x] **6.5** Ads **off** in admin: site behaves exactly as a no-ads build. Re-confirmed on the
+      final build via `regress.js` T1 — `gpt.js` **never injected**, 0 slots defined, 0
+      `display()` calls, 0 GPT containers, 0 `app-ad-slot` hosts, **0 ad requests**, and the
+      layout intact at 12 thumbnails / 16 sections / 12 pagination buttons with no horizontal
+      overflow. Errors `(none)`. Costs nothing on the live network, since GPT never loads.
 - [ ] **6.6** Confirm with the GAM network owner that (a) the targeting keys exist, and
       (b) refresh is expected on these units — some direct-sold line items are priced on a
       no-refresh assumption.
@@ -1161,7 +1163,8 @@ box-sizing: content-box;   /* deliberately overrides the global border-box */
 ```
 
 `min-height` now reserves the creative and the padding sits outside it. Verified — same test, same
-8 samples: `[116, 116, 116, 116, 116, 116, 116, 116]`, `slots whose box height varied: 0`.
+8 samples: `[116, 116, 116, 116, 116, 116, 116, 116]`, `slots whose box height varied: 0`, errors
+`(none)`. `desktop_page_left` reads 256 and `desktop_post_preview_middle` 266, both constant.
 
 **What it costs**, measured, not assumed: empty placeholders grow by 16 px. `desktop_page_left`
 went 240 → 256 (S7 and S12 agree). That slot never fills (§1.7), so this is 16 px of additional
@@ -1186,10 +1189,20 @@ anyone relies on the numbers.
 1. **GAM keys ad serving to the registered domain.** From `localhost` no creative arrives at
    all, so every question of the form "does this slot fill / at what height / with which
    creative id" is unanswerable off the real origin.
-2. **There is no staging backend.** `environment.wpBaseUrl` in the *dev* environment already
-   points at `https://epaper.dailysangram.com/wp`. Plain `ng serve` talks to production, and the
-   local admin panel writes to the live site. The harness inherited this; it did not introduce
-   it. **This is the real problem** and it is bigger than ads — see the risk note below.
+2. **The staging backend does not answer.** A staging environment *is* configured —
+   `src/environments/environment.staging.ts` points at `https://nepaper.dailysangram.com/wp`, with
+   `npm run build:staging` / `serve:staging` wired up. But it is unreachable: DNS resolves
+   (`70.32.23.108`) and every connection times out, on both `/wp/?rest_route=…/data/version` and
+   the bare host. So the option existed on paper and not in practice.
+
+   Two open questions for whoever owns that host, in 6.6:
+   - Is `nepaper` meant to be up? If it is, most of this suite should point there instead.
+   - Is `nepaper` an **approved GAM domain**? Ad serving is per-domain, so even a healthy staging
+     host only replaces the fill-dependent runs if GAM will serve to it.
+
+   Independently of staging: the **dev** environment's `wpBaseUrl` points at *production*
+   (`epaper`), so plain `ng serve` and the local admin panel both edit the live site. The harness
+   inherited that; it did not introduce it. See the risk note below.
 
 **Containment that was applied**
 
@@ -1218,9 +1231,10 @@ bought the second row — the inventory-gap and creative-size findings, which ar
 ones handed to the network owner in 6.7 and which no local stub could have produced.
 
 **Standing risk, beyond this task:** dev pointing at production means any developer running the
-admin panel locally is editing the live site. That deserves a separate fix (a staging origin, or
-at minimum a non-production `wpBaseUrl` default with an explicit opt-in), and it is out of scope
-here. Flagging it rather than fixing it silently.
+admin panel locally is editing the live site. The fix is small — point `environment.ts` at
+`nepaper` like `environment.staging.ts` already does, and require an explicit opt-in to aim dev at
+production — but it is a change to everyone's local workflow, not an ad fix, so it is flagged here
+rather than made silently. It is also moot until `nepaper` answers.
 
 ---
 
