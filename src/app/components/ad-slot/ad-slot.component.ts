@@ -63,9 +63,20 @@ export class AdSlotComponent {
   private  readonly platformId = inject(PLATFORM_ID);
   private  readonly renderer   = inject(Renderer2);
 
-  /** Resolved slot definition (undefined while AdService is loading). */
+  /**
+   * Resolved slot definition (undefined while AdService is loading).
+   *
+   * Returns undefined when global GAM is off, not just when the individual slot
+   * is off. The two flags are persisted independently on the WordPress side
+   * (OPTION_GAM_ENABLED vs OPTION_GAM_SLOT_STATES), so a slot can be
+   * per-slot-enabled while GAM as a whole is disabled. Without the global check
+   * here, such a slot renders a reserved empty div and its display() call throws
+   * ReferenceError because gpt.js was never loaded. Both the template @if and the
+   * dn-ad--hidden host binding derive from this signal, so gating it here is
+   * sufficient — and it makes the admin GAM toggle a complete kill switch.
+   */
   protected readonly slot = computed<AdSlot | undefined>(() =>
-    this.adService.getSlot(this.slotId())
+    this.adService.enabled() ? this.adService.getSlot(this.slotId()) : undefined
   );
 
   readonly isDesktop = computed(() => this.slotId().startsWith('desktop_'));
