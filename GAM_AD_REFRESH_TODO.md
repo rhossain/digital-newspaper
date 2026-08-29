@@ -400,35 +400,182 @@ pagination counts differed between the two runs (15 vs 12) purely because produc
 **stale SSR page for edition 2026-08-05** while the local build resolved the current edition
 2026-08-29; the two runs were looking at different newspapers, not different layouts.
 
-### 1.5 Phase 1 regression checklist (remaining manual items)
+### 1.5 Phase 1 regression checklist
 
 Test with ads **enabled** in admin, on desktop (≥768 px) unless noted.
 
-- [ ] Fresh load: left rail, and either the right ad or the placeholder, render as before.
-- [ ] Thumbnail list still appears when `desktop_page_left` is **disabled**
+- [x] Fresh load: left rail, and either the right ad or the placeholder, render as before.
+- [x] Thumbnail list still appears when `desktop_page_left` is **disabled**
       ([`newspaper.component.html:368-371`](src/app/newspaper.component.html#L368-L371)).
-- [ ] Lazy thumbnail loading via `IntersectionObserver` still works (scroll the left panel).
-- [ ] Click a section in the center panel → right panel opens, preview ads fill.
-- [ ] **Key fix:** open the image modal, close it, open it again → **the modal ad fills on
+      *`desktop_page_left` is disabled in the live config, and 12 thumbnails still render.*
+- [x] Lazy thumbnail loading via `IntersectionObserver` still works (scroll the left panel).
+- [x] Click a section in the center panel → right panel opens, preview ads fill.
+      *`desktop_post_preview_middle` fills (1 iframe, 554×266). `desktop_post_preview_top`
+      holds its reserved 554×100 but returns an empty fill — the same GAM-side inventory
+      issue recorded in §1.4, not a lifecycle defect.*
+- [x] **Key fix:** open the image modal, close it, open it again → **the modal ad fills on
       the second and third open.** This is the headline verification for Phase 1.
-- [ ] **Key fix:** open the right panel, close it (click a thumbnail) → `desktop_page_right`
+- [x] **Key fix:** open the right panel, close it (click a thumbnail) → `desktop_page_right`
       fills again.
-- [ ] Content modal (text) ad fills on repeat opens.
-- [ ] **Do not** rely on the console to detect duplicate-`display()` failures — per
+- [x] Content modal (text) ad **is re-requested** on repeat opens (lifecycle correct: +1 ad
+      request per open, where the baseline was frozen). It does **not** fill — but it never
+      filled, including on the first open, so this is not a Phase 1 regression. Cause is a
+      GAM inventory gap, not code: see §1.7.
+- [x] **Do not** rely on the console to detect duplicate-`display()` failures — per
       **Correction 3** / Appendix A.5, current GPT swallows them silently with no warning.
       Verify by **counting network requests to `securepubads` instead**: opening the modal on
       three different articles must produce **three** new ad requests, where the pre-fix
       baseline produced **one** (11 → 11 → 11).
-- [ ] No `MutationObserver` growth after 10 modal open/close cycles (check retained
-      listeners in DevTools Memory).
-- [ ] Turn GAM **off** in admin → all ad space collapses, thumbnails/placeholder return, no
+- [x] No `MutationObserver` growth after 10 modal open/close cycles.
+      *Measured by instrumenting `MutationObserver` directly rather than reading the DevTools
+      Memory panel — see T3 below.*
+- [x] Turn GAM **off** in admin → all ad space collapses, thumbnails/placeholder return, no
       console errors.
-- [ ] Admin ad-manager panel loads, toggles individual slots, and saves.
-- [ ] `npm run build` succeeds (this exercises the SSR/prerender path — an unguarded
+- [x] Admin ad-manager panel loads, toggles individual slots, and saves.
+- [x] `npm run build` succeeds (this exercises the SSR/prerender path — an unguarded
       `window` reference will fail here, not in `ng serve`).
-- [ ] Mobile viewport (<768 px): layout is byte-for-byte identical to before. Desktop slots
+- [x] Mobile viewport (<768 px): layout is byte-for-byte identical to before. Desktop slots
       are still hidden. *(The wasted mobile requests of RC-8 are unchanged in this phase —
       that is Phase 2.)*
+
+### 1.6 How the admin-gated items were verified without touching production
+
+Dev and prod `wpBaseUrl` both point at `https://epaper.dailysangram.com/wp`, so using the
+local admin panel for real would have rewritten live ad settings. Instead the three
+admin-gated checks ran against the **production origin with the local `dist/` bundle
+injected**, with three requests handled locally so nothing reached the backend:
+
+| Request | Handling |
+|---|---|
+| `GET …rest_route=/…/ads/config` | served from a snapshot of the real payload, rewritten per test |
+| `POST …rest_route=/…/ads/config` | **fulfilled locally and never forwarded** — the admin save is a no-op upstream |
+| `GET …rest_route=/…/auth/me` | fulfilled locally so the admin UI renders without a real login |
+
+The REST URLs matter: `wpApiInterceptor` rewrites them to `/wp/?rest_route=/…`, so the route
+name is in the **query string**, not the path. A path-only matcher silently misses them and
+the test appears to fail.
+
+**T1 — global GAM off is a complete kill switch (RC-11, now confirmed end-to-end)**
+
+| Observation | Result |
+|---|---|
+| `gpt.js` injected | **no** |
+| slots defined / `display()` calls | 0 / 0 |
+| `div-gpt-ad-*` containers in DOM | 0 |
+| `app-ad-slot` hosts in DOM | 0 |
+| network requests to `securepubads` | 0 |
+| console errors | none |
+| layout | 12 thumbnails, 16 sections, 12 pagination buttons, no horizontal overflow — identical to the ads-enabled run |
+
+Exercised article selection and pagination while disabled; no slot leaked through.
+
+**T2 — per-slot toggle, off → on, with no page reload**
+
+`desktop_page_right` was forced off in the served config, then toggled on through the real
+admin UI. Navigation back to the viewer used the Angular router (verified by a
+window-scoped marker surviving the transition), so `AdService` and `GamService` were the same
+instances throughout — a genuine runtime `disabled → enabled` transition.
+
+| | Before | After |
+|---|---|---|
+| admin checkbox | unchecked | checked |
+| slots defined | 0 | 2 |
+| `desktop_page_right` container | absent | present, 1 iframe, 600×266 |
+| `securepubads` requests | — | +8 |
+| console errors | none | none |
+
+The intercepted POST body carried the correct `slot_states` map for all nine slots.
+
+*Note for whoever runs this by hand: the admin tab bar only exists on the non-vintage theme.
+Under the vintage theme (`ADMIN_THEME`), Ad Manager is inside the "Menu ▾" dropdown.*
+
+*Also note: `desktop_page_right` lives in the **no-section-selected** branch of the right
+panel (Correction 2). Selecting an article unmounts it, which will mask this test.*
+
+**T3 — 10 modal open/close cycles**
+
+`MutationObserver` was wrapped to count only observers bound inside an `app-ad-slot`, so
+Angular's and GPT's own observers do not pollute the measurement.
+
+| Cycle | slots (open / closed) | observers created | disconnected | **live** | `destroySlots()` | ad requests |
+|---|---|---|---|---|---|---|
+| 1 | 5 / 3 | 8 | 5 | **3** | 3 | 16 |
+| 5 | 5 / 3 | 20 | 17 | **3** | 11 | 31 |
+| 10 | 5 / 3 | 35 | 32 | **3** | 21 | 51 |
+
+Live observers stay pinned at 3 — one per slot that legitimately remains mounted — and
+defined slots stay flat at 3, so nothing accumulates. `destroySlots()` and ad requests grow
+linearly, which is the intended behaviour: every reopen genuinely re-requests. The only
+console error across all ten cycles is a third-party `Shared Storage` attestation notice from
+`googleadservices.com`, unrelated to this change.
+
+**T4 — thumbnail `IntersectionObserver` lazy-load, unaffected**
+
+| | before scroll | after scrolling the rail to the bottom |
+|---|---|---|
+| `.thumbnail-item` | 12 | 12 |
+| `<img>` present | 4 | 12 |
+| decoded (`naturalWidth > 0`) | 4 | 12 |
+| skeleton loaders | 8 | 0 |
+
+The rail genuinely overflows (2889 px of content in a 906 px viewport), so this is a real
+lazy-load exercise, not a vacuous pass. No page errors.
+
+**T5 — text/content modal (`desktop_post_top_text`), lifecycle fixed but still unfilled**
+
+| Open | `securepubads` requests | container | iframes |
+|---|---|---|---|
+| #1 | 13 | 1591×60 | 0 |
+| #2 | 14 | 1591×60 | 0 |
+| #3 | 15 | 1606×60 | 0 |
+
+The request count now advances by one per open — before Phase 1 it was frozen — so the
+define/destroy pairing is working. The slot returns an **empty fill every time, including the
+first**, so this is pre-existing and outside the scope of these phases. Root cause in §1.7.
+
+**T6 — mobile viewport, 390×844, local build vs production build side by side**
+
+| | production bundle | local (Phase 1) bundle |
+|---|---|---|
+| thumbnails / sections / pagination | 12 / 12 / 6 | 12 / 12 / 6 |
+| `app-ad-slot` hosts / `div-gpt-ad` divs | 1 / 1 | 1 / 1 |
+| **visibly rendered** gpt divs | 0 | 0 |
+| horizontal overflow | 0 px | 0 px |
+| `.main-page-image` rect | 298×465 at (46, 213) | 298×465 at (46, 213) |
+| `securepubads` requests | 8 | 8 |
+
+Every compared layout key is identical, down to element geometry. No page errors. RC-8 is
+unchanged, as intended for this phase.
+
+### 1.7 Why some slots never fill — a GAM inventory gap, not a code defect
+
+Three slots reliably return empty fills (`desktop_post_preview_top`, `desktop_post_top_image`,
+`desktop_post_top_text`) while others reliably fill. The declared sizes explain it exactly:
+
+| Slot | Has a rectangle size (300×250 / 336×280)? | Observed |
+|---|---|---|
+| `desktop_page_right` | yes | **fills** (600×266) |
+| `desktop_post_preview_middle` | yes | **fills** (554×266) |
+| `desktop_post_middle` | yes | **fills** (300×266) |
+| `desktop_post_preview_top` | no — banner sizes only | empty |
+| `desktop_post_top_image` | no — banner sizes only | empty |
+| `desktop_post_top_text` | no — banner sizes only | empty |
+
+The correlation is perfect across every slot tested. The banner-only units
+(`TDSEV3_Desktop_Post_Preview_Top-01`, `TDSEV3_Desktop_Post_Top-01`, sizes 320×100 / 300×100 /
+728×90 / 468×60) appear to have **no line items booked against them** in the GAM network,
+whereas every unit offering a rectangle does.
+
+This closes out the "`Desktop_Post_Top` still returns empty on repeat opens" note in §1.4:
+it is not a lifecycle defect and no further code change will fix it. Two items for the GAM
+network owner, added to the Phase 6 gate:
+
+1. Book creatives against the banner sizes on `TDSEV3_Desktop_Post_Top-01` and
+   `TDSEV3_Desktop_Post_Preview_Top-01`, or add a rectangle size to those slot definitions in
+   `gam_ad_slots()`.
+2. Note that `desktop_post_top_image` and `desktop_post_top_text` share **one** ad unit path
+   (`TDSEV3_Desktop_Post_Top-01`) across two different div ids. That is legal, but under SRA
+   both are requested in the same call and will compete for the same inventory.
 
 ---
 
@@ -657,7 +804,15 @@ Independent of correctness; ship only after Phases 1–3 are verified.
 - [ ] **6.6** Confirm with the GAM network owner that (a) the targeting keys exist, and
       (b) refresh is expected on these units — some direct-sold line items are priced on a
       no-refresh assumption.
-- [ ] **6.7** Re-read [GAM_AD_REFRESH_ANALYSIS.md](GAM_AD_REFRESH_ANALYSIS.md) §4 policy
+- [ ] **6.7** Report the GAM-side issues found during Phase 1 to the network owner. None are
+      fixable in this codebase:
+      - **No inventory booked against banner-only units** — see §1.7.
+        `TDSEV3_Desktop_Post_Top-01` and `TDSEV3_Desktop_Post_Preview_Top-01` return empty
+        fills on every request; every unit offering a 300×250/336×280 rectangle fills fine.
+      - **`TDSEV2_Bottom_Anchor` is created twice per page load**, one creation discarded with
+        `Format already created on the page` — see **Correction 4**. This unit is not in
+        `gam_ad_slots()` and does not come from this repo.
+- [ ] **6.8** Re-read [GAM_AD_REFRESH_ANALYSIS.md](GAM_AD_REFRESH_ANALYSIS.md) §4 policy
       notes: every trigger must be user-initiated. Confirm no `setInterval` auto-refresh crept
       in, and that the `document.hidden` guard is present.
 
