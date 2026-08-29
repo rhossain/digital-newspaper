@@ -20,8 +20,17 @@ interface GptSlot {
   setTargeting(key: string, value: string): GptSlot;
 }
 
+/** The subset of GPT's slotRenderEnded event this app reads. */
+export interface SlotRenderEvent {
+  slot: GptSlot;
+  isEmpty: boolean;
+  size: number[] | null;
+}
+
 interface PubAdsService {
   refresh(slots: GptSlot[], options?: { changeCorrelator: boolean }): void;
+  addEventListener(type: 'slotRenderEnded', listener: (ev: SlotRenderEvent) => void): void;
+  removeEventListener(type: 'slotRenderEnded', listener: (ev: SlotRenderEvent) => void): void;
 }
 
 interface GoogleTag {
@@ -125,6 +134,26 @@ export class GamService implements OnDestroy {
    */
   private targeting: AdTargeting = {};
 
+  /** Per-slot render callbacks, keyed by slot id. */
+  private readonly renderListeners = new Map<string, (ev: SlotRenderEvent) => void>();
+
+  /**
+   * Slots collapsed by Chrome's Heavy Ad Intervention.
+   *
+   * Tracked here because such a slot is `display: none`, which the visibility
+   * guard would otherwise read as "not worth refreshing" — and refreshing is
+   * precisely how it recovers. Without this the collapse would be permanent: no
+   * refresh, so no new render, so nothing to un-collapse it.
+   */
+  private readonly collapsed = new Set<string>();
+
+  /**
+   * The one GPT-level `slotRenderEnded` listener, or null if not yet attached.
+   * One listener dispatching by element id, rather than one per slot each doing
+   * its own id comparison — GPT calls every registered listener for every slot.
+   */
+  private gptRenderListener: ((ev: SlotRenderEvent) => void) | null = null;
+
   /**
    * Define and display a GPT slot for a container that has just been committed
    * to the DOM. Safe to call when gpt.js has not finished loading — the work is
@@ -194,6 +223,7 @@ export class GamService implements OnDestroy {
 
     // Cancels a definition still sitting in the GPT command queue.
     this.claimed.delete(id);
+    this.collapsed.delete(id);
 
     const entry = this.live.get(id);
     if (!entry) return;
@@ -230,9 +260,64 @@ export class GamService implements OnDestroy {
     this.refreshTimer = setTimeout(() => this._flush(), GamService.REFRESH_DEBOUNCE_MS);
   }
 
+  /**
+   * Be told when GPT finishes rendering a slot — the only reliable signal that a
+   * slot has a new creative, which is what lets a collapsed slot recover.
+   *
+   * One callback per slot id; registering again replaces it. Paired with
+   * `offRender` on teardown.
+   */
+  onRender(id: string, listener: (ev: SlotRenderEvent) => void): void {
+    if (!isPlatformBrowser(this.platformId)) return;
+    this.renderListeners.set(id, listener);
+    this._ensureRenderListener();
+  }
+
+  offRender(id: string): void {
+    this.renderListeners.delete(id);
+  }
+
+  /**
+   * Report that a slot has been collapsed by Chrome's Heavy Ad Intervention (or
+   * has recovered), so the refresh path can keep considering it while hidden.
+   */
+  setCollapsed(id: string, collapsed: boolean): void {
+    if (collapsed) this.collapsed.add(id);
+    else this.collapsed.delete(id);
+  }
+
   ngOnDestroy(): void {
     if (this.refreshTimer !== null) clearTimeout(this.refreshTimer);
     this.refreshTimer = null;
+
+    this.renderListeners.clear();
+
+    const listener = this.gptRenderListener;
+    if (!listener) return;
+    this.gptRenderListener = null;
+    const gt = this._googletag();
+    gt?.cmd.push(() => gt.pubads().removeEventListener('slotRenderEnded', listener));
+  }
+
+  /** Attach the single GPT listener, once, on first interest. */
+  private _ensureRenderListener(): void {
+    if (this.gptRenderListener) return;
+
+    const gt = this._googletag();
+    if (!gt) return;
+
+    const listener = (ev: SlotRenderEvent) => {
+      const divId = ev.slot.getSlotElementId();
+      // The event carries a div id; map it back to the slot id the component knows.
+      for (const entry of this.live.values()) {
+        if (entry.gptSlot.getSlotElementId() !== divId) continue;
+        this.renderListeners.get(entry.id)?.(ev);
+        return;
+      }
+    };
+
+    this.gptRenderListener = listener;
+    gt.cmd.push(() => gt.pubads().addEventListener('slotRenderEnded', listener));
   }
 
   /** Issue at most one batched refresh for everything that accumulated in `pending`. */
@@ -255,8 +340,9 @@ export class GamService implements OnDestroy {
       .filter((entry): entry is LiveSlot => entry !== undefined)
       // Guard 3 — hidden containers. Desktop slots stay mounted but
       // `display: none` on mobile; refreshing them would buy impressions with
-      // zero chance of being viewed.
-      .filter(entry => this._isVisible(entry.el))
+      // zero chance of being viewed. A Heavy-Ad collapse is the one exception:
+      // it is also `display: none`, but a new creative is what un-collapses it.
+      .filter(entry => this._isVisible(entry.el) || this.collapsed.has(entry.id))
       // Guard 4 — per-slot rate floor, against rapid pagination clicking.
       .filter(entry => now - entry.lastRefreshedAt >= GamService.MIN_REFRESH_INTERVAL_MS);
 

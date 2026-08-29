@@ -4,11 +4,6 @@
   display: block;
 }
 
-/* Hide the host element when no slot config is available. */
-:host(.dn-ad--hidden) {
-  display: none;
-}
-
 /* ── Desktop-only slots ────────────────────────────────────────────────────
    Slots whose id starts with 'desktop_' receive the .dn-ad--desktop class.
    They are hidden below 768 px so no ad space is reserved on mobile.       */
@@ -33,6 +28,19 @@
   :host(.dn-ad--mobile) {
     display: none;
   }
+}
+
+/* ── Hidden host ───────────────────────────────────────────────────────────
+   No slot config, slot disabled, or the ad was removed by Chrome's Heavy Ad
+   Intervention.
+
+   Must stay LAST in this file. Every rule here is `:host(.one-class)`, so they
+   all have equal specificity and source order decides the winner — when this
+   block sat above the `.dn-ad--desktop` media query, a desktop slot on a desktop
+   viewport got `display: block` from the later rule and this had no effect at
+   all. Measured: a Heavy-Ad-collapsed slot kept its full 266 px box.            */
+:host(.dn-ad--hidden) {
+  display: none;
 }
 
 /* ── Ad container ──────────────────────────────────────────────────────────

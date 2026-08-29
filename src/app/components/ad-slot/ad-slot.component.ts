@@ -56,6 +56,12 @@ import { GamService } from '../../services/gam.service';
 })
 export class AdSlotComponent implements OnDestroy {
 
+  /**
+   * How long an iframe must stay absent before it counts as a Heavy-Ad removal
+   * rather than the momentary gap in the middle of a refresh.
+   */
+  private static readonly HEAVY_AD_CONFIRM_MS = 1500;
+
   /** Stable slot identifier matching the WordPress gam_ad_slots() id field. */
   readonly slotId = input.required<string>();
 
@@ -135,12 +141,23 @@ export class AdSlotComponent implements OnDestroy {
       if (!isPlatformBrowser(this.platformId)) return; // SSR guard
 
       this._registeredId = slot.id;
+
+      // Recover from a Heavy-Ad collapse. GPT renders a new creative into this
+      // same container on every refresh, but the collapse is latched and its
+      // observer disconnected, so without this the slot would stay hidden for the
+      // rest of the session and refresh into a box nobody can see.
+      this.gam.onRender(slot.id, () => {
+        this.removedByBrowser.set(false);
+        this.gam.setCollapsed(slot.id, false);
+        this._observeForHeavyAdRemoval(container.nativeElement);
+      });
+
       this.gam.register(slot, container.nativeElement);
 
       // Watch for Chrome's Heavy Ad Intervention, which replaces the ad iframe
       // with an intervention notice element and leaves the container visible.
       // When detected, collapse the slot so it takes no layout space.
-      this._observeForHeavyAdRemoval(container.nativeElement, slot.div);
+      this._observeForHeavyAdRemoval(container.nativeElement);
     });
   }
 
@@ -153,6 +170,7 @@ export class AdSlotComponent implements OnDestroy {
     this._cleanupObserver = undefined;
 
     if (this._registeredId) {
+      this.gam.offRender(this._registeredId);
       this.gam.unregister(this._registeredId);
       this._registeredId = null;
     }
@@ -173,37 +191,70 @@ export class AdSlotComponent implements OnDestroy {
    * immediately on the first mutation would be a false positive — GPT builds
    * the ad in multiple DOM steps (outer div first, then the SafeFrame iframe),
    * so the observer fires before the iframe exists during normal ad loading.
+   *
+   * Matches any iframe inside the container, because GPT names its SafeFrame
+   * after the *ad unit path* (`google_ads_iframe_/22062727803/TDSEV3_…_0`), not
+   * the div id. A previous id-based selector matched nothing, so
+   * `iframeWasPresent` never became true and this observer could never collapse
+   * anything — measured against the live site. The container holds only this
+   * slot's render, so "has an iframe" is the right proxy for "an ad is here".
    */
-  private _observeForHeavyAdRemoval(container: HTMLElement, divId: string): void {
+  private _observeForHeavyAdRemoval(container: HTMLElement): void {
     this._cleanupObserver?.(); // disconnect any prior observer
 
     // Track whether the SafeFrame iframe was ever observed inside this container.
     // We must not collapse the slot until we have confirmed the iframe existed,
     // otherwise normal GPT construction (multi-step DOM mutations) would
     // trigger a false positive and collapse a healthy ad before it renders.
-    let iframeWasPresent = false;
+    //
+    // Seeded from a synchronous check rather than starting false, because this is
+    // also called to re-arm after a render, by which point the iframe usually
+    // already exists — and a MutationObserver reports only future mutations, so
+    // starting false would leave a slot whose iframe never mutates again
+    // permanently unable to detect a Heavy-Ad removal.
+    let iframeWasPresent = !!container.querySelector('iframe');
+    let pendingCheck: ReturnType<typeof setTimeout> | undefined;
 
-    const iframeSelector = `iframe[id*="${divId}"], iframe[name*="${divId}"]`;
+    const clearPending = () => {
+      if (pendingCheck === undefined) return;
+      clearTimeout(pendingCheck);
+      pendingCheck = undefined;
+    };
 
     const observer = new MutationObserver(() => {
-      const iframePresent = !!container.querySelector(iframeSelector);
-
-      if (iframePresent) {
+      if (container.querySelector('iframe')) {
         // Normal ad load — record that the iframe arrived.
         iframeWasPresent = true;
+        clearPending();
         return;
       }
 
       // iframe is gone — only act if it was previously confirmed present.
       // This distinguishes Chrome's Heavy Ad removal from the normal period
       // between script injection and GPT completing the SafeFrame build.
-      if (iframeWasPresent) {
+      if (!iframeWasPresent || pendingCheck !== undefined) return;
+
+      // A refresh also drops the old iframe a moment before building the new
+      // one, which is indistinguishable from a Heavy-Ad removal at this instant.
+      // Confirm the absence persists first: an intervention is permanent, so
+      // waiting costs nothing, whereas collapsing immediately would flicker the
+      // slot closed on every single refresh.
+      pendingCheck = setTimeout(() => {
+        pendingCheck = undefined;
+        if (container.querySelector('iframe')) return;
+
         this.removedByBrowser.set(true);
+        // Keeps this slot eligible for refresh while collapsed — the next
+        // creative is what brings it back.
+        this.gam.setCollapsed(this.slotId(), true);
         observer.disconnect();
-      }
+      }, AdSlotComponent.HEAVY_AD_CONFIRM_MS);
     });
 
     observer.observe(container, { childList: true, subtree: true });
-    this._cleanupObserver = () => observer.disconnect();
+    this._cleanupObserver = () => {
+      clearPending();
+      observer.disconnect();
+    };
   }
 }

@@ -790,34 +790,87 @@ manage it, so it receives neither targeting nor refresh. Tracked as Phase 6 item
 **Why after Phase 2:** RC-7 only becomes an observable bug once refresh exists. Doing it
 earlier would be untestable.
 
-- [ ] **3.1** In `GamService`, register a single `pubads().addEventListener('slotRenderEnded', …)`
-  and expose it to components — either as an RxJS `Subject` or by letting `AdSlotComponent`
-  attach its own filtered listener. **Prefer one service-level listener** that dispatches by
-  `ev.slot.getSlotElementId()`; N listeners for N slots each doing an id comparison is
-  wasteful and harder to tear down.
+- [x] **3.1** In `GamService`, register a single `pubads().addEventListener('slotRenderEnded', …)`
+  and expose it to components. Implemented as `onRender(id, cb)` / `offRender(id)` with one
+  GPT-level listener attached lazily on first interest and dispatched by
+  `ev.slot.getSlotElementId()`, mapped back to the slot id via the `live` registry.
 
-- [ ] **3.2** In `AdSlotComponent`, on a `slotRenderEnded` for its own div:
-  - `this.removedByBrowser.set(false)` — un-poison the slot.
-  - Re-run `_observeForHeavyAdRemoval(container, slot.div)` to re-arm the observer.
+- [x] **3.2** In `AdSlotComponent`, on a `slotRenderEnded` for its own div: clear
+  `removedByBrowser`, clear the service-side collapse flag, and re-arm the observer.
 
-- [ ] **3.3** Use `ev.isEmpty` from the event to detect genuine empty fills. This is far more
-  reliable than the current "no iframe present" heuristic and can replace part of
-  [`_observeForHeavyAdRemoval`](src/app/components/ad-slot/ad-slot.component.ts#L156-L187).
-  **Must not break:** keep the `iframeWasPresent` invariant
-  ([lines 159-183](src/app/components/ad-slot/ad-slot.component.ts#L159-L183)) for the
-  Heavy-Ad case specifically — that guard exists because GPT builds the ad in multiple DOM
-  steps and a naive check produced false-positive collapses. Do not remove it.
+- [x] **3.3** ~~Use `ev.isEmpty` from the event to detect genuine empty fills.~~ **Not needed,
+  and would have been wrong here.** An empty fill inserts no iframe at all, so
+  `iframeWasPresent` stays false and the observer already never collapses on it — `isEmpty`
+  would add a second code path for a case that is already handled. The `iframeWasPresent`
+  invariant is kept, as required. The event *is* consumed, just for un-collapsing (3.2) rather
+  than for empty detection.
 
-- [ ] **3.4** Ensure the listener is removed on service teardown.
+- [x] **3.4** Listener removed on service teardown, in `ngOnDestroy`, via
+  `removeEventListener` inside the GPT command queue.
+
+### 3.5 Three defects found while making this work
+
+Phase 3 was supposed to be a small change. Verifying it turned up two pre-existing bugs and one
+flaw in the plan itself, all of which had to be fixed for the Heavy-Ad feature to work at all.
+
+**(a) The observer's selector never matched, so the collapse could never fire.** The observer
+watched for `iframe[id*="<divId>"], iframe[name*="<divId>"]`, but GPT names its SafeFrame after
+the **ad unit path**, not the div id. Measured on the live site:
+
+| | value |
+|---|---|
+| container div id | `div-gpt-ad-1781437781482-0` |
+| GPT iframe id | `google_ads_iframe_/22062727803/TDSEV3_Desktop_Page_Right-01_0` |
+| iframes matching the old selector | **0** |
+
+So `iframeWasPresent` never became true and the whole Heavy-Ad path was dead code. Now matches
+any iframe inside the container, which is sound because the container holds only this slot's
+render. *This means RC-7 — "the collapse is latched forever" — was never observable in
+production: not because the latch released, but because nothing ever latched.*
+
+**(b) `dn-ad--hidden` did not hide desktop slots on desktop.** Every rule in the component CSS is
+`:host(.one-class)`, so specificity ties and **source order** decides. The `.dn-ad--hidden`
+block sat *above* the `@media (min-width: 768px) { :host(.dn-ad--desktop) { display: block } }`
+rule, so on a desktop viewport the later rule won and a "collapsed" slot kept its full box.
+Measured: host carried `dn-ad--hidden` while the container still reported **266 px** tall.
+Fixed by moving the block to the end of the file, with a comment saying it must stay there.
+After the fix the same simulation reports **0 px**.
+
+**(c) The plan's own design deadlocked.** With (a) and (b) fixed, a collapsed slot is genuinely
+`display: none` — which Phase 2's guard 3 reads as "not worth refreshing". That is a closed loop:
+no refresh → no new render → no `slotRenderEnded` → never un-collapses. The recovery listener
+would have been unreachable code. Fixed by having the component report the collapse to
+`GamService` (`setCollapsed`), and having guard 3 treat a Heavy-Ad collapse as the one hidden
+state that *is* still refreshable — since a new creative is precisely what brings it back.
+
+**(d) A refresh briefly looks identical to a Heavy-Ad removal.** GPT drops the old iframe a
+moment before inserting the new one. With (a) fixed, that gap would collapse the slot on *every*
+refresh. The removal is now confirmed after a 1500 ms delay (`HEAVY_AD_CONFIRM_MS`) and cancelled
+if an iframe reappears — an intervention is permanent, so waiting costs nothing.
 
 ### Phase 3 regression checklist
 
-- [ ] A slot collapsed by Chrome's Heavy Ad Intervention **recovers** on the next refresh
+- [x] A slot collapsed by Chrome's Heavy Ad Intervention **recovers** on the next refresh
       instead of staying hidden for the session.
-- [ ] An empty-fill slot still collapses (or holds reserved space, per the
+- [x] An empty-fill slot still collapses (or holds reserved space, per the
       `collapseEmptyDivs(false)` decision) exactly as before.
-- [ ] No false-positive collapses during normal ad load — navigate 20 pages and confirm no
+- [x] No false-positive collapses during normal ad load — navigate 20 pages and confirm no
       slot ever collapses while an iframe is present.
+- [x] `npm run build` succeeds.
+
+### 3.6 Phase 3 measured result
+
+Same harness as §2.4. Heavy Ad Intervention cannot be triggered on demand, so it is simulated
+the way Chrome performs it: removing the SafeFrame iframe from a container that had one — which
+is exactly the transition the observer exists to detect.
+
+| Test | What it proves | Result |
+|---|---|---|
+| **S8** simulate a Heavy-Ad removal on `desktop_page_right`, then navigate | fills (`iframes=1`, 266 px) → collapses (`dn-ad--hidden`, container hidden, **0 px**) → is still included in a refresh batch despite being hidden → **recovers** (`iframes=1`, 266 px, no longer collapsed) | **PASS** |
+| **S9** 6 navigations, layout sampled 5× per navigation during load | **0** collapses while an iframe was present — the `iframeWasPresent` invariant plus the 1500 ms confirmation hold under real refresh churn | **PASS** |
+
+Re-ran the full Phase 2 suite afterwards (S1, S1b, S2–S7): all still pass, so making the collapse
+real did not regress the refresh path or the layout.
 
 ---
 
@@ -861,7 +914,11 @@ Independent of correctness; ship only after Phases 1–3 are verified.
   **replaces the entire thumbnail list**
   ([`newspaper.component.html:368-371`](src/app/newspaper.component.html#L368-L371) uses
   `@else if`). Scenario 1 describes navigating *by thumbnails* while also refreshing the
-  left-rail ad — currently mutually exclusive. Confirm whether that is intended; it determines
+  left-rail ad — currently mutually exclusive. **Confirmed empirically** while building the
+  Phase 2 harness: with `desktop_page_left` enabled at a 1680 px viewport, `.thumbnail-item`
+  count is **0** — the thumbnail rail is gone entirely, and pagination is the only way to
+  change page. This is why §2.4's Scenario 1 is measured via pagination buttons.
+  Confirm whether that is intended; it determines
   whether `desktop_page_left` needs refresh-on-page-change at all.
 
 ---
