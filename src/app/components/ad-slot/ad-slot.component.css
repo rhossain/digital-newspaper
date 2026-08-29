@@ -46,11 +46,15 @@
 /* ── Ad container ──────────────────────────────────────────────────────────
    GAM needs the div to have at least the declared min-size so it can
    pick a creative. min-width/min-height are set via [style] binding from
-   the slot config; overflow is hidden to prevent layout shifts.             */
+   the slot config; overflow is hidden to prevent layout shifts.
+
+   content-box deliberately overrides the global `* { box-sizing: border-box }`.
+   Under border-box the padding eats into min-height, so the empty slot reserved
+   100px while its 100px creative needed 116px and the box jumped when the ad
+   filled — measured 100 → 116 on desktop_post_preview_top.                    */
 .dn-ad-container {
   overflow: hidden;
-  /* Prevent empty placeholder from pushing layout when no ad fills. */
-  box-sizing: border-box;
+  box-sizing: content-box;
   text-align: center;
   padding: 8px 0;
 }
