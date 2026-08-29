@@ -878,21 +878,80 @@ real did not regress the refresh path or the layout.
 
 Independent of correctness; ship only after Phases 1–3 are verified.
 
-- [ ] **4.1** Add `pubads().enableLazyLoad({ fetchMarginPercent: 100, renderMarginPercent: 50, mobileScaling: 2.0 })`
-  in `_bootGpt()`. Deliberately deferred from Phase 1 because it changes *when* ads fetch and
-  would confound earlier regression testing.
-  **Verify:** above-the-fold slots still fill immediately on load.
+**Outcome: no code change.** All three items were resolved by measurement, and every candidate
+change was rejected on its own numbers. Details in §4.4.
 
-- [ ] **4.2** Address the variable-height container for `desktop_post_middle`, which declares
-  sizes from `300×100` to `336×280`
-  ([`digital-newspaper.php:664`](wordpress-plugin/digital-newspaper/digital-newspaper.php#L664)).
-  Its box **will** resize between refreshes. Either pin the container to the tallest declared
-  size or accept the shift — measure CLS before deciding, and do not change the CSS on
-  assumption alone.
+- [x] **4.1** ~~Add `pubads().enableLazyLoad({ fetchMarginPercent: 100, renderMarginPercent: 50, mobileScaling: 2.0 })`
+  in `_bootGpt()`.~~ **Implemented, measured, then reverted.** Every slot this app mounts is
+  already within one viewport of the fold, so the config changed nothing that could be measured;
+  the one place slots *do* leave the fetch margin is after the user scrolls a modal past them,
+  by which point they have already fetched. See §4.4 for the numbers and the positive control
+  that proves the call was genuinely active rather than inert.
 
-- [ ] **4.3** Confirm `collapseEmptyDivs(false)` is the right call against the existing
-  `min-height` reservation. These two interact; verify no double-reserved blank space appears
-  where a slot is unfilled.
+- [x] **4.2** ~~Address the variable-height container for `desktop_post_middle`.~~ **Rejected —
+  no shift to fix.** Its box measured a constant **266 px** across 8 samples spanning two modal
+  opens and three scroll positions each. It declares sizes from `300×100` to `336×280`
+  ([`digital-newspaper.php:664`](wordpress-plugin/digital-newspaper/digital-newspaper.php#L664)),
+  but GAM only ever served it a `300×250`. Pinning the container to the tallest declared size
+  would add 30 px of permanent blank space to buy protection against a shift that does not occur.
+  **Caveat, routed to 6.7:** the box is stable because the *inventory* is homogeneous, not because
+  the CSS prevents movement. If banner line items are ever booked against this unit the box will
+  drop to 116 px and the shift becomes real — at which point pin it.
+
+- [x] **4.3** **Confirmed as-is: keep GPT's default, do not call `collapseEmptyDivs` at all.**
+  An unfilled slot reserves exactly its configured `min_height` and nothing more —
+  measured 240 px (`desktop_page_left`), 100 px (`desktop_post_preview_top`), 60 px
+  (`desktop_post_top_image` / `desktop_post_top_text`). No double reservation, so there is
+  nothing to reconcile; `collapseEmptyDivs(false)` would be a no-op restating the default.
+  The dead space that *is* visible on an article view (100 px + 60 px) is caused by the inventory
+  gap in §1.7, not by the reservation. Collapsing those divs would hide the symptom and trade it
+  for layout shift on the days the units do fill, so it is reported in 6.7 instead.
+
+---
+
+### 4.4 Phase 4 measured result
+
+Same harness and same isolation as §2.4 — production origin, local `dist/` injected,
+`/ads/config` GET served from a snapshot with `desktop_page_left` forced on, config POST aborted
+so nothing reached the live backend. Tests S10–S15, added to `verify2.js`.
+
+| Test | What it measured | Result |
+|---|---|---|
+| **S10** initial load, 1680×1000 | 2 slots mounted, both at `top=94`, **0** outside the fetch margin. Initial ad requests **4** with lazy load, **4** without | no difference |
+| **S11** 3 paginations, lazy load on | `desktop_page_right` turned over `138576173999` → `138577028059` → `138576173999`, `iframes ≥ 1` at every sample, **+3** ad requests | refresh unaffected |
+| **S13** text modal, deep scroll | only `desktop_post_top_text` ever left the fetch margin, and only *after* scrolling past it (`top=-1294`) — it had already fetched | nothing saved |
+| **S14** image modal, 3 scroll steps × 2 opens | `desktop_post_middle` mounts, fills, and measures **266 px at all 8 samples**; it leaves the margin only at `top≤-1438`, again after fetching | answers 4.2 |
+| **S15** mobile 390×844 | 3 GPT slots defined, **3 hidden** (`display:none`), **3** ad requests — lazy load does **not** suppress a fetch for a hidden slot | no mobile saving |
+
+**Positive control — the reason this conclusion is trustworthy.** "No measured difference" is also
+what an *inert* config call looks like, so the same build was re-run with
+`fetchMarginPercent: 0, renderMarginPercent: 0`. Behaviour changed sharply:
+`desktop_post_preview_middle` went from 266 px filled to **100 px unfilled**, `desktop_post_middle`
+from 266 px to **60 px unfilled**, and `desktop_post_top_image` never filled. The call was
+therefore genuinely active — the config simply has nothing to act on at margin 100.
+
+That control also surfaced the argument *against* keeping it: with lazy loading on, whether a slot
+fills depends on where it happens to sit when GPT evaluates it. At margin 0, slots sitting plainly
+inside the viewport (`top=537`) still failed to fill. This app mounts slots inside overlays and
+scrolling panels whose layout settles after mount, so tying fill to geometry adds a silent failure
+mode in exchange for, today, nothing.
+
+**Revisit when — and only when — a slot is placed more than one viewport below the fold** (the most
+likely trigger is 5.1 giving the mobile slots a real placement). The check is one run: enable the
+config, then confirm via S10/S14 that some slot reports `inFetchMargin: false` *while still
+unfilled*. Until that is true, lazy loading has nothing to defer.
+
+**Two measurement traps worth keeping** (alongside §2.4's two):
+
+3. **`iframes > 0` is not proof of a fill.** GPT inserts an iframe for some empty responses too.
+   `desktop_page_left` reported `iframes=1` with `creativeId: null` and a 616 px box on one run
+   and `iframes=0` with a 240 px box on the next. Box height against declared size is the
+   reliable signal: 616 px ⇒ a 600-tall creative rendered, 240 px ⇒ the bare `min_height`.
+4. **Fill is not deterministic run to run.** The same build produced 3 and 4 initial ad requests
+   on consecutive runs, and `desktop_page_left` filled on some runs and not others. Any assertion
+   of the form "this exact set of slots fills" is flaky by construction — assert on lifecycle
+   (a request happened, a creative changed, a box never went blank) rather than on which slot won
+   an auction.
 
 ---
 
@@ -943,6 +1002,15 @@ Independent of correctness; ship only after Phases 1–3 are verified.
       - **`TDSEV2_Bottom_Anchor` is created twice per page load**, one creation discarded with
         `Format already created on the page` — see **Correction 4**. This unit is not in
         `gam_ad_slots()` and does not come from this repo.
+      - **`TDSEV3_Desktop_Post_Middle-01` only ever serves `300×250`** even though the unit
+        declares six sizes up to `336×280` — measured 266 px on 8 of 8 samples (§4.4). Harmless
+        today, but it is the reason 4.2 was rejected: if banner line items are later booked
+        against this unit the container will shift between 116 px and 296 px, and the CSS will
+        need to pin it. Worth confirming whether the extra sizes are intentional or dead.
+      - **`TDSEV3_Desktop_Page_Left-01` fills inconsistently** — the same build produced a
+        600-tall creative on one run and an empty response on the next (§4.4, trap 3). This unit
+        is disabled in the live config, so it affects nobody today, but 5.2 cannot be decided
+        without knowing whether the unit is genuinely booked.
 - [ ] **6.8** Re-read [GAM_AD_REFRESH_ANALYSIS.md](GAM_AD_REFRESH_ANALYSIS.md) §4 policy
       notes: every trigger must be user-initiated. Confirm no `setInterval` auto-refresh crept
       in, and that the `document.hidden` guard is present.
@@ -967,14 +1035,17 @@ the codebase, not just this task:
 | File | P1 | P2 | P3 | P4 | P5 |
 |---|:-:|:-:|:-:|:-:|:-:|
 | `src/app/services/gam.service.ts` *(new)* | ● | ● | ● | | |
-| [`src/app/services/ad.service.ts`](src/app/services/ad.service.ts) | ● | | | ● | |
+| [`src/app/services/ad.service.ts`](src/app/services/ad.service.ts) | ● | | | | |
 | [`src/app/components/ad-slot/ad-slot.component.ts`](src/app/components/ad-slot/ad-slot.component.ts) | ● | | ● | | |
 | [`src/app/newspaper.component.ts`](src/app/newspaper.component.ts) | | ● | | | |
-| `ad-slot.component.html` / `.css` | | | | ○ | |
+| `ad-slot.component.css` | | | ● | | |
 | [`wordpress-plugin/.../digital-newspaper.php`](wordpress-plugin/digital-newspaper/digital-newspaper.php) | | | | | ○ |
 | `newspaper.component.html` | | | | | ○ |
 
 ● changed  ○ only if the corresponding decision goes that way
+
+Phase 4 ended up touching **no** files: its one code candidate (`ad.service.ts`, lazy loading) was
+implemented, measured, and reverted — see §4.4.
 
 **Not touched in any phase:** `admin.component.ts` (reads `AdService`'s unchanged public API),
 routing, data services, the image pipeline, i18n, or any existing CSS.
