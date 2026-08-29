@@ -906,6 +906,11 @@ change was rejected on its own numbers. Details in §4.4.
   The dead space that *is* visible on an article view (100 px + 60 px) is caused by the inventory
   gap in §1.7, not by the reservation. Collapsing those divs would hide the symptom and trade it
   for layout shift on the days the units do fill, so it is reported in 6.7 instead.
+  > **Refined in §6.11.** The three measurements above are right, but "nothing to reconcile" was
+  > wrong: those are *empty* heights, and a filled slot occupies `min_height` + 16 px of padding.
+  > Phase 6 measured the resulting 100 → 116 px shift and fixed it. The decision on
+  > `collapseEmptyDivs` is unaffected; the empty-state numbers are now 256 px and 116 px
+  > (both re-measured) and 76 px for the 60 px slots (inferred from the same +16, not re-measured).
 
 ---
 
@@ -984,13 +989,26 @@ unfilled*. Until that is true, lazy loading has nothing to defer.
 
 ## Phase 6 — Pre-merge gate
 
-- [ ] **6.1** Full manual pass of all four requested scenarios on desktop and mobile.
-- [ ] **6.2** GPT console clean: no `display` warnings, no `defineSlot` returning `null`, no
-      duplicate-div errors.
-- [ ] **6.3** Network panel: request count per navigation is bounded and matches expectation.
-- [ ] **6.4** `npm run build` (includes `scripts/compress-dist.js`) succeeds.
+- [x] **6.1** Full pass of all four requested scenarios on desktop and mobile — covered by the
+      automated suite rather than by hand: S1/S1b (pagination), S2 (centre-panel selection),
+      S3/S14 (modal), S6/S15 (mobile), S7 (layout). All PASS; see §6.9.
+- [x] **6.2** GPT console clean — every test asserts `errs.length === 0`, which captures
+      `pageerror` and `console.error`. No `display` warning, no `defineSlot` returning `null`, no
+      duplicate-div error anywhere in the suite.
+      **Scope this claim carefully:** `errs` also catches *third-party* console output, so a
+      clean report means "nothing from our code" only after the known noise is filtered —
+      privacy-sandbox probes, Chrome's SafeFrame `Blocked script execution in 'about:blank'`, and
+      google.com's own report-only `frame-ancestors` violation. See §6.11; two of those three
+      were only identified because they made a passing test report REVIEW.
+- [x] **6.3** Request count per navigation is bounded: **exactly one** `/gampad/ads` per
+      navigation (S1: 3→4→5→6 over three paginations) and **one for a whole six-click burst**
+      (S1b). Counted with the `/gampad/(live/)?ads?` matcher, not the loose host match — see
+      §2.4 trap 2.
+- [x] **6.4** `npm run build` (includes `scripts/compress-dist.js`) succeeds — green on every
+      build in Phases 2–6, ~9 s, Brotli saving ~1209 KB.
 - [ ] **6.5** Ads **off** in admin: site behaves exactly as a no-ads build. No GPT requests at
       all, thumbnails and placeholder render normally.
+      *(Verified in Phase 0/1 via `regress.js` T1; re-confirm once more before merge.)*
 - [ ] **6.6** Confirm with the GAM network owner that (a) the targeting keys exist, and
       (b) refresh is expected on these units — some direct-sold line items are priced on a
       no-refresh assumption.
@@ -1011,9 +1029,198 @@ unfilled*. Until that is true, lazy loading has nothing to defer.
         600-tall creative on one run and an empty response on the next (§4.4, trap 3). This unit
         is disabled in the live config, so it affects nobody today, but 5.2 cannot be decided
         without knowing whether the unit is genuinely booked.
-- [ ] **6.8** Re-read [GAM_AD_REFRESH_ANALYSIS.md](GAM_AD_REFRESH_ANALYSIS.md) §4 policy
+      - **Disclose the verification traffic.** Roughly a few hundred ad requests were made from
+        the automated runs behind Phases 1–6, against the live network, from automated
+        navigation. They are real impressions in reporting and could be read as invalid traffic.
+        See §6.12 for why they hit production and what to do about it.
+- [x] **6.8** Re-read [GAM_AD_REFRESH_ANALYSIS.md](GAM_AD_REFRESH_ANALYSIS.md) §4 policy
       notes: every trigger must be user-initiated. Confirm no `setInterval` auto-refresh crept
       in, and that the `document.hidden` guard is present.
+      **One real defect found and fixed — see §6.10.**
+
+---
+
+## §6.9 Phase 6 measured result
+
+Suite re-run against the production origin with the local `dist/` injected, `/ads/config` GET
+served from the snapshot and the config POST aborted. Eleven tests, all green:
+
+| Test | Key numbers |
+|---|---|
+| **S1** pagination, spaced >5 s | `refreshCalls` 1/2/3 over pages 2/3/4; `adReqs` 3→4→5→6; batch `["1781436865448-0","1781437781482-0"]` on every navigation |
+| **S1b** 6-click burst | `refreshCalls = 1` for the whole burst; `adReqs +1`; `displays` 1→1 |
+| **S2** three articles | `refreshCalls` 1/2/3; `adReqs` 6/7/8; `preview_middle` creative turned over `…028059`→`…028059`→`…173999` |
+| **S3** three modal opens | one fresh ad request per open (`adReqs` 7/9/11); `refreshCalls = 0` during every open — the modal's own `display()` is not shadowed by a refresh |
+| **S4** targeting | 3/4 slots carry all of `date`/`edition`/`page`/`section`; every key single-valued; the 4th is the externally-injected `TDSEV2_Bottom_Anchor` |
+| **S5** `document.hidden` | `refreshCalls = 0` after 4 navigations, while `display()` still ran 4× for newly mounted slots |
+| **S6** mobile 390×844 | 3 slots defined, all hidden, `refreshCalls = 0`, `divs refreshed = []` |
+| **S7** layout | container heights constant at 240 and 266 across a refresh; 0 px horizontal overflow; URL `/2026-08-29/page-03/edition-01/` |
+| **S8** Heavy-Ad collapse | 266 → collapsed 0 → **266 again after refresh**; the collapsed slot was in the batch |
+| **S9** 6 navigations | 0 false-positive collapses while an iframe was present |
+| **S16** version poll | see §6.10 |
+
+S1 reported `INCONCLUSIVE (environment)` on the batch run — `BOOT_FAILED after 3 attempts
+(sections=0 pag=0)`, the §2.4 trap 1 backend outage guard doing its job — and PASSed on a
+re-run by itself. An inconclusive verdict is not a failure and must not be read as one.
+
+`errors: (none)` on all eleven, which is what closes 6.2.
+
+## §6.10 Defect: the version poll refreshed ads with no user behind it
+
+Found by the 6.8 static read, not by any test — the tests were all passing.
+
+`startVersionPoll(300_000)` polls `/data/version`; on a change it calls
+`reloadCurrentDateOnly()`, whose `data$` emission runs `loadCurrentEdition()` →
+`renderCurrentEdition()` → `selectPage()` → `notifyAdContentChanged()`. So a **publisher
+content change** produced an ad refresh with **nobody having clicked anything** — a breach of
+compliance guardrail 1 below, and exactly the mechanical refresh GAM counts as invalid traffic.
+Introduced by Phase 2 and invisible to every scenario test, because no scenario waits five
+minutes.
+
+The obvious discriminator is wrong. `isBackgroundRefresh` (newspaper.component.ts:515) is
+**also** true for a date change and an edition change, both of which *are* user actions and
+must still refresh. The flag has to record *who asked*, so it is set by the poll and consumed
+by the render that poll triggers:
+
+- `pollDrivenReload` field — newspaper.component.ts:79
+- set in the `remoteDataChanged$` subscription — :348
+- consumed at the **end** of `renderCurrentEdition()` — :674 (`selectPage()`/`selectSection()`
+  run synchronously above it and must still see it; it must not survive into the next click)
+- read by `notifyAdContentChanged()` — :929
+
+Verified against the real 5-minute poll, driven by a `bumpVersion` route override returning
+`{dataVersion: 9999999999}`:
+
+```
+S16 with the fix:       version hits=1  reload hits=4  refreshCalls 0→0  adReqs 3→3  ==> PASS
+S16 control (no gate):  version hits=1  reload hits=3  refreshCalls 0→1  adReqs 3→4  ==> REVIEW
+```
+
+The control matters more than the pass: without it, a test that asserts "no refresh happened"
+passes just as well when the poll never ran. S16 therefore also asserts `pollFired &&
+reloadHappened` before it is allowed to report PASS.
+
+### Why the clear lives in `finalize` and not in the render
+
+The first cut of this fix consumed the flag at the end of `renderCurrentEdition()`. That is
+correct on the happy path and **wrong on the error path**: `reloadCurrentDateOnly()` falls back
+to `loadData()`, and if that also fails there is no `data$` emission, so no render, so the flag
+stays `true` — and from that moment on **every** user navigation is silently gated and the ads
+never refresh again for the rest of the session. A dropped connection would have been enough.
+That is a worse bug than the one being fixed, and no scenario test would have caught it.
+
+Set and cleared at the same site instead, so the two cannot drift:
+
+```ts
+this.pollDrivenReload = true;
+this.dataService.reloadCurrentDateOnly(this.selectedDate)
+  .pipe(finalize(() => { this.pollDrivenReload = false; }))
+  .subscribe();
+```
+
+This is safe because the reload emits its `data$` update **synchronously** inside `tap()`
+(newspaper-data.service.ts:972-984) and the `data$` subscriber has no async operators
+(newspaper.component.ts:314) — so the render has already read the flag by the time `finalize`
+runs. `finalize` fires on complete **and** on error, which is the point.
+
+One artefact worth not chasing: the fixed run logged `activePage=null` after the poll reload
+(`position kept=false`). Not reproducible — the control run reported `position kept=true` with
+`activePage=১` preserved. Treated as harness flake, not a defect. If it recurs, it is about
+reload position restore and has nothing to do with ads.
+
+## §6.11 Defect: the ad container reserved less space than a creative occupies
+
+Found by re-running S12 after the poll fix. It **refines 4.3**, which measured that an unfilled
+slot reserves "exactly its configured `min_height` and nothing more — 240 / 100 / 60 px". That
+observation was correct; the conclusion drawn from it — that the reservation is therefore right —
+was not. A *filled* slot occupies `min_height` **plus 16 px of padding**, so the reservation was
+16 px short all along.
+
+It went unnoticed because seeing it requires the slot to actually fill, and fill is not
+deterministic run to run (§4.4 trap 4). On the earlier run the slot in question returned empty
+every time, so its box never moved off the placeholder height.
+
+Measured on `desktop_post_preview_top` across 8 samples: `[100, 100, 116, 116, 116, 116, 116,
+116]`. A **16 px downward shift** of everything below it, the moment the ad arrived.
+
+Cause is a two-line interaction, neither line wrong by itself:
+
+- `styles.css:123` — a global `* { box-sizing: border-box }`.
+- `ad-slot.component.css` — `.dn-ad-container { padding: 8px 0 }` with `min-height` bound from
+  the slot config (`ad-slot.component.html`).
+
+Under `border-box`, `min-height: 100px` is the **outer** height, so the 8 px top and bottom
+padding eat into the reservation: the empty placeholder is 100 px tall, but the 100 px creative it
+was reserving space *for* needs 100 + 16. Every slot whose configured `min_height` equals its
+creative height shifts by exactly the vertical padding.
+
+Fix is one declaration, in `.dn-ad-container`:
+
+```css
+box-sizing: content-box;   /* deliberately overrides the global border-box */
+```
+
+`min-height` now reserves the creative and the padding sits outside it. Verified — same test, same
+8 samples: `[116, 116, 116, 116, 116, 116, 116, 116]`, `slots whose box height varied: 0`.
+
+**What it costs**, measured, not assumed: empty placeholders grow by 16 px. `desktop_page_left`
+went 240 → 256 (S7 and S12 agree). That slot never fills (§1.7), so this is 16 px of additional
+dead space on a unit that is already dead space, and it is disabled in the live config anyway.
+Accepted: a permanent 16 px on an empty placeholder is worth less than a 16 px jump under the
+reader's eye every time an ad lands. No filled ad's rendering changes.
+
+**Why the test did not catch this the first time.** S12's pass condition was
+`st.errs.length === 0` — it *logged* the varying heights but never asserted on them, so the
+finding sat in the output while the verdict was decided by unrelated console noise. Both halves
+are fixed: S12 now asserts `varying.length === 0`, and the third-party noise is filtered (§6.2).
+The lesson generalises — **a measurement that is printed but not asserted is not a test.**
+
+## §6.12 The verification ran against production — why, and what it does and doesn't prove
+
+Every measurement in this document was taken with the **locally-built `dist/` injected into the
+production origin**. That is a compromise, not a preference, and it should be understood before
+anyone relies on the numbers.
+
+**Why it was done that way**
+
+1. **GAM keys ad serving to the registered domain.** From `localhost` no creative arrives at
+   all, so every question of the form "does this slot fill / at what height / with which
+   creative id" is unanswerable off the real origin.
+2. **There is no staging backend.** `environment.wpBaseUrl` in the *dev* environment already
+   points at `https://epaper.dailysangram.com/wp`. Plain `ng serve` talks to production, and the
+   local admin panel writes to the live site. The harness inherited this; it did not introduce
+   it. **This is the real problem** and it is bigger than ads — see the risk note below.
+
+**Containment that was applied**
+
+- `/ads/config` GET answered from a local snapshot (`adcfg.json`), never the live value.
+- The config **POST aborted at the network layer**, so no run could ever flip GAM settings,
+  enable a slot, or otherwise mutate the live site. This matters: toggling ads off in that admin
+  panel would disable ads for real visitors.
+- Everything else is a GET, and cached.
+
+**What was not contained, and is a genuine cost**
+
+The `/gampad/ads` requests are **real**. A few hundred impressions from automated navigation
+landed in the live network's reporting across Phases 1–6. They will slightly skew fill-rate and
+CTR for the affected units in that window, and automated navigation is the shape of thing Google
+classifies as invalid traffic. Routed to 6.7 for disclosure rather than left implicit.
+
+**What this does and does not undermine**
+
+| | Needs prod? | Used for |
+|---|---|---|
+| refresh counts, batch membership, `display()` counts, `document.hidden`, targeting accumulation, collapse recovery, layout stability, URL form | **no** — needs GPT loaded, not prod data | **every PASS/FAIL assertion in the suite** |
+| whether a creative arrives, at what height, with which id | **yes** | the descriptive findings in §1.7 and §4.4 only |
+
+So the verdicts rest on the first row and would hold against any backend. The production origin
+bought the second row — the inventory-gap and creative-size findings, which are precisely the
+ones handed to the network owner in 6.7 and which no local stub could have produced.
+
+**Standing risk, beyond this task:** dev pointing at production means any developer running the
+admin panel locally is editing the live site. That deserves a separate fix (a staging origin, or
+at minimum a non-production `wpBaseUrl` default with an explicit opt-in), and it is out of scope
+here. Flagging it rather than fixing it silently.
 
 ---
 
@@ -1032,20 +1239,25 @@ the codebase, not just this task:
 
 ## Files touched, by phase
 
-| File | P1 | P2 | P3 | P4 | P5 |
-|---|:-:|:-:|:-:|:-:|:-:|
-| `src/app/services/gam.service.ts` *(new)* | ● | ● | ● | | |
-| [`src/app/services/ad.service.ts`](src/app/services/ad.service.ts) | ● | | | | |
-| [`src/app/components/ad-slot/ad-slot.component.ts`](src/app/components/ad-slot/ad-slot.component.ts) | ● | | ● | | |
-| [`src/app/newspaper.component.ts`](src/app/newspaper.component.ts) | | ● | | | |
-| `ad-slot.component.css` | | | ● | | |
-| [`wordpress-plugin/.../digital-newspaper.php`](wordpress-plugin/digital-newspaper/digital-newspaper.php) | | | | | ○ |
-| `newspaper.component.html` | | | | | ○ |
+| File | P1 | P2 | P3 | P4 | P5 | P6 |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| `src/app/services/gam.service.ts` *(new)* | ● | ● | ● | | | |
+| [`src/app/services/ad.service.ts`](src/app/services/ad.service.ts) | ● | | | | | |
+| [`src/app/components/ad-slot/ad-slot.component.ts`](src/app/components/ad-slot/ad-slot.component.ts) | ● | | ● | | | |
+| [`src/app/newspaper.component.ts`](src/app/newspaper.component.ts) | | ● | | | | ● |
+| `ad-slot.component.css` | | | ● | | | ● |
+| [`wordpress-plugin/.../digital-newspaper.php`](wordpress-plugin/digital-newspaper/digital-newspaper.php) | | | | | ○ | |
+| `newspaper.component.html` | | | | | ○ | |
 
 ● changed  ○ only if the corresponding decision goes that way
 
 Phase 4 ended up touching **no** files: its one code candidate (`ad.service.ts`, lazy loading) was
 implemented, measured, and reverted — see §4.4.
+
+Phase 6 was meant to touch none either. It touched two files because the gate did its job:
+`newspaper.component.ts` for the version-poll defect (§6.10) and `ad-slot.component.css` for the
+16 px reservation defect (§6.11). Both were pre-existing and neither was caught by any earlier
+phase.
 
 **Not touched in any phase:** `admin.component.ts` (reads `AdService`'s unchanged public API),
 routing, data services, the image pipeline, i18n, or any existing CSS.
