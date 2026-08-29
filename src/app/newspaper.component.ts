@@ -16,6 +16,7 @@ import { ShareButtonsComponent } from './shared/share-buttons/share-buttons.comp
 import { AdService } from './services/ad.service';
 import { AdTargeting, GamService } from './services/gam.service';
 import { Subscription } from 'rxjs';
+import { finalize } from 'rxjs/operators';
 
 @Component({
   selector: 'app-newspaper',
@@ -65,6 +66,17 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   pendingEditionSlug: string | null = null;
   private startedFromBaseUrl = false;
   private userNavigated = false;
+
+  /**
+   * True for the duration of a reload triggered by the 5-minute version poll.
+   *
+   * That reload runs through the same selectPage()/selectSection() path a click
+   * does, so the ad slots would otherwise refresh with nobody having asked —
+   * which Google Ad Manager counts as invalid traffic. It cannot be inferred from
+   * `isBackgroundRefresh` in renderCurrentEdition(): that flag is also true for a
+   * date or edition change, which *is* a user action and must still refresh.
+   */
+  private pollDrivenReload = false;
 
   // Mobile/tablet responsive state
   isMobileView = false;
@@ -333,7 +345,12 @@ export class NewspaperComponent implements OnInit, OnDestroy {
           // the dates index. This is much cheaper than the full /data blob and
           // handles both "today's content changed" and "new date published" cases.
           // Falls back to loadData() automatically if the granular endpoints fail.
-          this.dataService.reloadCurrentDateOnly(this.selectedDate).subscribe();
+          this.pollDrivenReload = true;
+          this.dataService.reloadCurrentDateOnly(this.selectedDate)
+            // Cleared here, not in the render: finalize also runs when the reload
+            // fails, and a stuck-true flag would mute every later user refresh.
+            .pipe(finalize(() => { this.pollDrivenReload = false; }))
+            .subscribe();
           // dataService.data$ subscriber above handles UI refresh automatically
         }
       });
@@ -902,8 +919,13 @@ export class NewspaperComponent implements OnInit, OnDestroy {
    * Called after any navigation that swaps the visible content. Cheap and
    * idempotent: GamService coalesces bursts and drops slots that are unmounted,
    * hidden, or too recently filled, so callers need no conditions of their own.
+   *
+   * The one condition that cannot live in GamService is *who asked*. Every
+   * refresh must trace back to a user action, and the version poll reaches this
+   * through exactly the same navigation path a click does.
    */
   private notifyAdContentChanged(): void {
+    if (this.pollDrivenReload) return;
     this.gam.requestRefresh(this.adTargeting());
   }
 
