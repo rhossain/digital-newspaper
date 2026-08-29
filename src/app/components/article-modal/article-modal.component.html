@@ -57,6 +57,13 @@
 
       <!-- Scrollable body -->
       <div class="modal-image-scroll-body">
+        <!-- Slot 7: mobile_post_top — mobile counterpart of desktop_post_top_image.
+             Sits outside .modal-images-container so it survives the mobile
+             image/text toggle; it is genuinely "top" in both views. Placed once:
+             showImageModal and showContentModal are not mutually exclusive, so
+             repeating a slot id across both templates would put two divs with the
+             same GAM id on the page. -->
+        <app-ad-slot slotId="mobile_post_top" />
         <!-- Image panel: always present in DOM; hidden on mobile when text view is active -->
         <div class="modal-images-container"
           [class.modal-images-hidden]="isMobileView && mobileModalView === 'text'">
@@ -75,6 +82,10 @@
           }
           <!-- Slot 6: desktop_post_middle — before the linked section images -->
           <app-ad-slot slotId="desktop_post_middle" />
+          <!-- Slot 8: mobile_post_middle — mirrors slot 6 so "middle" means the
+               same thing on both. Inside the image panel, so the mobile text view
+               hides it; GamService then skips it and buys no unviewable impression. -->
+          <app-ad-slot slotId="mobile_post_middle" />
           <!-- Linked Section Images -->
           @for (linkedSection of modalLinkedSections; track trackByLinkedSectionId($index, linkedSection)) {
             <div class="modal-image-item">
