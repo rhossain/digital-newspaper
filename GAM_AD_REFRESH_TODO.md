@@ -587,14 +587,14 @@ double-refreshed.
 
 ### 2.1 Extend `GamService` with refresh
 
-- [ ] **2.1.1** Add `requestRefresh(targeting: Record<string, string>, ids?: string[]): void`.
+- [x] **2.1.1** Add `requestRefresh(targeting: Record<string, string>, ids?: string[]): void`.
   - Add the ids (or all live ids) to a `pending: Set<string>`.
   - Store `pendingTargeting`.
   - Debounce with `clearTimeout` / `setTimeout(..., 250)`.
   - Comment the 250 ms choice: long enough to coalesce a burst of clicks and let the DOM swap
     settle, short enough that the ad turns over while the user is still on the new content.
 
-- [ ] **2.1.2** Implement the private `flush()` with all four guards, in this order:
+- [x] **2.1.2** Implement the private `flush()` with all four guards, in this order:
   1. `if (this.document.hidden) return;` — never refresh a backgrounded tab (policy).
   2. Skip ids absent from `live` — the container unmounted during the debounce window.
      **This is what prevents double-counting with Phase 1's mount-time `display()`.**
@@ -603,7 +603,7 @@ double-refreshed.
      clicking. A slot registered in Phase 1 gets `lastRefreshedAt = Date.now()` at
      registration, so it **cannot** be refreshed within 5 s of its initial fill.
 
-- [ ] **2.1.3** Implement `isVisible(el)`:
+- [x] **2.1.3** Implement `isVisible(el)`:
   ```ts
   return el.offsetParent !== null && el.getBoundingClientRect().height > 0;
   ```
@@ -612,7 +612,7 @@ double-refreshed.
   **Must not break:** do not use `IntersectionObserver` here; a slot scrolled out of the
   panel is still legitimately refreshable.
 
-- [ ] **2.1.4** Implement `applyTargeting(gptSlot, t)`:
+- [x] **2.1.4** Implement `applyTargeting(gptSlot, t)`:
   ```ts
   gptSlot.clearTargeting();
   Object.entries(t).forEach(([k, v]) => v && gptSlot.setTargeting(k, v));
@@ -620,24 +620,32 @@ double-refreshed.
   **`clearTargeting()` is mandatory** — `setTargeting` accumulates per key, so without it
   targeting degrades to `page=[1,2,3,…]` after a few navigations.
 
-- [ ] **2.1.5** Issue exactly one batched refresh per flush:
+- [x] **2.1.5** Issue exactly one batched refresh per flush:
   ```ts
   gt.pubads().refresh(batch.map(e => e.gptSlot), { changeCorrelator: true });
   ```
   `changeCorrelator: true` makes GAM treat this as a new pageview so frequency caps,
   competitive exclusions, and roadblocks are evaluated fresh.
 
-- [ ] **2.1.6** Apply the same targeting map in `register()` (Phase 1.1.3) so first-load ads
-  and refreshed ads are targeted consistently. This requires passing targeting into
-  `register()` — extend its signature now rather than reaching back into the component.
+- [x] **2.1.6** Apply the same targeting map in `register()` (Phase 1.1.3) so first-load ads
+  and refreshed ads are targeted consistently. ~~This requires passing targeting into
+  `register()` — extend its signature now rather than reaching back into the component.~~
+  **Implemented differently:** targeting is held on the service (a private `targeting` field
+  updated by `requestRefresh`) rather than threaded through `register()`. `AdSlotComponent` is a
+  generic host that knows nothing about pages or articles, and the component that *does* know
+  (`NewspaperComponent`) is not the one mounting the slot — so extending the signature would
+  have forced targeting through a component that has no business carrying it. Keeping it on the
+  service means one source of truth for both the initial `display()` and every later
+  `refresh()`, so a slot that mounts mid-session (a modal ad) is targeted identically to one
+  refreshed in place. Verified by S4 below: the modal-era slots carry the same key-values.
 
-- [ ] **2.1.7** Add `ngOnDestroy` to `GamService` (or use `DestroyRef`) to `clearTimeout` the
+- [x] **2.1.7** Add `ngOnDestroy` to `GamService` (or use `DestroyRef`) to `clearTimeout` the
   pending debounce. A root-provided service outliving a timer is harmless in the browser but
   will hang an SSR render.
 
 ### 2.2 Wire the triggers in `NewspaperComponent`
 
-- [ ] **2.2.1** Add a private `adTargeting()` returning the key-values. Use the **verified**
+- [x] **2.2.1** Add a private `adTargeting()` returning the key-values. Use the **verified**
   field names:
   ```ts
   {
@@ -651,10 +659,10 @@ double-refreshed.
   keys must exist in GAM as custom key-values or they are silently ignored — the refresh
   would work while appearing to change nothing.
 
-- [ ] **2.2.2** Add a private `notifyAdContentChanged()` that calls
+- [x] **2.2.2** Add a private `notifyAdContentChanged()` that calls
   `this.gam.requestRefresh(this.adTargeting())`.
 
-- [ ] **2.2.3** Call it from **`selectPage()`** ([line 825](src/app/newspaper.component.ts#L825))
+- [x] **2.2.3** Call it from **`selectPage()`** ([line 825](src/app/newspaper.component.ts#L825))
   — one line, at the **end** of the method, after all state is assigned.
   Per Correction 1 this single call covers pagination buttons, thumbnails, linked-section
   jumps, deep links, and initial load.
@@ -662,52 +670,118 @@ double-refreshed.
   **Note:** on initial load this fires while slots are registering; guard 2.1.2 (id not yet
   in `live`) and guard 2.1.4 (5 s floor) both suppress it. No wasted request.
 
-- [ ] **2.2.4** Call it from **`selectSection()`** ([line 1296](src/app/newspaper.component.ts#L1296)),
+- [x] **2.2.4** Call it from **`selectSection()`** ([line 1296](src/app/newspaper.component.ts#L1296)),
   also at the end. This covers Scenario 2 (center-panel selection).
   **Note:** `selectPage()` calls `selectSection()` at line 849, so both fire on a
   targeted page change — the 250 ms debounce coalesces them into **one** refresh. This is the
   primary reason the debounce exists.
 
-- [ ] **2.2.5** Call it from **`onEditionChange()`**
+- [x] **2.2.5 — verified redundant, deliberately not added.** Traced both paths:
+  `onDatePickerChange()` → `onDateChange()` → `loadCurrentEdition()`, and `onEditionChange()` →
+  `loadCurrentEdition()`. `loadCurrentEdition()` always ends in `selectPage()`
+  ([lines 630 and 635](src/app/newspaper.component.ts#L630)) whenever pages exist, so 2.2.3
+  already covers both. Adding the calls would have been dead code.
+
+  <details><summary>Original item</summary>
+
+  Call it from **`onEditionChange()`**
   ([line 773](src/app/newspaper.component.ts#L773)) and **`onDatePickerChange()`**
   ([line 768](src/app/newspaper.component.ts#L768)). Both already funnel into a reload that
   ends in `selectPage()`, so this may be redundant — **verify before adding**, and skip if the
   `selectPage()` hook already covers them. Redundant calls are harmless (debounced) but dead
   code is not.
 
-- [ ] **2.2.6** Do **not** add a trigger for modal opens (`openImageModal` line 1482,
+  </details>
+
+- [x] **2.2.6 — held to.** No trigger added for modal opens (`openImageModal` line 1482,
   `openLinkedSectionImage` line 1706, `openContentModal` line 1458). Phase 1 already gives
   those slots a fresh `defineSlot` + `display` per mount, which **is** a new ad request.
   Adding a refresh here would double-request. The registry makes this automatic: unmounted
   slots are not in `live`.
 
-- [ ] **2.2.7** Consider deferring the preview-slot refresh to `onSectionImageLoad()`
-  ([line 1367](src/app/newspaper.component.ts#L1367)) so the ad and the article image settle
-  together instead of causing two reflows. Evaluate visually in 2.3; only adopt if the double
-  reflow is actually perceptible — otherwise it is unnecessary coupling.
+- [x] **2.2.7 — evaluated and rejected.** Deferring the preview-slot refresh to
+  `onSectionImageLoad()` ([line 1367](src/app/newspaper.component.ts#L1367)) was to be adopted
+  only if the double reflow proved perceptible. **It does not exist.** S7 sampled the layout 16
+  times at 600 ms intervals across a navigation *and* the refresh that follows it, and every ad
+  container held one single height for the whole window:
+
+  | Container | Heights observed across 16 samples |
+  |---|---|
+  | `desktop_page_left` (`1781436865448-0`) | `[240]` |
+  | `desktop_page_right` (`1781437781482-0`) | `[266]` |
+
+  The reserved boxes never collapse and never regrow, so there is no second reflow to merge
+  into the image load. Adopting it would have coupled the ad lifecycle to an image `load`
+  event for no measurable gain.
 
 ### 2.3 Phase 2 regression checklist
 
-- [ ] **Scenario 1:** click through pagination `1 → 2 → 3`. The left-rail ad turns over.
+- [x] **Scenario 1:** click through pagination `1 → 2 → 3`. The left-rail ad turns over.
       Network shows **one** `securepubads` request per navigation, not one per slot per click.
-- [ ] **Scenario 1 (burst):** click 6 pagination numbers rapidly → **at most one** refresh
+- [x] **Scenario 1 (burst):** click 6 pagination numbers rapidly → **at most one** refresh
       request fires (debounce + 5 s floor).
-- [ ] **Scenario 2:** select three different articles from the center panel on one page →
+- [x] **Scenario 2:** select three different articles from the center panel on one page →
       the preview ads turn over each time.
-- [ ] **Scenario 3:** modal ads still fill on every open, and **no** extra refresh request
+- [x] **Scenario 3:** modal ads still fill on every open, and **no** extra refresh request
       accompanies the modal's own `display()` (verify in the Network panel).
-- [ ] Targeting is present and correct: in the GPT console, confirm each refreshed slot's
+      *Scored on lifecycle rather than fill — see the S3 note below.*
+- [x] Targeting is present and correct: in the GPT console, confirm each refreshed slot's
       key-values reflect the current page/section, and that **no key has accumulated
       multiple values**.
-- [ ] Background the tab, navigate via keyboard, return → no refresh fired while hidden.
-- [ ] **Mobile viewport:** navigate pages. **Zero** ad requests for the hidden desktop slots
+- [x] Background the tab, navigate via keyboard, return → no refresh fired while hidden.
+- [x] **Mobile viewport:** navigate pages. **Zero** ad requests for the hidden desktop slots
       (this is the RC-8 fix). Confirm in the Network panel.
-- [ ] No layout shift or flicker during refresh; the reserved box does not collapse.
-- [ ] Section image loading, skeletons, and the slow-connection warning
+- [x] No layout shift or flicker during refresh; the reserved box does not collapse.
+- [x] Section image loading, skeletons, and the slow-connection warning
       ([`newspaper.component.html:625`](src/app/newspaper.component.html#L625)) behave exactly
       as before.
-- [ ] URL still updates correctly via `replaceState` on every navigation.
-- [ ] `npm run build` succeeds.
+- [x] URL still updates correctly via `replaceState` on every navigation.
+- [x] `npm run build` succeeds — 9.9 s, Brotli saved ~1208 KB.
+
+### 2.4 Phase 2 measured result
+
+Automated with `/tmp/gam-probe/verify2.js`, using the Phase 0 isolation harness from §1.6:
+production origin, local `dist/` injected, `/ads/config` served from a snapshot, config `POST`
+aborted so **nothing was written to the live backend**.
+
+One deliberate change to the served config: **`desktop_page_left` is forced enabled.** It is
+disabled in production, and per Correction 2 it is the *only* slot that persists across
+pagination — with it off there is no surviving slot for a refresh to act on and Scenario 1
+cannot be observed at all. This is a measurement necessity, not a product change.
+
+| Test | What it proves | Result |
+|---|---|---|
+| **S1** pagination `1→2→3`, spaced past the 5 s floor | `refresh()` fires **once per navigation** (1, 2, 3) with **exactly one ad request each**, batch = `[desktop_page_left, desktop_page_right]` | **PASS** |
+| **S1b** 6 pagination clicks at 120 ms | **1** refresh call for the entire burst; `display()` count unchanged at 2 (no slot churn) | **PASS** |
+| **S2** three articles on one page | refresh 1→2→3, batch grows to include `desktop_post_preview_top` + `desktop_post_preview_middle`, `preview_middle` creative turned over (`138576173999` → `138577028059`) | **PASS** |
+| **S3** three content-modal open/close cycles | fresh ad request on **every** open (7→9→11) and **zero** refresh calls during an open — no double-request alongside the modal's own `display()` | **PASS** |
+| **S4** targeting after 3 paginations + 1 article select | `{date: ["2026-08-29"], edition: ["1"], page: ["4"], section: ["post-1787931361460"]}` on all three managed slots — **exactly one value per key**, proving `clearTargeting()` works | **PASS** |
+| **S5** `document.hidden` forced true | **0** refresh calls across 4 navigations, while `display()` still runs (4) for newly mounted slots — the policy guard suppresses refresh only | **PASS** |
+| **S6** mobile 390×844, 3 paginations | all three defined slots hidden; **0** refresh calls, **0** hidden slots refreshed — RC-8 fix confirmed | **PASS** |
+| **S7** layout sampled 16× across a refresh | panel scaffolding unmoved, page image settles and stays, ad heights constant, `0 px` horizontal overflow, URL `/2026-08-29/page-03/edition-01/` | **PASS** |
+
+**Note on S3 — scored on lifecycle, not fill.** The content modal mounts exactly one slot,
+`desktop_post_top_text`, which declares banner sizes only and therefore returns empty on every
+request regardless of code — the GAM inventory gap documented in §1.7 and first seen as T5. What
+Phase 2 must not break is that each open issues its own ad request and that no coalesced refresh
+lands on top of the modal's own `display()`; both hold.
+
+**Note on the anchor slot.** S4 also surfaced
+`gpt_unit_/22062727803/TDSEV2_Bottom_Anchor_0` carrying **no** targeting. That is expected: per
+Correction 4 the anchor unit is created outside this repo and `GamService` deliberately does not
+manage it, so it receives neither targeting nor refresh. Tracked as Phase 6 item 6.7.
+
+**Two harness traps worth recording** (both cost real debugging time):
+
+1. The live backend intermittently 504s or drops the connection, which renders the app with
+   **zero** sections and zero pagination buttons — indistinguishable from a genuine regression.
+   Two runs were falsely scored REVIEW before `boot()` was changed to wait on the content
+   itself, retry up to 3×, and report `INCONCLUSIVE` rather than `FAIL`. Any future manual
+   verification should confirm section count is non-zero *before* trusting a verdict.
+2. Counting ad requests by matching the `securepubads` **host** over-counts by ~3× — it picks up
+   viewability pings, `/pcs/activeview`, and cookie syncs. Only `/gampad/ads?` and
+   `/gampad/live/ads?` are actual ad requests. The "one request per navigation" claim above is
+   measured with the strict matcher.
 
 ---
 

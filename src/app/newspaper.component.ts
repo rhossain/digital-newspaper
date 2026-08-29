@@ -14,6 +14,7 @@ import { ArticleModalComponent } from './components/article-modal/article-modal.
 import { AdSlotComponent } from './components/ad-slot/ad-slot.component';
 import { ShareButtonsComponent } from './shared/share-buttons/share-buttons.component';
 import { AdService } from './services/ad.service';
+import { AdTargeting, GamService } from './services/gam.service';
 import { Subscription } from 'rxjs';
 
 @Component({
@@ -29,6 +30,8 @@ export class NewspaperComponent implements OnInit, OnDestroy {
 
   /** Exposed for template — reads slotEnabledMap signal (reactive, OnPush-safe). */
   protected readonly adService = inject(AdService);
+
+  private readonly gam = inject(GamService);
 
   // Signal-based viewChild: the effect() below re-runs only when this
   // element enters/leaves the DOM (much cheaper than afterEveryRender).
@@ -875,6 +878,33 @@ export class NewspaperComponent implements OnInit, OnDestroy {
       this.updateUrl();
       this.updateMetaTags(null);
     }
+
+    this.notifyAdContentChanged();
+  }
+
+  /**
+   * Custom key-values describing the content now on screen.
+   *
+   * These keys must exist as custom key-values in GAM network 22062727803 or GAM
+   * ignores them silently — the refresh still happens, it just isn't targeted.
+   * Confirming them with the network owner is a pre-merge item.
+   */
+  private adTargeting(): AdTargeting {
+    return {
+      date:    this.selectedDate,
+      edition: String(this.selectedEditionNumber),
+      page:    String(this.currentPage?.id ?? ''),
+      section: this.selectedSection?.id ?? '',
+    };
+  }
+
+  /**
+   * Called after any navigation that swaps the visible content. Cheap and
+   * idempotent: GamService coalesces bursts and drops slots that are unmounted,
+   * hidden, or too recently filled, so callers need no conditions of their own.
+   */
+  private notifyAdContentChanged(): void {
+    this.gam.requestRefresh(this.adTargeting());
   }
 
   /**
@@ -1362,6 +1392,10 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     this.updateUrl();
     // Update social sharing meta tags
     this.updateMetaTags(section);
+
+    // selectPage() also calls this when navigating straight to a section; the
+    // debounce in GamService collapses the pair into one refresh.
+    this.notifyAdContentChanged();
   }
 
   onSectionImageLoad() {

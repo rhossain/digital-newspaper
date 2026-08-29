@@ -1,17 +1,27 @@
-import { Injectable, PLATFORM_ID, inject, isDevMode } from '@angular/core';
+import { Injectable, OnDestroy, PLATFORM_ID, inject, isDevMode } from '@angular/core';
 import { DOCUMENT, isPlatformBrowser } from '@angular/common';
 import { AdSlot } from './ad.service';
+
+/** Custom key-values sent to GAM alongside an ad request. */
+export type AdTargeting = Record<string, string>;
 
 /**
  * Minimal structural types for the parts of the Google Publisher Tag API this
  * service touches. Declared locally rather than pulling in
- * @types/google-publisher-tag: the surface used here is four methods wide, and
- * a local declaration keeps the GPT contract we depend on visible in-repo.
+ * @types/google-publisher-tag: the surface used here is a handful of methods
+ * wide, and a local declaration keeps the GPT contract we depend on visible
+ * in-repo.
  */
 interface GptSlot {
   getSlotElementId(): string;
   getAdUnitPath(): string;
   addService(service: unknown): GptSlot;
+  clearTargeting(): GptSlot;
+  setTargeting(key: string, value: string): GptSlot;
+}
+
+interface PubAdsService {
+  refresh(slots: GptSlot[], options?: { changeCorrelator: boolean }): void;
 }
 
 interface GoogleTag {
@@ -19,7 +29,7 @@ interface GoogleTag {
   defineSlot(unit: string, sizes: number[][], div: string): GptSlot | null;
   display(div: string): void;
   destroySlots(slots: GptSlot[]): boolean;
-  pubads(): unknown;
+  pubads(): PubAdsService;
 }
 
 /** A slot that currently has both a live container in the DOM and a GPT slot object. */
@@ -51,11 +61,30 @@ interface LiveSlot {
  * After `destroySlots`, GPT releases the div id, so the next mount can define a
  * genuinely fresh slot and fetch a genuinely new creative.
  *
+ * The service also owns refreshing. Content in this app changes without a
+ * document load (pagination, article selection), so a slot that stays mounted
+ * would otherwise keep showing the creative it was first given. `requestRefresh`
+ * coalesces those content changes into a single targeted `pubads().refresh()`.
+ *
  * Bootstrapping (loading gpt.js, `setConfig`, `enableServices`) stays in
  * AdService — this service only manages slots.
  */
 @Injectable({ providedIn: 'root' })
-export class GamService {
+export class GamService implements OnDestroy {
+
+  /**
+   * Long enough to coalesce a burst of pagination clicks and to let the DOM swap
+   * settle, short enough that the ad turns over while the user is still looking
+   * at the new content.
+   */
+  private static readonly REFRESH_DEBOUNCE_MS = 250;
+
+  /**
+   * Per-slot floor between ad requests. Also stops a refresh from landing on top
+   * of a slot's initial fill: `register()` stamps `lastRefreshedAt` at
+   * definition time, so a freshly mounted slot is ineligible for this long.
+   */
+  private static readonly MIN_REFRESH_INTERVAL_MS = 5000;
 
   private readonly platformId = inject(PLATFORM_ID);
   private readonly document   = inject(DOCUMENT);
@@ -78,6 +107,23 @@ export class GamService {
    *    would define a slot for a div that no longer exists.
    */
   private readonly claimed = new Set<string>();
+
+  /** Slot ids awaiting the next coalesced refresh. */
+  private readonly pending = new Set<string>();
+
+  private refreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /**
+   * Targeting for the content currently on screen, owned here rather than passed
+   * through `register()`.
+   *
+   * `AdSlotComponent` is a generic host that knows nothing about pages or
+   * articles, while the component that *does* know is not the one mounting the
+   * slot. Keeping the value on the service means the initial `display()` and
+   * every later `refresh()` read from one place, so a slot that mounts mid-session
+   * (a modal ad) is targeted the same way as one refreshed in place.
+   */
+  private targeting: AdTargeting = {};
 
   /**
    * Define and display a GPT slot for a container that has just been committed
@@ -123,6 +169,7 @@ export class GamService {
       }
 
       gptSlot.addService(gt.pubads());
+      this._applyTargeting(gptSlot, this.targeting);
 
       // Register before display() so that a slotRenderEnded listener firing
       // synchronously can already find this slot in the map.
@@ -161,6 +208,106 @@ export class GamService {
     gt.cmd.push(() => {
       gt.destroySlots([entry.gptSlot]);
     });
+  }
+
+  /**
+   * Note that the on-screen content changed, so the mounted ad slots should be
+   * re-requested with fresh targeting.
+   *
+   * Callers fire this freely on every navigation; the debounce and the guards in
+   * `_flush()` decide what actually goes to the network. `ids` narrows the batch
+   * to specific slots — omit it to consider everything currently mounted.
+   */
+  requestRefresh(targeting: AdTargeting, ids?: string[]): void {
+    if (!isPlatformBrowser(this.platformId)) return;
+
+    this.targeting = targeting;
+    // Default to `claimed` rather than `live`: a slot mid-definition when this is
+    // called will be live by the time the debounce elapses.
+    for (const id of ids ?? this.claimed) this.pending.add(id);
+
+    if (this.refreshTimer !== null) clearTimeout(this.refreshTimer);
+    this.refreshTimer = setTimeout(() => this._flush(), GamService.REFRESH_DEBOUNCE_MS);
+  }
+
+  ngOnDestroy(): void {
+    if (this.refreshTimer !== null) clearTimeout(this.refreshTimer);
+    this.refreshTimer = null;
+  }
+
+  /** Issue at most one batched refresh for everything that accumulated in `pending`. */
+  private _flush(): void {
+    this.refreshTimer = null;
+    const ids = [...this.pending];
+    this.pending.clear();
+    const targeting = this.targeting;
+
+    // Guard 1 — a backgrounded tab. GAM treats impressions the user cannot
+    // possibly see as invalid traffic, so drop the batch rather than deferring it.
+    if (this.document.hidden) return;
+
+    const now = Date.now();
+    const batch = ids
+      .map(id => this.live.get(id))
+      // Guard 2 — the container unmounted during the debounce window. This is
+      // also what keeps a refresh from double-requesting a slot that Phase 1's
+      // mount-time display() is already fetching.
+      .filter((entry): entry is LiveSlot => entry !== undefined)
+      // Guard 3 — hidden containers. Desktop slots stay mounted but
+      // `display: none` on mobile; refreshing them would buy impressions with
+      // zero chance of being viewed.
+      .filter(entry => this._isVisible(entry.el))
+      // Guard 4 — per-slot rate floor, against rapid pagination clicking.
+      .filter(entry => now - entry.lastRefreshedAt >= GamService.MIN_REFRESH_INTERVAL_MS);
+
+    if (batch.length === 0) return;
+
+    const gt = this._googletag();
+    if (!gt) return;
+
+    gt.cmd.push(() => {
+      // Re-check liveness: the queue drains asynchronously, so a container may
+      // have unmounted (and its slot been destroyed) since the batch was built.
+      const live = batch.filter(entry => this.live.get(entry.id) === entry);
+      if (live.length === 0) return;
+
+      for (const entry of live) {
+        this._applyTargeting(entry.gptSlot, targeting);
+        entry.lastRefreshedAt = Date.now();
+      }
+
+      // The slot array is mandatory, not an optimisation: single-request mode is
+      // on, so a bare refresh() would re-request every defined slot — including
+      // the hidden ones guard 3 just excluded.
+      // changeCorrelator makes GAM treat this as a new pageview, so frequency
+      // caps, competitive exclusions and roadblocks are evaluated fresh.
+      gt.pubads().refresh(live.map(entry => entry.gptSlot), { changeCorrelator: true });
+    });
+  }
+
+  /**
+   * Whether a container can actually show an ad. `offsetParent` is null anywhere
+   * inside a `display: none` subtree, which is exactly what the responsive CSS
+   * does to the desktop slots on mobile — so this needs no duplicate of the
+   * breakpoint.
+   *
+   * Deliberately not `IntersectionObserver`: a slot scrolled out of view is still
+   * legitimately refreshable, and GPT does its own viewability accounting.
+   */
+  private _isVisible(el: HTMLElement): boolean {
+    return el.offsetParent !== null && el.getBoundingClientRect().height > 0;
+  }
+
+  /**
+   * `setTargeting` appends to any existing values for a key, so without the
+   * `clearTargeting()` first, targeting would degrade to `page=[1,2,3,…]` after a
+   * few navigations.
+   */
+  private _applyTargeting(gptSlot: GptSlot, targeting: AdTargeting): void {
+    gptSlot.clearTargeting();
+    for (const [key, value] of Object.entries(targeting)) {
+      if (value) gptSlot.setTargeting(key, value);
+    }
   }
 
   /**
