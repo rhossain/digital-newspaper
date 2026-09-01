@@ -1015,18 +1015,37 @@ unfilled*. Until that is true, lazy loading has nothing to defer.
   **not** make `desktop_page_left` exempt from refresh — it is the one slot that persists across a
   page change, so it is the primary thing Scenario 1 refreshes.
 
-### 5.3 Follow-up found while placing the mobile slots — not fixed here
+### 5.3 Unviewable impressions on the wrong viewport — **fixed**
 
-On a 390×844 viewport S17 recorded **6 desktop slots defined and `display()`-ed while
-`display: none`**, contributing to 8 ad requests that no reader can ever see. GamService correctly
-refuses to *refresh* them (guard 3, proven by S6), but they are still **defined and fetched once**
-at mount, and §4.4/S15 established that `enableLazyLoad` does not suppress a hidden slot's fetch.
+Found while placing the mobile slots. On a 390 px viewport the desktop slots were **defined and
+fetched while `display: none`**, buying impressions no reader could ever see. The CSS hid them;
+hiding was never enough. GamService's guard 3 stops a hidden slot being *refreshed* (proven by
+`mobile-no-refresh`), and §4.4 established that `enableLazyLoad` does not suppress a hidden slot's
+initial fetch either — so nothing in the pipeline stopped the define-and-fetch-once at mount.
 
-That is a stream of structurally unviewable impressions on every mobile session, which drags
-viewability down. The fix is to not *define* a slot the current viewport cannot show — i.e. make
-slot definition conditional on the same breakpoint the CSS uses — which is a real change to
-AdSlotComponent's contract and wants its own measured phase. Flagged here rather than folded into
-this one; worth raising with the network owner in 6.7 alongside the other viewability items.
+**Fix:** `AdSlotComponent.viewportAllows()` folds the viewport into `slot()`, so a slot whose
+audience does not match renders no container at all and is therefore never handed to GPT. Driven by
+`matchMedia('(min-width: 768px)')` — the same breakpoint the CSS uses, which is now enforced twice
+on purpose: CSS for layout, `viewportAllows()` for billing. It reacts to the media query changing,
+so rotating a tablet across the breakpoint releases one set of slots and defines the other. Defaults
+to "wide" so SSR is unaffected, which is safe because no GPT slot is defined during SSR anyway.
+
+Measured on a 390×844 viewport, `no-hidden-define`:
+
+| | before | after |
+|---|---|---|
+| desktop slots defined | **5** | **0** |
+| ad requests | **13** | **4** |
+| hidden hosts holding a GPT container | 4 | **0** |
+| hidden hosts reserving height | 4 | **0** |
+
+The four wrong-viewport `<app-ad-slot>` **host elements** remain in the DOM — they sit in the
+template unconditionally — but they now render no container div, reserve 0 px, and define nothing.
+That is the correct invariant, and the first version of this case asserted the wrong one (that no
+hidden host existed at all) and reported REVIEW against correct code.
+
+Desktop is unaffected: `pagination`, `burst`, `hidden-tab` and `ads-off` all still PASS, and
+`mobile-placement` still shows both mobile slots defined, displayed and visible.
 
 ---
 
@@ -1282,7 +1301,7 @@ rather than made silently. It is also moot until `nepaper` answers.
 
 ---
 
-## §6.13 The harness is gone, and one commit is unverified
+## §6.13 The harness is gone, and one commit is unverified — *both resolved in §6.13a*
 
 **The harness lived in `/tmp/gam-probe/` and has been purged.** `verify2.js`, `regress.js`, the
 `/ads/config` snapshot, the static server and every log are gone. Keeping a week of measurement
@@ -1302,6 +1321,7 @@ are real, but they were taken against an **earlier form** of the fix that cleare
 rendered would mute every later refresh for the session. The measurement was **not re-taken after
 that change**, the run that would have re-taken it was interrupted, and the commit message does
 not distinguish the two. Stating it here rather than leaving it standing.
+*Since closed: the `poll-gate` case in §6.13a measures the committed form directly.*
 
 **Why the committed form is still believed correct — by construction, not by measurement.** The
 gate depends on the render reading the flag *before* `finalize` clears it, and that ordering is
@@ -1323,8 +1343,10 @@ forced:
 `selectedDate` — the date was unpublished or withdrawn — then `alreadyHas` is false, hydration
 becomes a real HTTP call, and the render lands *after* `finalize`. The result is a single spurious
 refresh on a date disappearing underneath the reader. Rare, self-limiting to one refresh, and
-strictly better than the stuck-flag behaviour it replaced, which was permanent. Worth a test if
-the harness is ever rebuilt.
+strictly better than the stuck-flag behaviour it replaced, which was permanent. **Still untested:**
+`poll-gate` covers the ordinary path only, since reproducing this needs a date to be unpublished
+between load and poll. It would take a fixture that serves an edition on first fetch and none on
+reload — worth adding, and the only known hole left in the version-poll fix.
 
 **Restoring measurement needs a dependency.** `playwright-core` was installed in `/tmp`, not here.
 A dependency-free CDP driver is not an option either: that needs a WebSocket client, and this
@@ -1332,6 +1354,44 @@ machine is on Node v20, which has no global `WebSocket` (v22+ does). Chrome itse
 
 If the harness is rebuilt it belongs **in the repo** — and `noBill` (local ad responses) should be
 its default, with live GAM traffic an explicit opt-in, per §6.12.
+
+### §6.13a Rebuilt, in the repo
+
+Done: [`tools/gam-verify/`](tools/gam-verify/), run with `npm run verify:ads`, `playwright-core` as
+a devDependency (no browser download — it drives the installed Chrome). Answering ad requests
+locally is now the **default** rather than an opt-in, so a full run costs nothing on the live
+network; `noBill: false` is the deliberate exception.
+
+Eight cases, chosen as the ones with regression value rather than a like-for-like restoration:
+`ads-off`, `pagination`, `burst`, `hidden-tab`, `mobile-placement`, `mobile-no-refresh`,
+`no-hidden-define`, `poll-gate`. **All eight PASS.** The Phase 4 measurement scripts (S10–S15) were
+deliberately not rebuilt — they answered one-off questions about lazy loading and creative sizes
+that are settled, and they depend on live fills, which are not deterministic.
+
+Two things the rebuild changed for the better:
+
+- The fixture is the **real production config**, so `desktop_page_left` is `enabled: false` as it
+  actually is. The old harness force-enabled it, which is why the old S1 batches contain a left-rail
+  div that production would never refresh. The new `pagination` batches are `["1781437781482-0"]` —
+  right rail only, which is the truth.
+- **`poll-gate` closes the §6.13 gap.** It exercises the committed `finalize` form of the fix, not
+  the earlier form the overclaimed numbers came from. Measured, viewport 1440×900, `bumpVersion`
+  forcing the server to report a new `dataVersion`:
+
+  | | value |
+  |---|---|
+  | version endpoint hits | 1 |
+  | content reload hits | 3 |
+  | `refreshCalls` before → after | 0 → 0 |
+  | ad requests before → after | 1 → 0 net (1 → 1) |
+  | JS errors | none |
+
+  The first two numbers are the anti-vacuity check: the poll genuinely fired and the content
+  genuinely reloaded, so the zero refresh is the gate working rather than the poll never running.
+  `6d4922ff` is now verified as committed.
+
+One thing it cost: `index.csr.html`. This is an SSR build, so there is no `index.html` in
+`dist/browser` and the harness has to resolve the client entry rather than assume it.
 
 ---
 
@@ -1354,11 +1414,13 @@ the codebase, not just this task:
 |---|:-:|:-:|:-:|:-:|:-:|:-:|
 | `src/app/services/gam.service.ts` *(new)* | ● | ● | ● | | | |
 | [`src/app/services/ad.service.ts`](src/app/services/ad.service.ts) | ● | | | | | |
-| [`src/app/components/ad-slot/ad-slot.component.ts`](src/app/components/ad-slot/ad-slot.component.ts) | ● | | ● | | | |
+| [`src/app/components/ad-slot/ad-slot.component.ts`](src/app/components/ad-slot/ad-slot.component.ts) | ● | | ● | | ● | |
 | [`src/app/newspaper.component.ts`](src/app/newspaper.component.ts) | | ● | | | | ● |
 | `ad-slot.component.css` | | | ● | | | ● |
 | `article-modal.component.html` | | | | | ● | |
 | `admin.component.ts` | | | | | ● | |
+| `tools/gam-verify/` *(new)* | | | | | | ● |
+| `package.json` | | | | | | ● |
 | [`wordpress-plugin/.../digital-newspaper.php`](wordpress-plugin/digital-newspaper/digital-newspaper.php) | | | | | — | |
 | `newspaper.component.html` | | | | | — | |
 
