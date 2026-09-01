@@ -1282,6 +1282,59 @@ rather than made silently. It is also moot until `nepaper` answers.
 
 ---
 
+## §6.13 The harness is gone, and one commit is unverified
+
+**The harness lived in `/tmp/gam-probe/` and has been purged.** `verify2.js`, `regress.js`, the
+`/ads/config` snapshot, the static server and every log are gone. Keeping a week of measurement
+apparatus in a directory the OS is free to delete was a mistake, and it has two consequences.
+
+**1. Nothing in this document is currently reproducible.** Every S1–S17 number here was really
+measured and the logs were quoted into these sections and into commit messages, so the *record*
+survives in git. But the code that produced it does not, so none of it can be re-run, and no
+future change can be regression-tested against it. Treat the numbers as a historical record, not
+as a suite.
+
+**2. One commit's message overclaims.** `6d4922ff` ("stop the version poll from refreshing ads on
+its own") ends with *"Measured: refreshCalls 0 -> 0 with the gate, 0 -> 1 without."* Those numbers
+are real, but they were taken against an **earlier form** of the fix that cleared
+`pollDrivenReload` at the end of `renderCurrentEdition()`. Before committing, the clear moved into
+`finalize` on the reload subscription — to close a stuck-flag failure where a reload that never
+rendered would mute every later refresh for the session. The measurement was **not re-taken after
+that change**, the run that would have re-taken it was interrupted, and the commit message does
+not distinguish the two. Stating it here rather than leaving it standing.
+
+**Why the committed form is still believed correct — by construction, not by measurement.** The
+gate depends on the render reading the flag *before* `finalize` clears it, and that ordering is
+forced:
+
+1. `forkJoin` in `reloadCurrentDateOnly` completes and its `tap`
+   ([newspaper-data.service.ts:972](src/app/services/newspaper-data.service.ts#L972)) calls
+   `dataSubject.next()` — synchronous, and *before* the outer observable completes.
+2. The `data$` subscriber ([newspaper.component.ts:314](src/app/newspaper.component.ts#L314)) has
+   no async operators, so it runs inside that `next()` and calls `loadCurrentEdition()`.
+3. `hydrateDateIfMissing()` sees the date that step 1 just merged, so `alreadyHas` is true and it
+   returns `of(void 0)` ([newspaper-data.service.ts:523](src/app/services/newspaper-data.service.ts#L523))
+   — emitting synchronously rather than fetching.
+4. `renderCurrentEdition()` → `selectPage()` → `notifyAdContentChanged()` therefore reads
+   `pollDrivenReload` while it is still `true`, and suppresses.
+5. Only then does `forkJoin` complete and `finalize` clear it.
+
+**The one case where that does not hold:** if the reload comes back with no edition for
+`selectedDate` — the date was unpublished or withdrawn — then `alreadyHas` is false, hydration
+becomes a real HTTP call, and the render lands *after* `finalize`. The result is a single spurious
+refresh on a date disappearing underneath the reader. Rare, self-limiting to one refresh, and
+strictly better than the stuck-flag behaviour it replaced, which was permanent. Worth a test if
+the harness is ever rebuilt.
+
+**Restoring measurement needs a dependency.** `playwright-core` was installed in `/tmp`, not here.
+A dependency-free CDP driver is not an option either: that needs a WebSocket client, and this
+machine is on Node v20, which has no global `WebSocket` (v22+ does). Chrome itself is present.
+
+If the harness is rebuilt it belongs **in the repo** — and `noBill` (local ad responses) should be
+its default, with live GAM traffic an explicit opt-in, per §6.12.
+
+---
+
 ## Compliance guardrails — non-negotiable
 
 Google Ad Manager treats mechanical ad refresh as invalid traffic. These hold for the life of
