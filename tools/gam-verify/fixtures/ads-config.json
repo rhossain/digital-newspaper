@@ -1,0 +1,215 @@
+{
+  "enabled": true,
+  "slots": [
+    {
+      "id": "desktop_page_left",
+      "unit": "/22062727803/TDSEV3_Desktop_Page_Left-01",
+      "sizes": [
+        [
+          120,
+          600
+        ],
+        [
+          120,
+          240
+        ],
+        [
+          160,
+          600
+        ]
+      ],
+      "div": "div-gpt-ad-1781436865448-0",
+      "min_width": 120,
+      "min_height": 240,
+      "enabled": false
+    },
+    {
+      "id": "desktop_page_right",
+      "unit": "/22062727803/TDSEV3_Desktop_Page_Right-01",
+      "sizes": [
+        [
+          336,
+          280
+        ],
+        [
+          300,
+          250
+        ]
+      ],
+      "div": "div-gpt-ad-1781437781482-0",
+      "min_width": 300,
+      "min_height": 250,
+      "enabled": true
+    },
+    {
+      "id": "desktop_post_preview_top",
+      "unit": "/22062727803/TDSEV3_Desktop_Post_Preview_Top-01",
+      "sizes": [
+        [
+          320,
+          100
+        ],
+        [
+          300,
+          100
+        ]
+      ],
+      "div": "div-gpt-ad-1781440036290-0",
+      "min_width": 300,
+      "min_height": 100,
+      "enabled": true
+    },
+    {
+      "id": "desktop_post_preview_middle",
+      "unit": "/22062727803/TDSEV3_Desktop_Post_Preview_Middle-01",
+      "sizes": [
+        [
+          320,
+          100
+        ],
+        [
+          300,
+          100
+        ],
+        [
+          300,
+          250
+        ],
+        [
+          336,
+          280
+        ]
+      ],
+      "div": "div-gpt-ad-1781441150109-0",
+      "min_width": 300,
+      "min_height": 100,
+      "enabled": true
+    },
+    {
+      "id": "desktop_post_top_image",
+      "unit": "/22062727803/TDSEV3_Desktop_Post_Top-01",
+      "sizes": [
+        [
+          320,
+          100
+        ],
+        [
+          300,
+          100
+        ],
+        [
+          728,
+          90
+        ],
+        [
+          468,
+          60
+        ]
+      ],
+      "div": "div-gpt-ad-1781518880480-0",
+      "min_width": 300,
+      "min_height": 60,
+      "enabled": true
+    },
+    {
+      "id": "desktop_post_top_text",
+      "unit": "/22062727803/TDSEV3_Desktop_Post_Top-01",
+      "sizes": [
+        [
+          320,
+          100
+        ],
+        [
+          300,
+          100
+        ],
+        [
+          728,
+          90
+        ],
+        [
+          468,
+          60
+        ]
+      ],
+      "div": "div-gpt-ad-1781518880480-1",
+      "min_width": 300,
+      "min_height": 60,
+      "enabled": true
+    },
+    {
+      "id": "desktop_post_middle",
+      "unit": "/22062727803/TDSEV3_Desktop_Post_Middle-01",
+      "sizes": [
+        [
+          300,
+          100
+        ],
+        [
+          300,
+          250
+        ],
+        [
+          728,
+          90
+        ],
+        [
+          336,
+          280
+        ],
+        [
+          320,
+          100
+        ],
+        [
+          468,
+          60
+        ]
+      ],
+      "div": "div-gpt-ad-1781519469306-0",
+      "min_width": 300,
+      "min_height": 60,
+      "enabled": true
+    },
+    {
+      "id": "mobile_post_top",
+      "unit": "/22062727803/TDSEV3_Mobile_Post_Top-01",
+      "sizes": [
+        [
+          320,
+          100
+        ],
+        [
+          300,
+          100
+        ]
+      ],
+      "div": "div-gpt-ad-1781520617033-0",
+      "min_width": 300,
+      "min_height": 100,
+      "enabled": false
+    },
+    {
+      "id": "mobile_post_middle",
+      "unit": "/22062727803/TDSEV3_Mobile_Post_Middle-01",
+      "sizes": [
+        [
+          320,
+          100
+        ],
+        [
+          300,
+          100
+        ],
+        [
+          300,
+          250
+        ]
+      ],
+      "div": "div-gpt-ad-1781521397082-0",
+      "min_width": 300,
+      "min_height": 100,
+      "enabled": false
+    }
+  ]
+}

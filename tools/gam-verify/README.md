@@ -1,0 +1,75 @@
+# gam-verify
+
+Behaviour tests for the Google Ad Manager ad slots. They drive a real Chrome against a
+real build and assert on what GPT was actually asked to do, because the things that go
+wrong here — a second `display()` being silently ignored, a slot refreshed while
+`display: none`, a refresh with no user behind it — are all invisible to a unit test.
+
+Background, root causes and every measurement these cases came from:
+[`GAM_AD_REFRESH_ANALYSIS.md`](../../GAM_AD_REFRESH_ANALYSIS.md) and
+[`GAM_AD_REFRESH_TODO.md`](../../GAM_AD_REFRESH_TODO.md).
+
+## Running
+
+```bash
+npm run build                        # the suite serves dist/, not the dev server
+node tools/gam-verify/run.js         # all cases
+node tools/gam-verify/run.js mobile  # only cases whose name contains "mobile"
+```
+
+Needs Google Chrome installed (it uses `channel: 'chrome'`, so no browser download)
+and runs headed — ad code behaves differently headless.
+
+Exit code is non-zero if any case reports REVIEW.
+
+## What it does and does not touch
+
+Content comes from the **production** WordPress backend, because the staging host
+(`nepaper.dailysangram.com`) does not answer. That is deliberate but bounded:
+
+- `dist/` is served locally, so the code under test is always your build.
+- `GET /ads/config` is answered from [`fixtures/ads-config.json`](fixtures/ads-config.json),
+  so admin state cannot change a verdict.
+- **Any non-GET to `/ads/config` is aborted.** Nothing is ever written to the live site.
+- **Ad requests are answered locally by default**, so a run costs no live impressions.
+  Pass `noBill: false` on a case that genuinely needs a real creative — that spends real
+  impressions on the publisher's network, so only do it deliberately.
+
+Note that dev `wpBaseUrl` points at production too, so `ng serve` and the local admin
+panel already edit the live site. Unrelated to this suite, but worth knowing.
+
+## Verdicts
+
+- **PASS** / **REVIEW** — as expected, or not.
+- **INCONCLUSIVE (environment)** — the app booted with no content, i.e. the backend was
+  unreachable. Not a failure, and must not be read as one. Re-run the case alone.
+
+Fill is **not** deterministic: whether GAM returns a creative varies run to run and some
+units have no inventory booked at all. No case asserts that an ad filled — they assert on
+lifecycle (defined / displayed / refreshed / visible), which is what this codebase controls.
+
+## Cases
+
+| Case | Asserts |
+|---|---|
+| `ads-off` | Ads off in admin is a complete kill switch: no `gpt.js`, no slots, no requests, layout intact |
+| `pagination` | Each page change refreshes the persistent right-rail slot exactly once |
+| `burst` | Six rapid clicks coalesce into at most one refresh |
+| `hidden-tab` | `document.hidden` suppresses refresh entirely (GAM policy) |
+| `mobile-placement` | The two mobile slots are the only visible ones on mobile, once each, no duplicate divs |
+| `mobile-no-refresh` | A hidden slot is never refreshed |
+| `no-hidden-define` | A slot the viewport cannot show is never defined or fetched |
+| `poll-gate` | The 5-minute content poll does **not** refresh ads — no user action, no refresh |
+
+`poll-gate` waits out the real 300 s poll, so it takes about six minutes. It also asserts
+that the poll actually fired and reloaded, so it cannot pass by the poll never running.
+
+## Adding a case
+
+Add a function to `run.js` and an entry in `CASES`. Use `boot()` for a loaded app and
+`report(name, pass, extra)` for the verdict. Two rules worth keeping:
+
+- **Assert, don't just print.** A number that is logged but not compared is not a test —
+  a real container-height defect was nearly missed that way.
+- **Write the failing measurement first.** Every case here was confirmed to REVIEW before
+  its fix and PASS after; otherwise you cannot tell a working test from a vacuous one.
