@@ -36,8 +36,10 @@ import { GamService } from '../../services/gam.service';
  * ignored and the slot stays blank for the rest of the session. That was the
  * behaviour before this component delegated to GamService.
  *
- * - Desktop slots (id starts with 'desktop_') are hidden on mobile via CSS.
- * - Mobile slots (id starts with 'mobile_') are hidden on desktop via CSS.
+ * - Desktop slots (id starts with 'desktop_') render only at >= 768px, mobile
+ *   slots (id starts with 'mobile_') only below it. Enforced twice: the CSS hides
+ *   the wrong-viewport slot, and viewportAllows() stops it being defined in GPT at
+ *   all, so it buys no impression a reader cannot see.
  * - SSR-safe: registration is guarded by isPlatformBrowser().
  * - Hidden when global GAM is off OR when the individual slot is disabled.
  */
@@ -62,6 +64,9 @@ export class AdSlotComponent implements OnDestroy {
    */
   private static readonly HEAVY_AD_CONFIRM_MS = 1500;
 
+  /** Must match the `min-width: 768px` breakpoint in ad-slot.component.css. */
+  private static readonly DESKTOP_MIN_WIDTH_PX = 768;
+
   /** Stable slot identifier matching the WordPress gam_ad_slots() id field. */
   readonly slotId = input.required<string>();
 
@@ -82,11 +87,39 @@ export class AdSlotComponent implements OnDestroy {
    * sufficient — and it makes the admin GAM toggle a complete kill switch.
    */
   protected readonly slot = computed<AdSlot | undefined>(() =>
-    this.adService.enabled() ? this.adService.getSlot(this.slotId()) : undefined
+    this.adService.enabled() && this.viewportAllows()
+      ? this.adService.getSlot(this.slotId())
+      : undefined
   );
 
   readonly isDesktop = computed(() => this.slotId().startsWith('desktop_'));
   readonly isMobile  = computed(() => this.slotId().startsWith('mobile_'));
+
+  /**
+   * Whether the viewport is at or above the desktop breakpoint. Defaults to true
+   * so the server render is unaffected — matchMedia does not exist there, and no
+   * GPT slot is defined during SSR anyway.
+   */
+  private readonly wideViewport = signal(true);
+
+  /**
+   * Whether this slot's audience matches the current viewport.
+   *
+   * The CSS already hides the wrong-viewport slots, but hiding them is not
+   * enough: a `display: none` container was still handed to GPT, so every mobile
+   * session defined and fetched the desktop slots and bought impressions no
+   * reader could ever see. GamService's guard 3 stops those slots being
+   * *refreshed*; only this stops them being *defined*. Measured on a 390px
+   * viewport: 5 desktop slots defined and 13 ad requests, all unviewable.
+   */
+  readonly viewportAllows = computed(() =>
+    this.isDesktop() ? this.wideViewport()
+    : this.isMobile() ? !this.wideViewport()
+    : true
+  );
+
+  /** Removes the matchMedia listener; set up in the constructor, browser only. */
+  private _cleanupViewport?: () => void;
 
   /**
    * Signal-based ref to the ad container div.
@@ -114,6 +147,14 @@ export class AdSlotComponent implements OnDestroy {
   readonly removedByBrowser = signal(false);
 
   constructor() {
+    if (isPlatformBrowser(this.platformId)) {
+      const mq = window.matchMedia(`(min-width: ${AdSlotComponent.DESKTOP_MIN_WIDTH_PX}px)`);
+      this.wideViewport.set(mq.matches);
+      const onChange = (e: MediaQueryListEvent) => this.wideViewport.set(e.matches);
+      mq.addEventListener('change', onChange);
+      this._cleanupViewport = () => mq.removeEventListener('change', onChange);
+    }
+
     /**
      * This effect tracks two signals:
      *   slot()         — resolves when AdService completes its HTTP fetch
@@ -179,6 +220,7 @@ export class AdSlotComponent implements OnDestroy {
   }
 
   ngOnDestroy(): void {
+    this._cleanupViewport?.();
     this._release();
   }
 
