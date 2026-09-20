@@ -4,8 +4,14 @@ import { environment } from '../environments/environment';
  * Application-wide configuration constants.
  *
  * WP_BASE_URL is driven by the Angular environment file:
- *  - Development (`npm start`):  environment.ts → wpBaseUrl (currently epaper.dailysangram.com/wp)
- *  - Production build:           environment.prod.ts → wpBaseUrl (currently nepaper.dailysangram.com/wp)
+ *  - Development (`npm start`):     environment.ts → wpBaseUrl (currently epaper.dailysangram.com/wp)
+ *  - Production build:              environment.prod.ts → wpBaseUrl (currently epaper.dailysangram.com/wp)
+ *  - Staging (`--configuration staging`): environment.staging.ts → wpBaseUrl (currently nepaper.dailysangram.com/wp)
+ *
+ * This comment previously said the production build pointed at nepaper. It does not —
+ * environment.prod.ts names epaper, and the environment file is what takes effect. The
+ * distinction matters for tools/gam-verify, which serves dist/ and so reads content from
+ * whichever backend the build baked in.
  *
  * To deploy to a different WordPress host, update src/environments/environment.prod.ts.
  * All image URLs returned by the API are normalised server-side to match home_url(),

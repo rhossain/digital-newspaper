@@ -144,8 +144,13 @@ async function pollGate(browser) {
 
 /** Mobile: the two mobile slots are the only visible ones, and appear once each. */
 async function mobilePlacement(browser) {
+  // needSections is left at its default. This case asserts `opened`, and the only
+  // route into the modal is clicking a section — so with needSections:false a boot
+  // that loaded no content scored REVIEW instead of retrying, turning a backend
+  // hiccup into a failure verdict. Observed exactly that: `sections=0`,
+  // `modal opened=false`, every mobile assertion reported 0/2.
   const { ctx, page, state } = await boot(browser, {
-    viewport: { width: 390, height: 844 }, needSections: false,
+    viewport: { width: 390, height: 844 },
     mutateConfig: c => enable(c, ['mobile_post_top', 'mobile_post_middle']),
   });
   const opened = await openArticleModal(page);
@@ -219,6 +224,144 @@ async function noHiddenDefine(browser) {
   await ctx.close();
 }
 
+/**
+ * A navigation that lands inside the 5 s floor must still reach the slot.
+ *
+ * Before deferral every blocked refresh was discarded outright, so a reader
+ * clicking faster than once per five seconds kept the creative the slot was born
+ * with and nothing re-fired it. Measured on that code: one refresh for the two
+ * clicks below. The second click must now produce its own refresh, delayed to the
+ * earliest moment the floor allows rather than thrown away.
+ */
+async function deferredRefresh(browser) {
+  const { ctx, page, state } = await boot(browser);
+  await page.waitForTimeout(MIN_REFRESH_GAP);
+
+  await paginate(page, 2);                       // eligible: refreshes at once
+  const afterFirst = await page.evaluate(SNAP);
+
+  // Sampled tight, because the point is to catch the refresh mid-hold. paginate()
+  // waits 3 s after its click, which is longer than the ~2 s left on the floor at
+  // this moment, so reading the snapshot through it would show the deferred
+  // refresh already fired and prove nothing about whether it was held.
+  await page.locator('.pagination-page-btn').nth(2).click({ force: true, timeout: 15000 }).catch(() => {});
+  await page.waitForTimeout(1000);
+  const beforeWait = await page.evaluate(SNAP);
+
+  await page.waitForTimeout(MIN_REFRESH_GAP);    // let the deferral come due
+  const afterWait = await page.evaluate(SNAP);
+
+  const first = afterFirst.refreshes.length;
+  const held = beforeWait.refreshes.length;
+  const final = afterWait.refreshes.length;
+  line(`refreshCalls: after click 1=${first}  right after click 2=${held}  once the floor expired=${final}`);
+  line(`second click was held, not dropped=${held === first && final === first + 1} (expect true)`);
+  line(`last batch=${JSON.stringify(afterWait.refreshes.at(-1) ?? [])}`);
+  errLine(state);
+  report('deferred-refresh',
+    first === 1 && held === 1 && final === 2 &&
+    (afterWait.refreshes.at(-1) || []).includes(DIV.desktop_page_right) &&
+    state.errs.length === 0,
+    { first, held, final });
+  await ctx.close();
+}
+
+/**
+ * The mobile image/text toggle is a content swap that mounts nothing, so only a
+ * refresh can turn its ad over. `mobile_post_top` sits outside the image panel
+ * and stays visible across the toggle; `mobile_post_middle` is inside it and is
+ * hidden in text view, so guard 3 must leave that one alone.
+ */
+async function mobileToggle(browser) {
+  // needSections is left at its default: this case has to click a section to
+  // reach the modal, so a boot with no content is worth retrying rather than
+  // carrying into a verdict.
+  const { ctx, page, state } = await boot(browser, {
+    viewport: { width: 390, height: 844 },
+    mutateConfig: c => enable(c, ['mobile_post_top', 'mobile_post_middle']),
+  });
+  if (!(await openArticleModal(page))) throw new Inconclusive('article modal did not open');
+
+  const tabs = page.locator('.mobile-modal-tab');
+  if ((await tabs.count()) < 2) throw new Inconclusive('no image/text toggle — this article has no text body');
+
+  await page.waitForTimeout(MIN_REFRESH_GAP);    // clear the slots' mount stamp
+  const before = await page.evaluate(SNAP);
+  await tabs.nth(1).click({ force: true, timeout: 8000 }).catch(() => {});
+  await page.waitForTimeout(3000);
+  const after = await page.evaluate(SNAP);
+
+  const batch = after.refreshes.at(-1) || [];
+  const fired = after.refreshes.length === before.refreshes.length + 1;
+  const topRefreshed = batch.includes(DIV.mobile_post_top);
+  const middleLeftAlone = !batch.includes(DIV.mobile_post_middle);
+  line(`refreshCalls before=${before.refreshes.length} after=${after.refreshes.length} (expect +1)`);
+  line(`batch=${JSON.stringify(batch)}`);
+  line(`mobile_post_top refreshed=${topRefreshed}   mobile_post_middle (now hidden) left alone=${middleLeftAlone}`);
+  errLine(state);
+  report('mobile-toggle', fired && topRefreshed && middleLeftAlone && state.errs.length === 0,
+    { batch, before: before.refreshes.length, after: after.refreshes.length });
+  await ctx.close();
+}
+
+/**
+ * RC-3, the reported symptom: open an article from the right panel, close it,
+ * open another. The modal's ads filled the first time and were blank every time
+ * after, for the rest of the session.
+ *
+ * The cause was GPT's one-`display()`-per-slot-per-pageview rule. The old code
+ * defined every slot once up front and injected a `display()` per container, so a
+ * remounted container issued a second `display()` that GPT silently ignored —
+ * measured on the live site as `display()` firing on each reopen while the ad
+ * request count stayed frozen.
+ *
+ * Asserts the pairing directly: every open defines and displays, every close
+ * destroys, and every open costs a real ad request. Fill is deliberately not
+ * asserted — see §1.7 and the note in the README.
+ */
+async function modalReopen(browser) {
+  const { ctx, page, state } = await boot(browser);
+  const modalDivs = [DIV.desktop_post_top_image, DIV.desktop_post_middle];
+  // `defined` and `displays` are flat lists of div ids; `destroys` is one entry
+  // per destroySlots() call, each an array.
+  const inModal = flat => flat.filter(d => modalDivs.includes(d)).length;
+
+  const opens = [];
+  for (let i = 1; i <= 3; i++) {
+    const reqsBefore = state.adReqs;
+    if (!(await openArticleModal(page))) throw new Inconclusive(`article modal did not open on attempt ${i}`);
+    await page.waitForTimeout(2500);
+    const s = await page.evaluate(SNAP);
+    opens.push({
+      i,
+      defines: inModal(s.defined),
+      displays: inModal(s.displays),
+      destroys: inModal(s.destroys.flat()),
+      newAdReqs: state.adReqs - reqsBefore,
+    });
+    await page.locator('.modal-close-button').first().click({ force: true, timeout: 8000 }).catch(() => {});
+    await page.waitForTimeout(2500);
+  }
+
+  const final = await page.evaluate(SNAP);
+  const totalDefines = inModal(final.defined);
+  const totalDisplays = inModal(final.displays);
+  const totalDestroys = inModal(final.destroys.flat());
+
+  opens.forEach(o => line(`open ${o.i}: cumulative defineSlot=${o.defines} display()=${o.displays} destroySlots=${o.destroys}  new ad requests this open=${o.newAdReqs}`));
+  line(`totals across 3 open/close cycles — defineSlot=${totalDefines} display()=${totalDisplays} destroySlots=${totalDestroys} (expect 6/6/6)`);
+
+  // The defect's signature: display() climbs while ad requests stay flat.
+  const everyOpenFetched = opens.every(o => o.newAdReqs > 0);
+  line(`every open issued at least one new ad request=${everyOpenFetched} (expect true — this is what RC-3 broke)`);
+  errLine(state);
+  report('modal-reopen',
+    totalDefines === 6 && totalDisplays === 6 && totalDestroys === 6 &&
+    everyOpenFetched && state.errs.length === 0,
+    { opens, totalDefines, totalDisplays, totalDestroys });
+  await ctx.close();
+}
+
 const CASES = [
   ['ads-off', adsOff],
   ['pagination', paginationRefresh],
@@ -227,6 +370,9 @@ const CASES = [
   ['mobile-placement', mobilePlacement],
   ['mobile-no-refresh', mobileNoRefresh],
   ['no-hidden-define', noHiddenDefine],
+  ['deferred-refresh', deferredRefresh],
+  ['mobile-toggle', mobileToggle],
+  ['modal-reopen', modalReopen],
   ['poll-gate', pollGate], // slowest: waits out the real 5-minute poll
 ];
 

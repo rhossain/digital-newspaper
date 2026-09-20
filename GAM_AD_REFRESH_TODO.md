@@ -568,6 +568,57 @@ The correlation is perfect across every slot tested. The banner-only units
 728×90 / 468×60) appear to have **no line items booked against them** in the GAM network,
 whereas every unit offering a rectangle does.
 
+
+#### Correction, measured on staging 2026-09-19 after the Phase 7 deploy
+
+**The "banner-only units never fill" conclusion above is too strong, and it is wrong for
+`TDSEV3_Desktop_Post_Top-01`.** Sampled via a `slotRenderEnded` listener on
+`nepaper.dailysangram.com`, across 4 article-modal opens on a 1512 px viewport:
+
+| Unit | Rectangle size? | filled | empty |
+|---|:-:|:-:|:-:|
+| `TDSEV3_Desktop_Post_Top-01` (`desktop_post_top_image`) | no | **3** | 1 |
+| `TDSEV3_Desktop_Post_Middle-01` (`desktop_post_middle`) | yes | 3 | 1 |
+| `TDSEV3_Desktop_Post_Preview_Top-01` (`desktop_post_preview_top`) | no | **0** | 4 |
+| `TDSEV3_Desktop_Post_Preview_Middle-01` (`desktop_post_preview_middle`) | yes | 4 | 0 |
+
+So the modal's top ad **does** fill, at roughly the same rate as the rectangle unit beside
+it, and one observed fill was a 320×100 banner — proof that line items exist against the
+banner sizes on that unit. The original table read a *single* empty observation per unit as
+"no inventory booked"; with a larger sample the split is between the two **Preview_Top** and
+**Post_Top** units, not between banner and rectangle sizes.
+
+What survives: `TDSEV3_Desktop_Post_Preview_Top-01` returned empty on every sample here and
+in the original measurement. That one unit is still worth raising with the network owner.
+Item 2 below (two div ids sharing `TDSEV3_Desktop_Post_Top-01` under SRA) is unaffected.
+
+#### `desktop_post_preview_top` — a likely mechanism, not just "no demand"
+
+Extended sampling on staging put this slot at roughly **1 fill in 12 observations**, across
+both fresh page views and in-place refreshes, while every other enabled position filled
+repeatedly. Two structural facts make that look like contention rather than absent inventory:
+
+- Its sizes `[[320,100],[300,100]]` are a **strict subset** of
+  `desktop_post_preview_middle`'s `[[320,100],[300,100],[300,250],[336,280]]`. Every line
+  item eligible for the top slot is therefore also eligible for the middle one.
+- Single-request mode is on, so both slots are requested in the **same** SRA call, and
+  `preview_middle` was repeatedly observed taking a **320×100** creative — a size only the
+  top slot would otherwise need.
+
+With a roadblock, competitive exclusion, or a one-creative-per-request constraint on the
+shared line items, `preview_middle` wins the size both slots compete for and `preview_top`
+is left unfilled. Worth checking on the GAM side before assuming the unit has no bookings.
+
+#### Fill degrades within a driven session
+
+Fill rates for `Desktop_Post_Top-01` fell from 3/4 early in a session to 0/3 after ~20
+rapid open/close cycles, then recovered to filling immediately on a fresh page view. That is
+per-user frequency capping doing its job, not a regression — but it means a long automated
+run understates fill, and no verdict should be drawn from the tail of one.
+
+Fill is non-deterministic, so neither sample is conclusive on its own — which is exactly why
+no case in `tools/gam-verify` asserts on fill.
+
 This closes out the "`Desktop_Post_Top` still returns empty on repeat opens" note in §1.4:
 it is not a lifecycle defect and no further code change will fix it. Two items for the GAM
 network owner, added to the Phase 6 gate:
@@ -1395,6 +1446,119 @@ One thing it cost: `index.csr.html`. This is an SSR build, so there is no `index
 
 ---
 
+## Phase 7 — Refresh on every trigger, scoped to the section that changed
+
+Product decision after Phase 6: a reader action on a section, button or panel should turn
+over the ads **in that part of the UI**. Two things stood between the Phase 2 design and
+that behaviour.
+
+### 7.1 Blocked refreshes were discarded, so fast readers got none
+
+`_flush()` cleared `pending` up front and then filtered the batch through four guards.
+Anything a guard rejected was gone — nothing re-armed it. Combined with `register()`
+stamping `lastRefreshedAt` at **definition** time, every slot sat inside the 5 s floor for
+its first five seconds, so a reader who picked a page and then an article two seconds later
+had **both** refreshes discarded and kept the creative the slot was born with.
+
+Each guard now either *drops* or *defers*, and which one is the whole design:
+
+| Guard | Blocked by | Resolves on its own? | Now |
+|---|---|:-:|---|
+| 1 | `document.hidden` | yes — the reader comes back | **defer**, re-armed by a `visibilitychange` listener |
+| 2 | no GPT slot yet, still `claimed` | yes — `googletag.cmd` drains | **defer** by one debounce |
+| 2 | no GPT slot, not claimed (unmounted) | no | drop — a remount fetches its own creative |
+| 3 | container hidden | no — nothing un-hides it on a timer | drop |
+| 4a | request predates the slot's own last fetch | n/a — already answered | drop |
+| 4b | inside the 5 s floor | yes — the floor expires | **defer** by exactly the remainder |
+
+`pending` became a `Map<id, requestedAt>`: deferral needs a record of when the *reader*
+acted, or a permanently blocked id would re-arm the timer forever. `MAX_DEFER_MS` (30 s)
+bounds the ones that never resolve — gpt.js blocked by an extension leaves ids in `claimed`
+that never reach `live`, and a tab left in the background for an hour must not fire a
+refresh for a navigation the reader has forgotten.
+
+The rate floor itself is unchanged at 5 s. Deferral does not buy more ad requests per unit
+time; it stops the reader's action from being silently lost.
+
+### 7.2 Two non-user refreshes that deferral exposed
+
+Both were pre-existing and both were masked by "drop everything that is blocked" — they
+landed inside the slots' first 5 s, so the floor swallowed them. Deferring made them fire,
+and `pagination` measured it immediately as `refreshCalls=2` before the reader had clicked
+anything.
+
+- **The initial render.** It reaches `selectPage()`/`selectSection()` like a click does, but
+  it is not a content *change* — the slots are mounting during that very pass and their
+  `display()` is the session's first impression. `NewspaperComponent.adTargetingPrimed`
+  now routes that first pass to the new `GamService.primeTargeting()`, which seeds the
+  key-values **without** requesting anything. Side benefit: the mount-time `display()` is
+  now targeted, where before it went out with `{}` and was corrected by a second request.
+  The flag is set at the end of `renderCurrentEdition()`, not on the first call, because one
+  render pass can reach the notifier twice — a deep link runs `selectPage()` →
+  `selectSection()`, and both are the initial load.
+
+- **The light→full background upgrade.** The public viewer boots on a light payload and the
+  data service then fetches the full one and re-emits on `data$`, which runs
+  `loadCurrentEdition()` → `selectPage()` on the *same* page the reader is looking at. Same
+  class of defect as §6.10's version poll, which this branch fixed for the poll only.
+  `upgradeDrivenReload` detects it as "the previous emission was `_partial` and this one is
+  not" and suppresses the refresh.
+
+### 7.3 Scoping, and the triggers that were missing
+
+`notifyAdContentChanged()` now takes the slot group that lives inside the thing that
+changed, and passes it to `requestRefresh`'s existing `ids` parameter. Picking an article
+swaps the right panel; the left rail still shows the same page list, so re-requesting its ad
+would buy an impression for content that did not move.
+
+| Trigger | Group refreshed | Status |
+|---|---|---|
+| `selectPage()` | `PAGE_SLOTS` | scoped (was: everything) |
+| `selectSection()` | `PREVIEW_SLOTS` | scoped (was: everything) |
+| `closeSection()` | `PAGE_SLOTS` | **new** — the left rail's `section` key-value was stale |
+| `closeImageModal()` | `PREVIEW_SLOTS` | **new** |
+| `closeContentModal()` | `PREVIEW_SLOTS` | **new** |
+| `onMobileModalViewChange()` | `MODAL_SLOTS` | **new** — was an inline `mobileModalView = $event` |
+| modal **open** | — | unchanged, still none: a mount is already a fresh `defineSlot` + `display()` (§2.2.6) |
+
+The mobile image/text toggle was the real gap: `mobile_post_top` sits outside
+`.modal-images-container` and stays visible across the toggle, so it held one creative for
+the whole modal session however often the reader switched views. `mobile_post_middle` is
+inside the image panel and guard 3 correctly leaves it alone in text view.
+
+### 7.4 Phase 7 measured result
+
+Full suite green. Two cases added, each confirmed to REVIEW before its fix:
+
+| Case | Asserts |
+|---|---|
+| `deferred-refresh` | after click 1 → 1 refresh; 1 s after click 2 → still 1 (**held**); once the floor expires → 2 (**fired**). Old code: 1, permanently. |
+| `mobile-toggle` | the toggle produces exactly one refresh, batch `[mobile_post_top]`, with the now-hidden `mobile_post_middle` excluded |
+| `modal-reopen` | three open/close cycles → `defineSlot`/`display()`/`destroySlots` all 6, and every open issues new ad requests |
+
+`pagination` was the case that caught both §7.2 defects: `refreshCalls=2` at the first
+navigation, back to the expected `1` once they were fixed.
+
+### 7.5 `destroySlots` was never instrumented
+
+`modal-reopen` could not be written without this. The harness wrapped `defineSlot`,
+`display()` and `pubads().refresh()`, but not `destroySlots` — so the *other* half of the
+pairing Phase 1 introduced was invisible to every case. A container that unmounted without
+its destroy would leave the div id bound in GPT, the next `defineSlot` would return null, and
+the slot would silently stop filling with nothing in the suite to catch it. Now tracked in
+`window.__gam.destroy` and exposed on `SNAP` as `destroys`.
+
+Measured across three open/close cycles of the article modal: `defineSlot`, `display()` and
+`destroySlots` each reach exactly 6 for the two modal slots, and every open issues new ad
+requests. The deployed build's signature is the opposite — `display()` climbs on each reopen
+while the ad request count stays flat, which is RC-3 exactly.
+
+Also fixed here: `mobile-placement` passed `needSections: false` while asserting the modal
+opened, so a boot that loaded no content scored REVIEW rather than retrying. Observed during
+a full run as `sections=0`, `modal opened=false`, every mobile assertion 0/2.
+
+---
+
 ## Compliance guardrails — non-negotiable
 
 Google Ad Manager treats mechanical ad refresh as invalid traffic. These hold for the life of
@@ -1410,19 +1574,19 @@ the codebase, not just this task:
 
 ## Files touched, by phase
 
-| File | P1 | P2 | P3 | P4 | P5 | P6 |
-|---|:-:|:-:|:-:|:-:|:-:|:-:|
-| `src/app/services/gam.service.ts` *(new)* | ● | ● | ● | | | |
-| [`src/app/services/ad.service.ts`](src/app/services/ad.service.ts) | ● | | | | | |
-| [`src/app/components/ad-slot/ad-slot.component.ts`](src/app/components/ad-slot/ad-slot.component.ts) | ● | | ● | | ● | |
-| [`src/app/newspaper.component.ts`](src/app/newspaper.component.ts) | | ● | | | | ● |
-| `ad-slot.component.css` | | | ● | | | ● |
-| `article-modal.component.html` | | | | | ● | |
-| `admin.component.ts` | | | | | ● | |
-| `tools/gam-verify/` *(new)* | | | | | | ● |
-| `package.json` | | | | | | ● |
-| [`wordpress-plugin/.../digital-newspaper.php`](wordpress-plugin/digital-newspaper/digital-newspaper.php) | | | | | — | |
-| `newspaper.component.html` | | | | | — | |
+| File | P1 | P2 | P3 | P4 | P5 | P6 | P7 |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+| `src/app/services/gam.service.ts` *(new)* | ● | ● | ● | | | | ● |
+| [`src/app/services/ad.service.ts`](src/app/services/ad.service.ts) | ● | | | | | | |
+| [`src/app/components/ad-slot/ad-slot.component.ts`](src/app/components/ad-slot/ad-slot.component.ts) | ● | | ● | | ● | | |
+| [`src/app/newspaper.component.ts`](src/app/newspaper.component.ts) | | ● | | | | ● | ● |
+| `ad-slot.component.css` | | | ● | | | ● | |
+| `article-modal.component.html` | | | | | ● | | |
+| `admin.component.ts` | | | | | ● | | |
+| `tools/gam-verify/` *(new)* | | | | | | ● | ● |
+| `package.json` | | | | | | ● | |
+| [`wordpress-plugin/.../digital-newspaper.php`](wordpress-plugin/digital-newspaper/digital-newspaper.php) | | | | | — | | |
+| `newspaper.component.html` | | | | | — | | ● |
 
 ● changed  — considered and deliberately left alone
 
@@ -1437,6 +1601,10 @@ Phase 6 was meant to touch none either. It touched two files because the gate di
 `newspaper.component.ts` for the version-poll defect (§6.10) and `ad-slot.component.css` for the
 16 px reservation defect (§6.11). Both were pre-existing and neither was caught by any earlier
 phase.
+
+Phase 7's `newspaper.component.html` change is one line: the modal's mobile image/text toggle
+moved from an inline `mobileModalView = $event` to a handler, so the view swap can refresh the
+slot that survives it.
 
 **Not touched in any phase:** `admin.component.ts` (reads `AdService`'s unchanged public API),
 routing, data services, the image pipeline, i18n, or any existing CSS.

@@ -59,7 +59,7 @@ const AD_REQ = /\/gampad\/(live\/)?ads?(\?|$)/;
  */
 const INSTRUMENT = `
 (() => {
-  window.__gam = { define: [], display: [], refresh: [], gptLoaded: false };
+  window.__gam = { define: [], display: [], refresh: [], destroy: [], gptLoaded: false };
   window.googletag = window.googletag || { cmd: [] };
   window.googletag.cmd.push(function () {
     const gt = window.googletag;
@@ -75,6 +75,17 @@ const INSTRUMENT = `
       window.__gam.display.push(strip(d && d.getSlotElementId ? d.getSlotElementId() : d));
       return odisp.apply(this, arguments);
     };
+    // destroySlots is half of the pairing the whole slot lifecycle rests on: a
+    // container that unmounts without it leaves the div id bound in GPT, and the
+    // next mount's defineSlot returns null. Untracked, a regression there is
+    // invisible until a slot silently stops filling.
+    const ods = gt.destroySlots;
+    if (ods) {
+      gt.destroySlots = function (slots) {
+        window.__gam.destroy.push((slots || []).map(s => strip(s.getSlotElementId())));
+        return ods.apply(this, arguments);
+      };
+    }
     const pub = gt.pubads();
     const orf = pub.refresh;
     pub.refresh = function (slots) {
@@ -114,6 +125,7 @@ const SNAP = `(() => {
     defined: window.__gam.define.slice(),
     displays: window.__gam.display.slice(),
     refreshes: window.__gam.refresh.slice(),
+    destroys: window.__gam.destroy.slice(),
     slots, hosts,
     thumbs: document.querySelectorAll('.thumbnail-item').length,
     sections: document.querySelectorAll('.clickable-section').length,

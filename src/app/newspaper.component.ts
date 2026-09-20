@@ -34,6 +34,46 @@ export class NewspaperComponent implements OnInit, OnDestroy {
 
   private readonly gam = inject(GamService);
 
+  /**
+   * Ad slots grouped by the piece of UI whose content they sit inside.
+   *
+   * Refresh is scoped by group rather than fired at everything mounted, because
+   * "the content changed" is only true for the slots inside the thing that
+   * changed. Picking an article swaps the right panel; the left rail still shows
+   * the same page list, so re-requesting its ad would buy an impression for
+   * content that did not move — which is the shape of traffic GAM discounts.
+   *
+   * Ids must match the WordPress `gam_ad_slots()` id field and the `slotId`
+   * inputs in the templates. A slot missing from every group is simply never
+   * refreshed in place; it still gets its mount-time `display()`.
+   */
+  private static readonly PAGE_SLOTS = [
+    'desktop_page_left',
+    'desktop_page_right',
+  ];
+
+  /** Right-panel article preview — turns over when the selected article changes. */
+  private static readonly PREVIEW_SLOTS = [
+    'desktop_post_preview_top',
+    'desktop_post_preview_middle',
+  ];
+
+  /**
+   * Article modal, both viewports.
+   *
+   * Opening the modal is deliberately absent from the triggers below: a modal
+   * open mounts these containers, and a mount is already a fresh `defineSlot` +
+   * `display()`. Only a change *within* an open modal — the mobile image/text
+   * toggle — needs a refresh.
+   */
+  private static readonly MODAL_SLOTS = [
+    'desktop_post_top_image',
+    'desktop_post_top_text',
+    'desktop_post_middle',
+    'mobile_post_top',
+    'mobile_post_middle',
+  ];
+
   // Signal-based viewChild: the effect() below re-runs only when this
   // element enters/leaves the DOM (much cheaper than afterEveryRender).
   readonly paginationBarRef = viewChild<ElementRef<HTMLElement>>('paginationBar');
@@ -77,6 +117,47 @@ export class NewspaperComponent implements OnInit, OnDestroy {
    * date or edition change, which *is* a user action and must still refresh.
    */
   private pollDrivenReload = false;
+
+  /**
+   * False until the first edition render of the session has finished.
+   *
+   * The initial render reaches the same `selectPage()`/`selectSection()` path a
+   * click does, but it is not a content *change* — there is no previous content
+   * for the ad to be stale against. The slots are mounting during that very pass,
+   * and their `display()` is the first impression.
+   *
+   * Without this gate the initial render asked for a refresh that GamService then
+   * held for the 5 s floor and fired, spending a second ad request on content
+   * identical to the one the mount had just fetched. The old code hid this by
+   * discarding every blocked refresh; now that blocked refreshes are deferred
+   * rather than dropped, the initial render has to be excluded explicitly.
+   *
+   * Set at the end of `renderCurrentEdition()` rather than on the first call,
+   * because one render pass can reach `notifyAdContentChanged()` twice — a deep
+   * link runs `selectPage()` → `selectSection()` — and both are the initial load.
+   */
+  private adTargetingPrimed = false;
+
+  /**
+   * True for the duration of the re-render caused by the light→full background
+   * data upgrade.
+   *
+   * The public viewer boots on a light payload (article bodies stripped) and the
+   * data service then fetches the full one and re-emits on `data$`. That second
+   * emission runs the same `loadCurrentEdition()` → `selectPage()` path a click
+   * does, on the *same* page the reader is already looking at — so refreshing ads
+   * there is an ad request with no user behind it, exactly the defect §6.10 fixed
+   * for the version poll.
+   *
+   * It was invisible while blocked refreshes were discarded: the upgrade lands
+   * inside the slots' first 5 s, so the rate floor swallowed it. Deferring blocked
+   * refreshes made it fire, and the `pagination` case measured it as a second
+   * refresh before the reader had clicked anything.
+   */
+  private upgradeDrivenReload = false;
+
+  /** Whether the last `data$` emission was the light first-paint payload. */
+  private lastDataWasPartial = false;
 
   // Mobile/tablet responsive state
   isMobileView = false;
@@ -311,9 +392,17 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     // emit and the tap()-triggered emit during loadNewspaperData() do NOT call
     // loadCurrentEdition() — that single call is made explicitly in
     // loadNewspaperData() after the correct date has been established.
-    const dataSubscription = this.dataService.data$.subscribe(() => {
+    const dataSubscription = this.dataService.data$.subscribe(data => {
       // Always sync global settings from the latest data
       this.refreshSettings();
+
+      // A light payload followed by a full one is the background upgrade, not
+      // anything the reader did. Recorded before the re-render so the flag is set
+      // by the time selectPage() asks whether ads may refresh.
+      const wasPartial = this.lastDataWasPartial;
+      this.lastDataWasPartial = data?._partial === true;
+      this.upgradeDrivenReload = wasPartial && !this.lastDataWasPartial;
+
       if (this.initialLoadComplete) {
         // Re-sync the date picker list — a targeted reload may have added a
         // newly-published edition date that wasn't in the initial load.
@@ -676,6 +765,17 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     // Recalculate pagination after all page/edition state has settled.
     this.updatePaginationPages();
     this.cdr.detectChanges();
+
+    // Everything from here on is a content change the reader can attribute to
+    // something they did, so it may refresh ads. Set unconditionally: a render
+    // that produced no pages still ends the initial load.
+    this.adTargetingPrimed = true;
+
+    // Cleared here rather than where it is set: loadCurrentEdition() reaches this
+    // render asynchronously, so the flag has to survive until the render that
+    // reads it has actually run. renderCurrentEdition() runs on both the success
+    // and the error path of that hydration, so this is never skipped.
+    this.upgradeDrivenReload = false;
   }
 
   navigateToSection(sectionSlug: string): boolean {
@@ -896,7 +996,9 @@ export class NewspaperComponent implements OnInit, OnDestroy {
       this.updateMetaTags(null);
     }
 
-    this.notifyAdContentChanged();
+    // Page slots only. When a section is also being selected, selectSection()
+    // adds the preview group and the debounce merges the two into one request.
+    this.notifyAdContentChanged(NewspaperComponent.PAGE_SLOTS);
   }
 
   /**
@@ -916,17 +1018,28 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * Called after any navigation that swaps the visible content. Cheap and
-   * idempotent: GamService coalesces bursts and drops slots that are unmounted,
-   * hidden, or too recently filled, so callers need no conditions of their own.
+   * Called after any navigation that swaps the visible content, naming the slot
+   * group that sits inside the part of the UI that changed.
+   *
+   * Cheap and idempotent: GamService coalesces bursts, defers what a rate floor
+   * or a hidden tab blocks, and drops slots whose container is unmounted or
+   * hidden — so callers need no conditions of their own beyond the scope.
    *
    * The one condition that cannot live in GamService is *who asked*. Every
    * refresh must trace back to a user action, and the version poll reaches this
    * through exactly the same navigation path a click does.
    */
-  private notifyAdContentChanged(): void {
-    if (this.pollDrivenReload) return;
-    this.gam.requestRefresh(this.adTargeting());
+  private notifyAdContentChanged(ids: string[]): void {
+    if (this.pollDrivenReload || this.upgradeDrivenReload) return;
+
+    // First render of the session: seed the key-values so the slots registering
+    // right now fetch with correct targeting, and ask for nothing more.
+    if (!this.adTargetingPrimed) {
+      this.gam.primeTargeting(this.adTargeting());
+      return;
+    }
+
+    this.gam.requestRefresh(this.adTargeting(), ids);
   }
 
   /**
@@ -1417,7 +1530,7 @@ export class NewspaperComponent implements OnInit, OnDestroy {
 
     // selectPage() also calls this when navigating straight to a section; the
     // debounce in GamService collapses the pair into one refresh.
-    this.notifyAdContentChanged();
+    this.notifyAdContentChanged(NewspaperComponent.PREVIEW_SLOTS);
   }
 
   onSectionImageLoad() {
@@ -1509,6 +1622,13 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     this.updateUrl();
     // Reset social sharing meta tags to site defaults
     this.updateMetaTags(null);
+
+    // The right panel reverts to the page view, and the left rail's `section`
+    // key-value is now stale — it still names the article the reader just left.
+    // desktop_page_right remounts here and fetches its own creative, so guard 2
+    // in GamService drops it from this batch; desktop_page_left is the one that
+    // actually needs re-requesting.
+    this.notifyAdContentChanged(NewspaperComponent.PAGE_SLOTS);
   }
 
   openContentModal() {
@@ -1533,6 +1653,9 @@ export class NewspaperComponent implements OnInit, OnDestroy {
 
   closeContentModal() {
     this.showContentModal = false;
+    // Back to the article preview underneath, which has been mounted and showing
+    // the same creative for as long as the modal was open.
+    this.notifyAdContentChanged(NewspaperComponent.PREVIEW_SLOTS);
   }
 
   openImageModal() {
@@ -1557,6 +1680,26 @@ export class NewspaperComponent implements OnInit, OnDestroy {
     this.modalImageTitle = '';
     this.modalLinkedSections = [];
     this.mobileModalView = 'image';
+    this.notifyAdContentChanged(NewspaperComponent.PREVIEW_SLOTS);
+  }
+
+  /**
+   * Mobile image/text toggle inside the article modal.
+   *
+   * A genuine content swap that mounts nothing: `mobile_post_top` sits outside
+   * `.modal-images-container` and stays visible across the toggle, so without
+   * this it would hold one creative for the whole modal session no matter how
+   * often the reader switched views. `mobile_post_middle` is inside the image
+   * panel and is hidden in text view — GamService's visibility guard drops it on
+   * that half of the toggle, which is the intended outcome.
+   *
+   * Guarded on an actual change so that re-tapping the active tab is not a
+   * content change.
+   */
+  onMobileModalViewChange(view: 'image' | 'text'): void {
+    if (this.mobileModalView === view) return;
+    this.mobileModalView = view;
+    this.notifyAdContentChanged(NewspaperComponent.MODAL_SLOTS);
   }
 
   private getPrintDocument(contentHtml: string, styles: string = ''): string {

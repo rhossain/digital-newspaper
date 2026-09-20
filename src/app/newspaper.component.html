@@ -965,7 +965,7 @@
   [getCroppedImage]="getCroppedImageBound"
   (closeImageModal)="closeImageModal()"
   (closeContentModal)="closeContentModal()"
-  (mobileViewChange)="mobileModalView = $event"
+  (mobileViewChange)="onMobileModalViewChange($event)"
   (printImages)="printAllModalImages()"
   (downloadImages)="downloadAllModalImages()"
   (printContent)="printContent(selectedSection!.content!, selectedSection!.title)"

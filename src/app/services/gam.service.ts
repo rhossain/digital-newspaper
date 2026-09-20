@@ -95,6 +95,19 @@ export class GamService implements OnDestroy {
    */
   private static readonly MIN_REFRESH_INTERVAL_MS = 5000;
 
+  /**
+   * How long a deferred refresh may keep waiting for its blocker to clear before
+   * it is abandoned.
+   *
+   * Every deferral in `_flush()` waits on something that normally resolves in
+   * well under a second — a cooldown expiring, a `defineSlot` draining out of
+   * `googletag.cmd`, a backgrounded tab coming forward. This bounds the ones that
+   * never resolve: gpt.js blocked by an extension leaves ids in `claimed` that
+   * never reach `live`, and a tab left in the background for an hour should not
+   * fire a refresh for a navigation the reader has long forgotten.
+   */
+  private static readonly MAX_DEFER_MS = 30_000;
+
   private readonly platformId = inject(PLATFORM_ID);
   private readonly document   = inject(DOCUMENT);
 
@@ -117,8 +130,24 @@ export class GamService implements OnDestroy {
    */
   private readonly claimed = new Set<string>();
 
-  /** Slot ids awaiting the next coalesced refresh. */
-  private readonly pending = new Set<string>();
+  /**
+   * Slot ids awaiting the next coalesced refresh, mapped to the time the content
+   * change that asked for them happened.
+   *
+   * The timestamp is what makes deferral safe. `_flush()` puts an id back here
+   * when its blocker is temporary, so without a record of when the *user* acted
+   * there would be nothing to expire against and a permanently blocked id would
+   * re-arm the timer forever.
+   */
+  private readonly pending = new Map<string, number>();
+
+  /**
+   * Removes the `visibilitychange` listener, or null when none is attached.
+   *
+   * Attached lazily, on the first flush that lands in a hidden tab, because the
+   * common case never needs it.
+   */
+  private visibilityCleanup: (() => void) | null = null;
 
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -224,6 +253,10 @@ export class GamService implements OnDestroy {
     // Cancels a definition still sitting in the GPT command queue.
     this.claimed.delete(id);
     this.collapsed.delete(id);
+    // Drop any deferred refresh for this slot. A remount defines a fresh slot and
+    // displays it, which is already a new ad request — letting the old deferral
+    // survive would fire a second one the moment the cooldown expired.
+    this.pending.delete(id);
 
     const entry = this.live.get(id);
     if (!entry) return;
@@ -241,6 +274,24 @@ export class GamService implements OnDestroy {
   }
 
   /**
+   * Set the key-values for the content on screen without asking for a refresh.
+   *
+   * For the first render of a session, where there is no previous content and so
+   * nothing to refresh *from*: the slots are registering at this moment and their
+   * mount-time `display()` is the session's first impression. Seeding targeting
+   * here is what lets that first fetch be targeted, instead of going out with
+   * `{}` and being corrected by a second, duplicate ad request moments later.
+   *
+   * Only affects slots that have not yet been defined. A slot already live keeps
+   * the targeting it fetched with until something refreshes it — which is the
+   * point: this call must never itself cause a network request.
+   */
+  primeTargeting(targeting: AdTargeting): void {
+    if (!isPlatformBrowser(this.platformId)) return;
+    this.targeting = targeting;
+  }
+
+  /**
    * Note that the on-screen content changed, so the mounted ad slots should be
    * re-requested with fresh targeting.
    *
@@ -252,9 +303,16 @@ export class GamService implements OnDestroy {
     if (!isPlatformBrowser(this.platformId)) return;
 
     this.targeting = targeting;
+    const now = Date.now();
     // Default to `claimed` rather than `live`: a slot mid-definition when this is
     // called will be live by the time the debounce elapses.
-    for (const id of ids ?? this.claimed) this.pending.add(id);
+    //
+    // An id already pending keeps its original timestamp: a burst of clicks is
+    // one content change as far as the reader is concerned, and re-stamping would
+    // let a slot that never becomes refreshable outlive MAX_DEFER_MS.
+    for (const id of ids ?? this.claimed) {
+      if (!this.pending.has(id)) this.pending.set(id, now);
+    }
 
     if (this.refreshTimer !== null) clearTimeout(this.refreshTimer);
     this.refreshTimer = setTimeout(() => this._flush(), GamService.REFRESH_DEBOUNCE_MS);
@@ -291,6 +349,10 @@ export class GamService implements OnDestroy {
     this.refreshTimer = null;
 
     this.renderListeners.clear();
+    this.pending.clear();
+
+    this.visibilityCleanup?.();
+    this.visibilityCleanup = null;
 
     const listener = this.gptRenderListener;
     if (!listener) return;
@@ -320,31 +382,101 @@ export class GamService implements OnDestroy {
     gt.cmd.push(() => gt.pubads().addEventListener('slotRenderEnded', listener));
   }
 
-  /** Issue at most one batched refresh for everything that accumulated in `pending`. */
+  /**
+   * Issue at most one batched refresh for everything that accumulated in
+   * `pending`, and re-arm for whatever could not go out yet.
+   *
+   * Each guard below either *drops* an id or *defers* it, and which one it does
+   * is the whole design. A guard drops when only a fresh user action could make
+   * the slot refreshable again — the container is gone, or it is hidden with no
+   * scheduled moment when it stops being hidden. A guard defers when its blocker
+   * clears on its own: a cooldown expires, a `defineSlot` drains out of
+   * `googletag.cmd`, a backgrounded tab comes forward.
+   *
+   * Dropping a deferrable case is what made rapid navigation lose its refresh
+   * entirely. `register()` stamps `lastRefreshedAt` at definition time, so every
+   * slot is inside the 5 s floor for its first five seconds; a reader who picked
+   * a page and then an article two seconds later had both refreshes discarded and
+   * kept the creative the slot was born with, with nothing left to re-fire it.
+   */
   private _flush(): void {
     this.refreshTimer = null;
-    const ids = [...this.pending];
-    this.pending.clear();
     const targeting = this.targeting;
+    const now = Date.now();
 
     // Guard 1 — a backgrounded tab. GAM treats impressions the user cannot
-    // possibly see as invalid traffic, so drop the batch rather than deferring it.
-    if (this.document.hidden) return;
+    // possibly see as invalid traffic, so nothing goes out now. `pending` is left
+    // untouched and the visibility listener re-arms the flush on return; the
+    // MAX_DEFER_MS check below is what stops a long absence from firing a refresh
+    // for a navigation the reader has forgotten.
+    if (this.document.hidden) {
+      this._ensureVisibilityListener();
+      return;
+    }
 
-    const now = Date.now();
-    const batch = ids
-      .map(id => this.live.get(id))
-      // Guard 2 — the container unmounted during the debounce window. This is
-      // also what keeps a refresh from double-requesting a slot that Phase 1's
-      // mount-time display() is already fetching.
-      .filter((entry): entry is LiveSlot => entry !== undefined)
+    const requests = [...this.pending.entries()];
+    this.pending.clear();
+
+    const batch: LiveSlot[] = [];
+    /** Shortest wait among the ids put back into `pending`, in ms. */
+    let retryIn = Infinity;
+
+    const defer = (id: string, requestedAt: number, waitMs: number) => {
+      this.pending.set(id, requestedAt);
+      retryIn = Math.min(retryIn, waitMs);
+    };
+
+    for (const [id, requestedAt] of requests) {
+      // Expiry — applied before the guards so that an id blocked for this long by
+      // any of them stops re-arming the timer.
+      if (now - requestedAt >= GamService.MAX_DEFER_MS) continue;
+
+      const entry = this.live.get(id);
+
+      if (!entry) {
+        // Guard 2 — no GPT slot yet. Still claimed means its `defineSlot` has not
+        // drained out of the command queue, so hold it; otherwise the container
+        // unmounted during the debounce and a remount will fetch its own creative.
+        if (this.claimed.has(id)) defer(id, requestedAt, GamService.REFRESH_DEBOUNCE_MS);
+        continue;
+      }
+
       // Guard 3 — hidden containers. Desktop slots stay mounted but
       // `display: none` on mobile; refreshing them would buy impressions with
       // zero chance of being viewed. A Heavy-Ad collapse is the one exception:
       // it is also `display: none`, but a new creative is what un-collapses it.
-      .filter(entry => this._isVisible(entry.el) || this.collapsed.has(entry.id))
-      // Guard 4 — per-slot rate floor, against rapid pagination clicking.
-      .filter(entry => now - entry.lastRefreshedAt >= GamService.MIN_REFRESH_INTERVAL_MS);
+      // Dropped rather than deferred: nothing on a timer un-hides a container, so
+      // the next content change is the right thing to reconsider it.
+      if (!this._isVisible(entry.el) && !this.collapsed.has(id)) continue;
+
+      // Guard 4a — the slot's own fetch already answers this request. A request
+      // stamped at or before the moment the slot last went to the network asked
+      // for content that fetch was already getting.
+      //
+      // This is what keeps initial load quiet. `selectPage()` requests a refresh
+      // while the containers are still registering, and the `defineSlot` +
+      // `display()` that follows fetches exactly the content that request was
+      // about. The old code dropped it as a side effect of the rate floor;
+      // deferring turned it into a duplicate ad request for identical content five
+      // seconds after the first, on every single page load — measured as
+      // refreshCalls=2 where the suite expects 1.
+      if (requestedAt <= entry.lastRefreshedAt) continue;
+
+      // Guard 4b — per-slot rate floor, against rapid pagination clicking. Unlike
+      // 4a the content genuinely moved on after the last fetch, so the request is
+      // held for exactly the remaining cooldown rather than discarded.
+      const sinceRefresh = now - entry.lastRefreshedAt;
+      if (sinceRefresh < GamService.MIN_REFRESH_INTERVAL_MS) {
+        defer(id, requestedAt, GamService.MIN_REFRESH_INTERVAL_MS - sinceRefresh);
+        continue;
+      }
+
+      batch.push(entry);
+    }
+
+    if (retryIn !== Infinity) {
+      this.refreshTimer = setTimeout(() => this._flush(), retryIn);
+    }
 
     if (batch.length === 0) return;
 
@@ -369,6 +501,28 @@ export class GamService implements OnDestroy {
       // caps, competitive exclusions and roadblocks are evaluated fresh.
       gt.pubads().refresh(live.map(entry => entry.gptSlot), { changeCorrelator: true });
     });
+  }
+
+  /**
+   * Re-arm the flush when the tab comes back to the foreground, once.
+   *
+   * Guard 1 leaves the batch in `pending` rather than discarding it, so without
+   * this there would be nothing to fire it: the reader returns to a tab whose
+   * content changed before they left and sees the creative from before the
+   * change, with no further navigation to trigger a refresh.
+   */
+  private _ensureVisibilityListener(): void {
+    if (this.visibilityCleanup) return;
+
+    const onVisibilityChange = () => {
+      if (this.document.hidden || this.pending.size === 0) return;
+      if (this.refreshTimer !== null) clearTimeout(this.refreshTimer);
+      this.refreshTimer = setTimeout(() => this._flush(), GamService.REFRESH_DEBOUNCE_MS);
+    };
+
+    this.document.addEventListener('visibilitychange', onVisibilityChange);
+    this.visibilityCleanup =
+      () => this.document.removeEventListener('visibilitychange', onVisibilityChange);
   }
 
   /**
