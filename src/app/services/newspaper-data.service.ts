@@ -209,9 +209,24 @@ export interface ServerDataBackupSummary {
   index: number;
   createdAt: string;
   editionCount: number;
-  pageCount: number;
-  sectionCount: number;
+  /**
+   * null when the server did not compute this.
+   *
+   * Current backups store the blob compressed and deliberately skip counting
+   * pages and sections, because counting means deserializing 30-50 MB. The
+   * server reports that as null rather than the -1 sentinel it stores, so a
+   * caller renders "—" instead of a negative total.
+   */
+  pageCount: number | null;
+  sectionCount: number | null;
   latestDates: string[];
+  /**
+   * False when the entry holds no payload and restoring from it would produce
+   * nothing — see the gzcompress-failure bug fixed in 4268974f. Such an entry
+   * still lists with its original metadata, so this is the only thing that
+   * distinguishes it from a healthy one.
+   */
+  restorable: boolean;
 }
 
 export interface SaveDataOptions {

@@ -2653,17 +2653,57 @@ HTACCESS;
   }
 
   private function backup_summary(array $backup, int $index): array {
-    // New compressed format: summary fields are pre-computed and stored inline
-    // alongside the data_gz blob.  Return them directly — no decompression
-    // needed, keeping the list-backups endpoint fast and memory-efficient.
-    if (isset($backup['data_gz'])) {
+    // Which payload key an entry carries is what identifies its format:
+    //   data_gz_serial  current  — gzip of the PHP-serialized blob
+    //   data_serial     current  — uncompressed, when zlib is unavailable
+    //   data_gz         earlier  — gzip of JSON
+    //   data            legacy   — the blob inline, as an array
+    //
+    // This used to test isset($backup['data_gz']) alone, so every backup written
+    // since the move to data_gz_serial fell through to the legacy branch below,
+    // looked for a ['data'] array that is not there, and reported
+    // editionCount/pageCount/sectionCount as 0. Every current backup listed as
+    // empty, which also meant an entry whose payload really was missing looked
+    // exactly like a healthy one.
+    //
+    // array_key_exists, not isset: a backup written by the gzcompress-failure
+    // path fixed in 4268974f holds data_serial => null, and isset() is false for
+    // a null value. Using isset here would send those entries down the legacy
+    // branch too — the very entries that most need to be reported accurately.
+    $payloadKey = null;
+    foreach (['data_gz_serial', 'data_serial', 'data_gz'] as $key) {
+      if (array_key_exists($key, $backup)) {
+        $payloadKey = $key;
+        break;
+      }
+    }
+
+    // Whether this entry can actually be restored from. A null or empty payload
+    // means the row exists but holds nothing; without this the admin list cannot
+    // tell such an entry apart from a healthy one.
+    $restorable = $payloadKey !== null
+      ? ($backup[$payloadKey] !== null && $backup[$payloadKey] !== '')
+      : (isset($backup['data']) && is_array($backup['data']) && $backup['data'] !== []);
+
+    if ($payloadKey !== null) {
+      // Summary fields are pre-computed and stored inline beside the payload, so
+      // they are returned directly — no decompression, which is what keeps this
+      // endpoint fast and memory-safe against a 30-50 MB blob.
+      //
+      // pageCount and sectionCount are deliberately stored as -1 by
+      // snapshot_current_data_before_save(), which does not count them precisely
+      // to avoid deserializing the blob. Surfacing -1 would have the UI render a
+      // negative total, so "not computed" is reported as null.
+      $computed = static fn($v) => ($v === null || (int) $v < 0) ? null : (int) $v;
+
       return [
         'index'        => $index,
         'createdAt'    => (string) ($backup['createdAt'] ?? ''),
         'editionCount' => (int)    ($backup['editionCount'] ?? 0),
-        'pageCount'    => (int)    ($backup['pageCount']    ?? 0),
-        'sectionCount' => (int)    ($backup['sectionCount'] ?? 0),
+        'pageCount'    => $computed($backup['pageCount']    ?? null),
+        'sectionCount' => $computed($backup['sectionCount'] ?? null),
         'latestDates'  => is_array($backup['latestDates'] ?? null) ? $backup['latestDates'] : [],
+        'restorable'   => $restorable,
       ];
     }
 
@@ -2685,6 +2725,7 @@ HTACCESS;
       'pageCount'    => $this->count_pages($data),
       'sectionCount' => $this->count_sections($data),
       'latestDates'  => array_slice($dates, 0, 10),
+      'restorable'   => $restorable,
     ];
   }
 
