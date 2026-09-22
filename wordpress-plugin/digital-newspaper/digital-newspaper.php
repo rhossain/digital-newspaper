@@ -3254,7 +3254,7 @@ HTACCESS;
     ]);
 
     // GET /ads/config — public endpoint returning GAM slot configuration for
-    // the Angular app. Returns { enabled: bool, slots: [...] }.
+    // the Angular app. Returns { enabled: bool, no_fill_retries: int, slots: [...] }.
     // POST /ads/config — admin-only endpoint to update the enabled flag.
     register_rest_route('digital-newspaper/v1', '/ads/config', [
       [
