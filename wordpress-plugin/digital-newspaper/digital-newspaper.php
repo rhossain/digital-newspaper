@@ -642,10 +642,20 @@ class Digital_Newspaper_API {
       // panels produced duplicate IDs and a double display() call.
       // Both slots share the same ad unit path — GAM serves the same unit
       // into two different containers, which is valid and common practice.
+      // The Angular app keeps the image and text modals mutually exclusive so
+      // the two are never defined into one single-request call, where they would
+      // compete for this unit's inventory.
+      //
+      // The rectangle sizes were added after measurement: this unit was
+      // banner-only and returned empty far more often than
+      // TDSEV3_Desktop_Post_Middle-01, which carries [300,250] and [336,280] and
+      // fills reliably. Declaring them here only widens the line items the slot
+      // is eligible for — it cannot serve a size the network has not booked — so
+      // the change is inert if no rectangle inventory exists on this unit.
       [
         'id'        => 'desktop_post_top_image',
         'unit'      => '/22062727803/TDSEV3_Desktop_Post_Top-01',
-        'sizes'     => [[320, 100], [300, 100], [728, 90], [468, 60]],
+        'sizes'     => [[320, 100], [300, 100], [728, 90], [468, 60], [300, 250], [336, 280]],
         'div'       => 'div-gpt-ad-1781518880480-0',
         'min_width' => 300,
         'min_height'=> 60,
@@ -653,7 +663,7 @@ class Digital_Newspaper_API {
       [
         'id'        => 'desktop_post_top_text',
         'unit'      => '/22062727803/TDSEV3_Desktop_Post_Top-01',
-        'sizes'     => [[320, 100], [300, 100], [728, 90], [468, 60]],
+        'sizes'     => [[320, 100], [300, 100], [728, 90], [468, 60], [300, 250], [336, 280]],
         'div'       => 'div-gpt-ad-1781518880480-1',
         'min_width' => 300,
         'min_height'=> 60,
@@ -3288,9 +3298,28 @@ HTACCESS;
     $enabled = (bool) get_option(self::OPTION_GAM_ENABLED, false);
 
     return new WP_REST_Response([
-      'enabled' => $enabled,
-      'slots'   => $this->gam_ad_slots(),
+      'enabled'          => $enabled,
+      'no_fill_retries'  => $this->gam_no_fill_retries(),
+      'slots'            => $this->gam_ad_slots(),
     ], 200);
+  }
+
+  /**
+   * How many times a slot may re-request an ad after GAM answered it empty.
+   *
+   * A dial rather than a client constant because it is a network-policy call,
+   * not an app one: retries cost ad requests and move the request/fill ratio on
+   * the affected units, and the right number depends on how the network is
+   * booked. Changing it takes a filter, not a rebuild:
+   *
+   *   add_filter('digital_newspaper_gam_no_fill_retries', fn() => 0);
+   *
+   * 0 disables retries entirely. Clamped to 0–5 so a bad filter cannot turn a
+   * slot into a request loop.
+   */
+  private function gam_no_fill_retries(): int {
+    $retries = (int) apply_filters('digital_newspaper_gam_no_fill_retries', 2);
+    return max(0, min(5, $retries));
   }
 
   /**
@@ -3319,8 +3348,9 @@ HTACCESS;
     }
 
     return new WP_REST_Response([
-      'enabled' => $enabled,
-      'slots'   => $this->gam_ad_slots(), // now reflects updated per-slot states
+      'enabled'          => $enabled,
+      'no_fill_retries'  => $this->gam_no_fill_retries(),
+      'slots'            => $this->gam_ad_slots(), // now reflects updated per-slot states
     ], 200);
   }
 

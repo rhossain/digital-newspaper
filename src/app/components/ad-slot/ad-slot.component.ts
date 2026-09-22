@@ -40,6 +40,10 @@ import { GamService } from '../../services/gam.service';
  *   slots (id starts with 'mobile_') only below it. Enforced twice: the CSS hides
  *   the wrong-viewport slot, and viewportAllows() stops it being defined in GPT at
  *   all, so it buys no impression a reader cannot see.
+ * - An empty response collapses the slot rather than leaving GPT's 0-height
+ *   container inside a box still holding min-height open, and retries as many
+ *   times as /ads/config allows — see _onNoFill(). A budget of 0 collapses
+ *   without retrying.
  * - SSR-safe: registration is guarded by isPlatformBrowser().
  * - Hidden when global GAM is off OR when the individual slot is disabled.
  */
@@ -53,7 +57,7 @@ import { GamService } from '../../services/gam.service';
   host: {
     '[class.dn-ad--desktop]': 'isDesktop()',
     '[class.dn-ad--mobile]':  'isMobile()',
-    '[class.dn-ad--hidden]':  '!slot() || !slot()!.enabled || removedByBrowser()',
+    '[class.dn-ad--hidden]':  '!slot() || !slot()!.enabled || removedByBrowser() || noFill()',
   },
 })
 export class AdSlotComponent implements OnDestroy {
@@ -67,12 +71,32 @@ export class AdSlotComponent implements OnDestroy {
   /** Must match the `min-width: 768px` breakpoint in ad-slot.component.css. */
   private static readonly DESKTOP_MIN_WIDTH_PX = 768;
 
+  /**
+   * Backoff before each successive retry of a slot GAM answered empty.
+   *
+   * How many of these are used comes from the server
+   * (`AdService.noFillRetries`) because the right number is a network-policy
+   * call; this array only fixes the *spacing*, and its length is the hard
+   * ceiling. The last value repeats if the budget ever exceeds it.
+   *
+   * Spaced deliberately. An empty response is usually demand, not a glitch:
+   * per-user frequency caps on a unit return empty for a while and then start
+   * filling again, which is why a couple of spaced retries recover a real
+   * fraction of the blanks while a tight loop recovers nothing and looks to GAM
+   * like a slot refreshing itself. The first wait clears the service's own 5 s
+   * rate floor with room to spare, so a retry is never merely deferred into it.
+   */
+  private static readonly NO_FILL_BACKOFF_MS = [8_000, 20_000, 45_000, 90_000, 180_000];
+
   /** Stable slot identifier matching the WordPress gam_ad_slots() id field. */
   readonly slotId = input.required<string>();
 
   protected readonly adService = inject(AdService);
   private  readonly gam        = inject(GamService);
   private  readonly platformId = inject(PLATFORM_ID);
+  /** The `<app-ad-slot>` host itself — GamService needs it to tell its own
+   *  collapse apart from a container hidden by an ancestor. */
+  private  readonly hostRef    = inject<ElementRef<HTMLElement>>(ElementRef);
 
   /**
    * Resolved slot definition (undefined while AdService is loading).
@@ -146,6 +170,23 @@ export class AdSlotComponent implements OnDestroy {
    */
   readonly removedByBrowser = signal(false);
 
+  /**
+   * True when GAM answered this slot's last request with no creative.
+   *
+   * Collapses the host through the same `dn-ad--hidden` binding as a Heavy-Ad
+   * removal, because the reader sees the same thing either way: GPT leaves a
+   * 0-height container behind on an empty response, inside a box still holding
+   * `min-height` plus the container's padding open. That gap is what gets
+   * reported as "the ad failed to load".
+   */
+  readonly noFill = signal(false);
+
+  /** Retries already spent on the current registration; indexes NO_FILL_BACKOFF_MS. */
+  private _noFillAttempts = 0;
+
+  /** Pending no-fill retry, or undefined when none is scheduled. */
+  private _retryTimer?: ReturnType<typeof setTimeout>;
+
   constructor() {
     if (isPlatformBrowser(this.platformId)) {
       const mq = window.matchMedia(`(min-width: ${AdSlotComponent.DESKTOP_MIN_WIDTH_PX}px)`);
@@ -183,17 +224,36 @@ export class AdSlotComponent implements OnDestroy {
 
       this._registeredId = slot.id;
 
-      // Recover from a Heavy-Ad collapse. GPT renders a new creative into this
-      // same container on every refresh, but the collapse is latched and its
-      // observer disconnected, so without this the slot would stay hidden for the
-      // rest of the session and refresh into a box nobody can see.
-      this.gam.onRender(slot.id, () => {
+      // A fresh container gets a fresh allowance: this mount's `display()` is a
+      // new request, and the empties the previous one collected say nothing
+      // about it.
+      this._clearRetry();
+      this._noFillAttempts = 0;
+      this.noFill.set(false);
+
+      // slotRenderEnded is the only reliable word on what GPT actually put in
+      // this container, and both collapse paths hang off it. An empty response
+      // collapses the slot and schedules a retry; a creative lifts whichever
+      // collapse was latched — Heavy Ad or no-fill — since GPT renders into this
+      // same container on every refresh and nothing else would ever un-hide it.
+      this.gam.onRender(slot.id, ev => {
+        if (ev.isEmpty) {
+          this._onNoFill(slot.id);
+          return;
+        }
+
+        // A creative arrived. Clear both collapse latches — whichever one hid
+        // this slot, the new ad is what brings it back — and re-arm the
+        // observer against the iframe GPT has just built.
+        this._clearRetry();
+        this._noFillAttempts = 0;
+        this.noFill.set(false);
         this.removedByBrowser.set(false);
         this.gam.setCollapsed(slot.id, false);
         this._observeForHeavyAdRemoval(container.nativeElement);
       });
 
-      this.gam.register(slot, container.nativeElement);
+      this.gam.register(slot, container.nativeElement, this.hostRef.nativeElement);
 
       // Watch for Chrome's Heavy Ad Intervention, which replaces the ad iframe
       // with an intervention notice element and leaves the container visible.
@@ -210,6 +270,10 @@ export class AdSlotComponent implements OnDestroy {
     this._cleanupObserver?.();
     this._cleanupObserver = undefined;
 
+    this._clearRetry();
+    this._noFillAttempts = 0;
+    this.noFill.set(false);
+
     if (this._registeredId) {
       this.gam.offRender(this._registeredId);
       this.gam.unregister(this._registeredId);
@@ -222,6 +286,48 @@ export class AdSlotComponent implements OnDestroy {
   ngOnDestroy(): void {
     this._cleanupViewport?.();
     this._release();
+  }
+
+  /**
+   * Handle an empty response: collapse the slot now, then ask for another ad if
+   * the server's retry budget still allows one.
+   *
+   * Collapsing before the retries rather than after them is deliberate. Leaving
+   * the gap open for the ~28 s the two attempts take would show the reader the
+   * exact blank this is meant to remove, and a retry that fills un-collapses the
+   * slot the moment its render ends — so hiding early costs nothing and hides
+   * the whole failure when it does not.
+   *
+   * `setCollapsed` is what makes the retry reachable at all: the slot is
+   * `display: none` from this point, and guard 3 in GamService drops hidden
+   * slots from every refresh batch unless they are flagged here.
+   *
+   * Once the attempts are spent — or immediately, when the budget is 0 — the
+   * slot stays collapsed *and* stays flagged, so the next navigation's refresh
+   * still reconsiders it.
+   */
+  private _onNoFill(id: string): void {
+    this._clearRetry();
+    this.noFill.set(true);
+    this.gam.setCollapsed(id, true);
+
+    if (this._noFillAttempts >= this.adService.noFillRetries()) return;
+
+    const backoff = AdSlotComponent.NO_FILL_BACKOFF_MS;
+    const delay = backoff[Math.min(this._noFillAttempts, backoff.length - 1)];
+
+    this._noFillAttempts++;
+    this._retryTimer = setTimeout(() => {
+      this._retryTimer = undefined;
+      this.gam.requestRefill(id);
+    }, delay);
+  }
+
+  /** Cancels a scheduled no-fill retry; safe when none is pending. */
+  private _clearRetry(): void {
+    if (this._retryTimer === undefined) return;
+    clearTimeout(this._retryTimer);
+    this._retryTimer = undefined;
   }
 
   /**

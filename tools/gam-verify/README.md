@@ -34,6 +34,12 @@ Content comes from the **production** WordPress backend, because the staging hos
 - **Ad requests are answered locally by default**, so a run costs no live impressions.
   Pass `noBill: false` on a case that genuinely needs a real creative — that spends real
   impressions on the publisher's network, so only do it deliberately.
+- Because those local answers are empty, **every slot renders no-fill in every run**. The
+  fixture therefore sets `no_fill_retries: 0`: with the production default of 2, the
+  §8.2 retry would fire for every slot in every case and no case could assert a refresh
+  count again. `no-fill-retry` turns the budget back on for itself, which is also what
+  makes that case deterministic — the one place the harness's permanent no-fill is the
+  point rather than a nuisance.
 
 Note that dev `wpBaseUrl` points at production too, so `ng serve` and the local admin
 panel already edit the live site. Unrelated to this suite, but worth knowing.
@@ -44,6 +50,21 @@ default run reads content from **production**, not staging. Build with
 `--configuration staging` first if you want a run to read from `nepaper` instead.
 (`src/app/config.ts`'s header comment claims the production build points at `nepaper`;
 `environment.prod.ts` says `epaper`. The environment file is the one that takes effect.)
+
+## Measuring fill
+
+`run.js` can never measure fill — it answers every ad request locally. When the question is
+"do these slots actually get creatives", use:
+
+```bash
+node tools/gam-verify/measure-fill.js --spend-impressions [opens]
+    --legacy-top-sizes   # Post_Top on its pre-§8.4 sizes, for an A/B
+    --no-preview         # right-panel slots off, to test contention
+```
+
+**It bills real impressions to the publisher's network** — hence the mandatory flag, and why
+it is not a case and not in `CASES`. It reports per-slot renders, fills and creative sizes
+from `slotRenderEnded`. See §8.6 for what the first three runs found.
 
 ## Verdicts
 
@@ -58,9 +79,10 @@ codebase controls.
 
 That distinction matters most for the modal. `modal-reopen` proves the slot is re-created and
 re-fetched on every open, which is the defect RC-3 described. It does **not** prove an ad
-appears: `desktop_post_top_image` and `mobile_post_top` are banner-only units with no line
-items booked, so they return empty however correct the lifecycle is. See §1.7 — that half is
-a GAM inventory task, not a code one.
+appears: `desktop_post_top_image` and `mobile_post_top` sit on units that return empty far
+more often than the rest, however correct the lifecycle is. See §1.7 and Phase 8 — that half
+is a GAM inventory task, not a code one. What the code owns is what happens *after* an empty
+response, and `no-fill-retry` asserts that.
 
 ## Cases
 
@@ -70,16 +92,18 @@ a GAM inventory task, not a code one.
 | `pagination` | Each page change refreshes the persistent right-rail slot exactly once |
 | `burst` | Six rapid clicks coalesce into at most one refresh |
 | `hidden-tab` | `document.hidden` suppresses refresh entirely (GAM policy) |
-| `mobile-placement` | The two mobile slots are the only visible ones on mobile, once each, no duplicate divs |
+| `mobile-placement` | The two mobile slots are the only ones **placed** on mobile, once each, no duplicate divs. "Placed" means visible with the §8.1 no-fill collapse lifted — see `PLACEMENT` |
 | `mobile-no-refresh` | A hidden slot is never refreshed |
 | `no-hidden-define` | A slot the viewport cannot show is never defined or fetched |
 | `poll-gate` | The 5-minute content poll does **not** refresh ads — no user action, no refresh |
 | `deferred-refresh` | A navigation blocked by the 5 s floor is **held and fired**, not discarded |
 | `mobile-toggle` | The modal's mobile image/text toggle refreshes `mobile_post_top`, and leaves the now-hidden `mobile_post_middle` alone |
 | `modal-reopen` | RC-3: opening an article, closing it and opening another defines, displays **and destroys** each time, and every open costs a real ad request |
+| `no-fill-retry` | §8.1/§8.2: an empty response collapses the slot to zero height, retries exactly as many times as `/ads/config` allows, spaced not bursted, then stops |
 
 `poll-gate` waits out the real 300 s poll, so it takes about six minutes. It also asserts
 that the poll actually fired and reloaded, so it cannot pass by the poll never running.
+`no-fill-retry` waits out both retry backoffs and takes about a minute.
 
 ## Adding a case
 

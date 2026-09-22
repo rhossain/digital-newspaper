@@ -1559,13 +1559,362 @@ a full run as `sections=0`, `modal opened=false`, every mobile assertion 0/2.
 
 ---
 
+## Phase 8 — Empty responses: collapse them, and retry within bounds
+
+Reported after Phase 7 shipped: `desktop_post_top_image` and `desktop_post_middle` "fail to
+load most of the time, then suddenly appear." The DOM supplied with the report settles what
+was happening:
+
+```html
+<div class="dn-ad-container" id="div-gpt-ad-1781518880480-0"
+     data-google-query-id="CPqHm_78gZcDFWOQOAgdEgIrNw">
+  <div id="google_ads_iframe_/22062727803/TDSEV3_Desktop_Post_Top-01_0__container__"
+       style="border: 0pt; width: 320px; height: 0px;"></div>
+</div>
+```
+
+`data-google-query-id` is written by GPT **from the response**, so the request went out and
+was answered — this is not a blocked `gpt.js`, an ad blocker, or a second `display()` being
+swallowed, and the Phase 1 lifecycle is intact. The `__container__` is present at the width
+of each slot's first declared size (320 for `Post_Top`, 300 for `Post_Middle`) with
+`height: 0px` and no iframe child. That is GPT's empty render: `slotRenderEnded` with
+`isEmpty: true`.
+
+So the ads were not failing to load. They were loading empty, which §1.7 and the extended
+sampling above had already measured on these very units — including the detail that explains
+"suddenly appears": fill on `Desktop_Post_Top-01` fell from 3/4 early in a session to 0/3
+after ~20 open/close cycles, then recovered on a fresh page view. Per-user frequency capping,
+doing its job, against a modal that issues a genuine new ad request on every open.
+
+**Fill itself is not a code outcome, and no change here can promise one.** What the code can
+do is stop competing with itself, widen the demand a slot is eligible for, and stop showing
+the reader the hole when the answer is still empty. All three are below.
+
+### 8.1 The blank the reader actually sees — **fixed**
+
+Nothing collapsed an empty slot. GPT's 0-height container sat inside a `.dn-ad-container`
+still holding `min-width: 300px; min-height: 60px` plus 8 px of padding open, so a no-fill
+left a visible gap that reads exactly like a broken ad.
+
+`AdSlotComponent` now branches on `ev.isEmpty` in the `slotRenderEnded` callback it already
+had for Heavy-Ad recovery, and collapses through the same `dn-ad--hidden` host binding. No
+new GPT surface: `SlotRenderEvent.isEmpty` was already declared in `GamService`.
+
+Deliberately **not** `pubads().collapseEmptyDivs()`. GPT's own collapse would hide the
+container without telling this app, and guard 3 would then read the slot as "not worth
+refreshing" and drop it from every future batch — the collapse would be permanent for the
+session. Routing it through `setCollapsed()` keeps the slot refreshable while hidden, which
+is the whole point of that set.
+
+### 8.2 Bounded retry on empty — **added**
+
+Backoffs `[8s, 20s, 45s, 90s, 180s]`, of which the first *n* are used. Two retries per mount
+by default; then the slot stays collapsed until the next navigation reconsiders it. The first
+wait clears the service's own 5 s rate floor with room to spare, so a retry is never merely
+deferred into it.
+
+New `GamService.requestRefill(id)` rather than a `requestRefresh` call. A retry is not a
+content change: the key-values on the slot are still correct, and a caller that knows only
+"this slot came back empty" must not re-stamp `targeting` for the rest of the batch. It joins
+the same `pending` map and passes the same guards, so it is still dropped for an unmounted
+container and still held while the tab is backgrounded.
+
+Product decision, taken explicitly — see the guardrail note above for why this is narrower
+than it looks.
+
+**The budget is server-side**, not a client constant: `no_fill_retries` on `/ads/config`,
+from `gam_no_fill_retries()` in the plugin, default 2, clamped 0–5 on both sides. How hard to
+chase a fill is a network-policy call that depends on how the units are booked, and it should
+not need a rebuild:
+
+```php
+add_filter('digital_newspaper_gam_no_fill_retries', fn() => 0);   // retries off
+```
+
+0 collapses on empty without retrying — §8.1 alone. A backend that predates the field falls
+back to 2 rather than to 0, so an un-upgraded plugin keeps the behaviour rather than silently
+losing it.
+
+### 8.2a The suite could no longer assert a refresh count — **resolved by the same dial**
+
+`tools/gam-verify` answers every ad request locally so a run costs no impressions, which
+means **every slot renders empty in every run**. With retries on by default, `pagination`
+went to REVIEW immediately:
+
+```
+page 2: refreshCalls=2 adReqs=4      (expected 1)
+one refresh per navigation=false
+```
+
+That is not a defect in the app — it is the retry doing exactly its job in an environment
+that never fills. But it makes every lifecycle assertion fill-dependent, which is precisely
+what the README says the suite avoids.
+
+The fixture now sets `no_fill_retries: 0`, so every pre-existing case is deterministic again
+and asserts the same contract it always did (`pagination` back to `refreshCalls=1,2,3`,
+PASS). One new case, `no-fill-retry`, sets the budget back to 2 for itself — and there the
+harness's permanent no-fill is the point rather than a nuisance, which makes the retry
+contract fully deterministic to assert:
+
+```
+sample 1: retries=1  host hidden=true  host height=0px
+sample 2: retries=2  host hidden=true  host height=0px
+sample 3: retries=2  host hidden=true  host height=0px
+```
+
+Spaced rather than bursted, stopped at the budget, and collapsed to zero height throughout —
+§8.1 and §8.2 in one case.
+
+### 8.2b `mobile-placement` was measuring fill, and one of its checks went vacuous
+
+Same root as §8.2a, one level subtler. The case asserted the two mobile slots were *visible*
+on a 390 px viewport; with every slot rendering empty, §8.1 collapsed all of them:
+
+```
+mobile hosts=2/2 visible=0/2 GPT-defined=2/2
+```
+
+The failing half was obvious. The dangerous half was not: `desktop hosts visible on
+mobile=[] (expect [])` still **passed** — because the desktop slots were collapsed too. The
+check Phase 5 added to catch unviewable desktop slots had quietly become unfalsifiable.
+
+The case now measures *placement* rather than visibility, via a `PLACEMENT` evaluate that
+drops `dn-ad--hidden` on each host, measures, and puts it back. That hands the decision to
+the responsive rules, which is what the case actually asks. Deliberately **not** an inline
+`display` override: that would beat `:host(.dn-ad--desktop)` as well and report a desktop
+slot as placed on a phone. The discrimination is visible in the output:
+
+```
+mobile_post_top   ... placed=true
+desktop_post_middle ... placed=false
+desktop hosts placed on mobile=[] (expect [])
+```
+
+### 8.3 The two `Post_Top` slots competed with each other — **fixed**
+
+`desktop_post_top_image` and `desktop_post_top_text` share the ad unit path
+`TDSEV3_Desktop_Post_Top-01` (item 2 of the Phase 6 gate). Nothing made `showImageModal` and
+`showContentModal` mutually exclusive, so both could mount, both get defined into one
+single-request call, and compete for that unit's inventory — a roadblock or competitive
+exclusion then fills one and leaves the other empty.
+
+`openContentModal()`, `openImageModal()`, `openLinkedSectionImage()` and the image-error
+fallback now each clear the other flag. **No reachable flow changes:** all four openers are
+reached from the right panel, which every modal covers, so the two were never observed open
+together. This closes the gap rather than altering behaviour.
+
+### 8.4 `Post_Top` was banner-only — **sizes widened**
+
+`[[320,100],[300,100],[728,90],[468,60]]` — no rectangle, while
+`TDSEV3_Desktop_Post_Middle-01` carries `[300,250]` and `[336,280]` and fills reliably.
+Both `desktop_post_top_*` slots now declare the two rectangles as well, in
+`gam_ad_slots()` and in `tools/gam-verify/fixtures/ads-config.json`.
+
+This **only widens eligibility** — a slot cannot serve a size the network has not booked, so
+the change is inert if no rectangle inventory exists on this unit. It does mean a 250 px
+creative can land in a slot laid out for 60 px, so the modal shifts more when it fills.
+Item 1 of the Phase 6 gate (booking creatives against these sizes) still belongs to the
+network owner and is not closed by this.
+
+### 8.5 Defect found by the suite: the collapse exemption was too wide
+
+*(Found first, during implementation; numbered after the §8.2a/§8.2b harness work because
+that is the order the write-up reads in.)*
+
+First cut had guard 3 exempt **every** collapsed slot. `mobile-toggle` went to REVIEW
+immediately:
+
+```
+batch=["1781520617033-0","1781521397082-0"]
+mobile_post_top refreshed=true   mobile_post_middle (now hidden) left alone=false
+```
+
+Because the harness answers ad requests locally, every slot renders empty, so every slot was
+flagged collapsed — including `mobile_post_middle`, which the modal's text view hides for an
+entirely unrelated reason. A slot can be collapsed *and* independently out of view, and
+refreshing it there buys exactly the unviewable impression Phase 5 removed.
+
+`_isVisible(el)` cannot tell the two apart, so guard 3 now calls `_isRefreshable(entry)`,
+which lifts this app's own collapse for the measurement: an inline `display` on the
+`<app-ad-slot>` host outranks the `:host(.dn-ad--hidden)` rule, so the slot lays out as it
+would with an ad in it. A container still hidden after that is hidden by an ancestor, and no
+creative will change that. `LiveSlot` carries `hostEl` for this; `register()` takes it as a
+third argument.
+
+After the fix: `batch=["1781520617033-0"]` — the top slot alone. PASS.
+
+---
+
+## §8.6 Measured live: the modal slots are starved by the right panel, not unbooked
+
+`tools/gam-verify/measure-fill.js` (new; `--spend-impressions` mandatory, never in `CASES`)
+drives 16 article-modal open/close cycles with `noBill: false`, so every request reaches GAM,
+and reports per-slot fill from `slotRenderEnded`. Three runs, ~130 real ad requests each.
+
+**Run 1 — as shipped after §8.1–§8.4**
+
+```
+slot                          renders  filled  fill%   creative sizes
+TDSEV3_Desktop_Page_Right-01       1       1   100%   336x280×1
+TDSEV3_Desktop_Post_Middle-01     16       0     0%   —
+TDSEV3_Desktop_Post_Top-01        16       0     0%   —
+desktop_post_preview_middle       30      30   100%   300x250×29 320x100×1
+desktop_post_preview_top          30       0     0%   —
+```
+
+**Run 2 — identical, but `Post_Top` reverted to its pre-§8.4 banner-only sizes**
+
+Byte-identical verdicts. **§8.4 neither helped nor hurt**: these units return empty whatever
+sizes they declare. The widening stays — it costs nothing and can only add eligibility — but
+it is not the lever.
+
+**Run 3 — identical to run 1, but the two preview slots disabled**
+
+```
+TDSEV3_Desktop_Post_Middle-01     14      14   100%   300x250×14
+TDSEV3_Desktop_Post_Top-01        16       0     0%   —
+```
+
+`desktop_post_middle` goes **0% → 100%** purely by removing the right panel's slots from the
+page. Nothing else changed.
+
+### What this means
+
+The reported symptom was never "no inventory". Demand was there the whole time — run 1 shows
+`preview_middle` taking a 300×250 on 29 of 30 renders while `post_middle`, which declares that
+exact size, took nothing. Two slots wanted the same rectangle demand and the same one won
+every time, 30/30 and 0/16, reproducibly.
+
+That is the §1.7 `preview_top` mechanism again, one level up: a roadblock, a competitive
+exclusion, or a single rectangle line item that can serve once per pageview. `preview_top`
+(0/30, sizes a strict subset of `preview_middle`) and `post_middle` (0/16, rectangles shared
+with `preview_middle`) are the same defect with different victims.
+
+Note what is *not* in doubt: `modal opens that succeeded=16/16`, and both modal slots recorded
+16 renders in every run. The Phase 1 lifecycle is doing exactly its job — every modal open
+issues a real, fresh ad request. The request goes out; the auction hands the creative to the
+slot behind the overlay.
+
+### Still genuinely unbooked
+
+`TDSEV3_Desktop_Post_Top-01` returned 0/16 in **all three runs**, including the one where it
+had no competition. Banner-only demand on this network looks close to absent — `preview_middle`
+took a 320×100 exactly once in 60 renders. That one is an inventory task, unchanged from the
+Phase 6 gate.
+
+### Two ways forward — not yet decided
+
+1. **GAM-side.** Competitive exclusion / roadblock settings and rectangle line-item capacity on
+   network 22062727803. If two slots on one pageview are meant to be fillable simultaneously,
+   this is a trafficking fix and no code change is needed.
+2. **Code-side.** Make each modal open its own pageview, so the modal's slots are not evaluated
+   against an auction the preview slots already won. GPT only allows that via
+   `pubads().disableInitialLoad()` before `enableServices()`, with every first fetch coming
+   from an explicit `refresh(slots, { changeCorrelator: true })` instead of `display()`.
+   That is an architectural change to Phase 1's mount-time `display()` and must be measured the
+   same way before it is believed.
+
+Unmounting the preview slots when the modal opens is **not** on this list: they are already
+defined and have already won the auction by then, so destroying them afterwards cannot return
+inventory the modal request was excluded from.
+
+---
+
+## §8.7 Option 2 — a fresh pageview per mount. Implemented, measured, did **not** fix fill
+
+§8.6 left two candidate fixes. This is the code-side one, built and measured in full.
+
+### What it does
+
+`AdService._bootGpt()` now calls `pubads().disableInitialLoad()` before
+`enableServices()`. `display()` still runs — it is what binds a slot to its div and lets GPT
+render into it — but it no longer fetches. `GamService._scheduleInitialFetch()` sends the
+first request explicitly instead, coalescing every slot that mounted in the same tick into one
+`refresh(slots, { changeCorrelator: true })`.
+
+The correlator was the whole point: a slot mounting mid-session used to inherit the page's
+existing pageview and be judged against an auction the earlier slots had already won. Each
+mount is now its own pageview.
+
+Deliberately **not** routed through `_flush()`. Those guards decide whether a *content change*
+justifies re-requesting an ad, and none apply to a slot that never had one — a first
+impression in a backgrounded tab is an ordinary page load, and holding it behind the 5 s floor
+or the visibility guard would simply lose it. `hidden-tab` now asserts both halves of that:
+`initial fetch at boot=1`, `refreshes caused by 3 paginations=0`.
+
+### The measurement — two runs, same conditions as §8.6
+
+```
+run A   TDSEV3_Desktop_Post_Top-01     16 renders   2 filled   13%   320x100×2
+        TDSEV3_Desktop_Post_Middle-01  16 renders   0 filled    0%
+
+run B   TDSEV3_Desktop_Post_Top-01     16 renders   0 filled    0%
+        TDSEV3_Desktop_Post_Middle-01  16 renders   0 filled    0%
+```
+
+`preview_middle` filled 30/30 in both. **Run A's 13% did not reproduce — it was noise.**
+
+**Verdict: Option 2 does not recover fill.** `post_middle` sits at 0% while the right panel
+takes 300×250 thirty times out of thirty, exactly as before. Giving the modal its own
+correlator changed nothing, which rules out per-pageview roadblocking and competitive
+exclusion as the mechanism — the modal's request is now alone in its own pageview and still
+loses.
+
+Combined with §8.6 run 3 (preview slots disabled → `post_middle` 14/14), what remains is a
+trafficking rule that is not correlator-scoped: line-item priority, delivery caps, or unit
+targeting on network 22062727803. **That is Option 1, and it is the only lever left.** No
+further code change should be attempted against this symptom until someone with GAM access has
+looked at how those line items are booked.
+
+### What it did buy, and the risk it carries
+
+Same 16 cycles, same 16 renders per modal slot, but **94 ad requests instead of 130** — a 28%
+drop with no loss of renders, because the fetch no longer rides on `display()` alongside
+whatever else GPT was doing. Fewer wasted requests is a better request/fill ratio, which is
+the number the network is judged on.
+
+Against that: `display()` alone no longer produces an ad. A mounted container that never
+reaches `_scheduleInitialFetch()` shows **nothing at all**, where before GPT would still have
+fetched. That path is covered — `modal-reopen` asserts every open issues a real ad request,
+`hidden-tab` asserts the boot fetch fires, and `pagination` / `burst` / `deferred-refresh` /
+`no-fill-retry` all still pass — but it is a new single point of failure on a client-critical
+path, and it is the reason keeping this is a judgement call rather than an obvious win.
+
+Reverting is two edits: drop the `disableInitialLoad()` call in `AdService._bootGpt()` and the
+`_scheduleInitialFetch()` call at the end of `GamService.register()`. The suite's baselining
+(§8.7a) would then be harmless but unnecessary.
+
+### §8.7a The suite, again
+
+Making the first fetch a `refresh` broke every case that counted refresh calls from zero.
+`hidden-tab` went to REVIEW at `refreshCalls=1 (expect 0)`. Those cases now baseline after
+boot via `since(snap, base)` and assert *refreshes caused by the action*, which is what they
+always meant.
+
+`no-hidden-define` went to REVIEW for a different reason, and it is worth recording because it
+is the third instance of one mistake: it flagged `mobile_post_top` and `mobile_post_middle` as
+wrong-viewport waste because their hosts were `hidden` — when they were hidden by §8.1's
+no-fill collapse, on the viewport they belong to. Same conflation as §8.2b, same fix via
+`PLACEMENT`. `mobile-no-refresh` carried it too and was corrected with it.
+
+Worth noting: `no-hidden-define` had been passing *vacuously* before. Its earlier green runs
+came from boots that loaded `sections=0`, so no modal ever opened and no mobile slot ever
+mounted. The first boot that actually loaded content is the one that failed it.
+
+---
+
 ## Compliance guardrails — non-negotiable
 
 Google Ad Manager treats mechanical ad refresh as invalid traffic. These hold for the life of
 the codebase, not just this task:
 
 1. **Refresh only on genuine user action**, or on a **≥30 s** dwell timer. Every trigger in
-   Phase 2 is a direct user action.
+   Phase 2 is a direct user action. Phase 8's no-fill retry is the one standing exception,
+   and it is narrow by construction: it only ever re-requests a slot GAM answered **empty**,
+   so it cannot inflate an impression count — there was no impression to inflate. It costs
+   ad requests, not impressions, which moves the request/fill ratio on the affected units
+   and nothing else. Two attempts per mount by default, then it stops, and the budget is a
+   server-side dial that can be set to 0. See §8.2.
 2. **Never** add `setInterval`-driven refresh without a ≥30 s floor.
 3. **Always** bail when `document.hidden`.
 4. Never refresh a slot that is not visible (`isVisible()` guard).
@@ -1574,19 +1923,20 @@ the codebase, not just this task:
 
 ## Files touched, by phase
 
-| File | P1 | P2 | P3 | P4 | P5 | P6 | P7 |
-|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
-| `src/app/services/gam.service.ts` *(new)* | ● | ● | ● | | | | ● |
-| [`src/app/services/ad.service.ts`](src/app/services/ad.service.ts) | ● | | | | | | |
-| [`src/app/components/ad-slot/ad-slot.component.ts`](src/app/components/ad-slot/ad-slot.component.ts) | ● | | ● | | ● | | |
-| [`src/app/newspaper.component.ts`](src/app/newspaper.component.ts) | | ● | | | | ● | ● |
-| `ad-slot.component.css` | | | ● | | | ● | |
-| `article-modal.component.html` | | | | | ● | | |
-| `admin.component.ts` | | | | | ● | | |
-| `tools/gam-verify/` *(new)* | | | | | | ● | ● |
-| `package.json` | | | | | | ● | |
-| [`wordpress-plugin/.../digital-newspaper.php`](wordpress-plugin/digital-newspaper/digital-newspaper.php) | | | | | — | | |
-| `newspaper.component.html` | | | | | — | | ● |
+| File | P1 | P2 | P3 | P4 | P5 | P6 | P7 | P8 |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+| `src/app/services/gam.service.ts` *(new)* | ● | ● | ● | | | | ● | ● |
+| [`src/app/services/ad.service.ts`](src/app/services/ad.service.ts) | ● | | | | | | | ● |
+| `tools/gam-verify/measure-fill.js` *(new)* | | | | | | | | ● |
+| [`src/app/components/ad-slot/ad-slot.component.ts`](src/app/components/ad-slot/ad-slot.component.ts) | ● | | ● | | ● | | | ● |
+| [`src/app/newspaper.component.ts`](src/app/newspaper.component.ts) | | ● | | | | ● | ● | ● |
+| `ad-slot.component.css` | | | ● | | | ● | | — |
+| `article-modal.component.html` | | | | | ● | | | ● |
+| `admin.component.ts` | | | | | ● | | | |
+| `tools/gam-verify/` *(new)* | | | | | | ● | ● | ● |
+| `package.json` | | | | | | ● | | |
+| [`wordpress-plugin/.../digital-newspaper.php`](wordpress-plugin/digital-newspaper/digital-newspaper.php) | | | | | — | | | ● |
+| `newspaper.component.html` | | | | | — | | ● | |
 
 ● changed  — considered and deliberately left alone
 
@@ -1605,6 +1955,12 @@ phase.
 Phase 7's `newspaper.component.html` change is one line: the modal's mobile image/text toggle
 moved from an inline `mobileModalView = $event` to a handler, so the view swap can refresh the
 slot that survives it.
+
+Phase 8 needed **no** CSS: the empty-response collapse reuses the `dn-ad--hidden` host class
+Phase 3 added for Heavy Ads. Its `article-modal.component.html` change is the deletion of one
+now-false sentence — the two modals are mutually exclusive as of §8.3. In `tools/gam-verify/`
+it changed the fixture, added one case (`no-fill-retry`) and reworked `mobile-placement`
+(§8.2b). `mobile-toggle` (§8.5) and `pagination` (§8.2a) caught their defects unmodified.
 
 **Not touched in any phase:** `admin.component.ts` (reads `AdService`'s unchanged public API),
 routing, data services, the image pipeline, i18n, or any existing CSS.

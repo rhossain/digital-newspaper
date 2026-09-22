@@ -45,8 +45,17 @@ interface GoogleTag {
 interface LiveSlot {
   id: string;
   gptSlot: GptSlot;
+  /** The ad container GPT renders into. */
   el: HTMLElement;
+  /** The `<app-ad-slot>` host, which carries this app's own collapse class. */
+  hostEl: HTMLElement;
   lastRefreshedAt: number;
+  /**
+   * Whether this slot's first ad request has gone out. False between
+   * `defineSlot` and `_flushInitialFetch`, which is the only window in which a
+   * live slot has no creative and none on the way.
+   */
+  initialFetchDone: boolean;
 }
 
 /**
@@ -70,6 +79,15 @@ interface LiveSlot {
  * After `destroySlots`, GPT releases the div id, so the next mount can define a
  * genuinely fresh slot and fetch a genuinely new creative.
  *
+ * The fetch itself is this service's too. `AdService` calls GPT's
+ * `disableInitialLoad()`, so `display()` binds a slot to its div but requests
+ * nothing; `_scheduleInitialFetch()` sends the first request explicitly, with a
+ * fresh correlator. That correlator is the reason for the whole arrangement —
+ * measured in §8.6, a slot mounting mid-session inherited the page's existing
+ * pageview and was judged against an auction the earlier slots had already won,
+ * which filled the modal's ad 0 times in 16 while the right panel's identical
+ * 300x250 demand filled 30 in 30.
+ *
  * The service also owns refreshing. Content in this app changes without a
  * document load (pagination, article selection), so a slot that stays mounted
  * would otherwise keep showing the creative it was first given. `requestRefresh`
@@ -90,8 +108,9 @@ export class GamService implements OnDestroy {
 
   /**
    * Per-slot floor between ad requests. Also stops a refresh from landing on top
-   * of a slot's initial fill: `register()` stamps `lastRefreshedAt` at
-   * definition time, so a freshly mounted slot is ineligible for this long.
+   * of a slot's initial fill: `_flushInitialFetch()` stamps `lastRefreshedAt`
+   * when that first request goes out, so a freshly mounted slot is ineligible
+   * for this long.
    */
   private static readonly MIN_REFRESH_INTERVAL_MS = 5000;
 
@@ -151,6 +170,9 @@ export class GamService implements OnDestroy {
 
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
 
+  /** Coalesces the first ad request across every slot mounting in one tick. */
+  private initialFetchTimer: ReturnType<typeof setTimeout> | null = null;
+
   /**
    * Targeting for the content currently on screen, owned here rather than passed
    * through `register()`.
@@ -167,12 +189,15 @@ export class GamService implements OnDestroy {
   private readonly renderListeners = new Map<string, (ev: SlotRenderEvent) => void>();
 
   /**
-   * Slots collapsed by Chrome's Heavy Ad Intervention.
+   * Slots the component has collapsed — by Chrome's Heavy Ad Intervention, or
+   * because GAM answered the last request empty.
    *
    * Tracked here because such a slot is `display: none`, which the visibility
    * guard would otherwise read as "not worth refreshing" — and refreshing is
    * precisely how it recovers. Without this the collapse would be permanent: no
-   * refresh, so no new render, so nothing to un-collapse it.
+   * refresh, so no new render, so nothing to un-collapse it. That applies to
+   * both causes: a no-fill retry is only worth queueing if it can survive
+   * guard 3 while the slot it is trying to fill is hidden.
    */
   private readonly collapsed = new Set<string>();
 
@@ -184,11 +209,11 @@ export class GamService implements OnDestroy {
   private gptRenderListener: ((ev: SlotRenderEvent) => void) | null = null;
 
   /**
-   * Define and display a GPT slot for a container that has just been committed
-   * to the DOM. Safe to call when gpt.js has not finished loading — the work is
-   * queued on `googletag.cmd`.
+   * Define, display and fetch a GPT slot for a container that has just been
+   * committed to the DOM. Safe to call when gpt.js has not finished loading — the
+   * work is queued on `googletag.cmd`.
    */
-  register(def: AdSlot, el: HTMLElement): void {
+  register(def: AdSlot, el: HTMLElement, hostEl: HTMLElement): void {
     if (!isPlatformBrowser(this.platformId)) return;
 
     if (this.claimed.has(def.id)) {
@@ -235,10 +260,67 @@ export class GamService implements OnDestroy {
         id: def.id,
         gptSlot,
         el,
+        hostEl,
         lastRefreshedAt: Date.now(),
+        initialFetchDone: false,
       });
 
+      // Still required — `display()` is what binds the slot to its div and lets
+      // GPT render into it. Since `disableInitialLoad()`, it no longer fetches;
+      // `_scheduleInitialFetch()` below does that.
       gt.display(def.div);
+    });
+
+    this._scheduleInitialFetch();
+  }
+
+  /**
+   * Coalesce the first ad request for every slot that mounted in this tick, and
+   * send it as one `refresh` with a fresh correlator.
+   *
+   * One request per mount *group*, not per slot: the modal mounts two containers
+   * in the same tick and single-request mode is meant to batch them. A timeout of
+   * 0 is enough — Angular commits the whole template synchronously, so every
+   * container in that render has already called `register()` by the time this
+   * runs.
+   *
+   * Deliberately **not** routed through `_flush()`. Those guards exist to decide
+   * whether a *content change* justifies re-requesting an ad, and none of them
+   * apply to a slot that has never had one: a first impression in a backgrounded
+   * tab is an ordinary page load rather than mechanical refresh, and holding it
+   * behind the 5 s rate floor or the visibility guard would simply lose it. This
+   * is the `display()`-time fetch that `disableInitialLoad()` took away, put back
+   * under our control.
+   */
+  private _scheduleInitialFetch(): void {
+    if (this.initialFetchTimer !== null) return;
+    this.initialFetchTimer = setTimeout(() => {
+      this.initialFetchTimer = null;
+      this._flushInitialFetch();
+    }, 0);
+  }
+
+  private _flushInitialFetch(): void {
+    const gt = this._googletag();
+    if (!gt) return;
+
+    gt.cmd.push(() => {
+      // Read `live` inside the queue callback, not outside: the `defineSlot`
+      // calls this batch is waiting on are queued ahead of it, so the map is
+      // only complete once GPT gets here.
+      const batch = [...this.live.values()].filter(entry => !entry.initialFetchDone);
+      if (batch.length === 0) return;
+
+      const now = Date.now();
+      for (const entry of batch) {
+        entry.initialFetchDone = true;
+        entry.lastRefreshedAt = now;
+      }
+
+      // changeCorrelator makes this mount its own pageview — the whole point of
+      // §8.6. Without it these slots would be judged against the auction whatever
+      // mounted before them already won.
+      gt.pubads().refresh(batch.map(entry => entry.gptSlot), { changeCorrelator: true });
     });
   }
 
@@ -319,6 +401,35 @@ export class GamService implements OnDestroy {
   }
 
   /**
+   * Ask for one more ad request for a slot GAM answered empty.
+   *
+   * Separate from `requestRefresh` because a no-fill retry is not a content
+   * change: the key-values already on the slot are still the right ones, and a
+   * caller that knows only "this slot came back empty" has no business
+   * re-stamping `this.targeting` for every other slot in the batch.
+   *
+   * Everything else is shared on purpose. The retry joins the same `pending`
+   * map and passes the same guards, so it is still dropped when the container
+   * has unmounted, still held while the tab is backgrounded, and still batched
+   * with anything else due at that moment rather than firing its own request.
+   *
+   * Ignored for a slot that is not claimed: an empty render for a container
+   * that has since unmounted has nothing to retry into.
+   */
+  requestRefill(id: string): void {
+    if (!isPlatformBrowser(this.platformId)) return;
+    if (!this.claimed.has(id)) return;
+
+    // Leaves an earlier timestamp alone. A content change already queued for
+    // this slot will fetch anyway, which is exactly what the retry wanted, and
+    // re-stamping would push its MAX_DEFER_MS deadline out.
+    if (!this.pending.has(id)) this.pending.set(id, Date.now());
+
+    if (this.refreshTimer !== null) clearTimeout(this.refreshTimer);
+    this.refreshTimer = setTimeout(() => this._flush(), GamService.REFRESH_DEBOUNCE_MS);
+  }
+
+  /**
    * Be told when GPT finishes rendering a slot — the only reliable signal that a
    * slot has a new creative, which is what lets a collapsed slot recover.
    *
@@ -336,8 +447,9 @@ export class GamService implements OnDestroy {
   }
 
   /**
-   * Report that a slot has been collapsed by Chrome's Heavy Ad Intervention (or
-   * has recovered), so the refresh path can keep considering it while hidden.
+   * Report that a slot has been collapsed — by Chrome's Heavy Ad Intervention or
+   * by an empty response — or that it has recovered, so the refresh path can
+   * keep considering it while hidden.
    */
   setCollapsed(id: string, collapsed: boolean): void {
     if (collapsed) this.collapsed.add(id);
@@ -347,6 +459,9 @@ export class GamService implements OnDestroy {
   ngOnDestroy(): void {
     if (this.refreshTimer !== null) clearTimeout(this.refreshTimer);
     this.refreshTimer = null;
+
+    if (this.initialFetchTimer !== null) clearTimeout(this.initialFetchTimer);
+    this.initialFetchTimer = null;
 
     this.renderListeners.clear();
     this.pending.clear();
@@ -394,8 +509,8 @@ export class GamService implements OnDestroy {
    * `googletag.cmd`, a backgrounded tab comes forward.
    *
    * Dropping a deferrable case is what made rapid navigation lose its refresh
-   * entirely. `register()` stamps `lastRefreshedAt` at definition time, so every
-   * slot is inside the 5 s floor for its first five seconds; a reader who picked
+   * entirely. A slot is stamped when its first fetch goes out, so every slot is
+   * inside the 5 s floor for its first five seconds; a reader who picked
    * a page and then an article two seconds later had both refreshes discarded and
    * kept the creative the slot was born with, with nothing left to re-fire it.
    */
@@ -443,20 +558,18 @@ export class GamService implements OnDestroy {
 
       // Guard 3 — hidden containers. Desktop slots stay mounted but
       // `display: none` on mobile; refreshing them would buy impressions with
-      // zero chance of being viewed. A Heavy-Ad collapse is the one exception:
-      // it is also `display: none`, but a new creative is what un-collapses it.
+      // zero chance of being viewed.
       // Dropped rather than deferred: nothing on a timer un-hides a container, so
       // the next content change is the right thing to reconsider it.
-      if (!this._isVisible(entry.el) && !this.collapsed.has(id)) continue;
+      if (!this._isRefreshable(entry)) continue;
 
       // Guard 4a — the slot's own fetch already answers this request. A request
       // stamped at or before the moment the slot last went to the network asked
       // for content that fetch was already getting.
       //
       // This is what keeps initial load quiet. `selectPage()` requests a refresh
-      // while the containers are still registering, and the `defineSlot` +
-      // `display()` that follows fetches exactly the content that request was
-      // about. The old code dropped it as a side effect of the rate floor;
+      // while the containers are still registering, and the initial fetch that
+      // follows a tick later gets exactly the content that request was about. The old code dropped it as a side effect of the rate floor;
       // deferring turned it into a duplicate ad request for identical content five
       // seconds after the first, on every single page load — measured as
       // refreshCalls=2 where the suite expects 1.
@@ -523,6 +636,40 @@ export class GamService implements OnDestroy {
     this.document.addEventListener('visibilitychange', onVisibilityChange);
     this.visibilityCleanup =
       () => this.document.removeEventListener('visibilitychange', onVisibilityChange);
+  }
+
+  /**
+   * Whether refreshing this slot could put a creative in front of the reader.
+   *
+   * Usually that is just `_isVisible`. The exception is a slot this app
+   * collapsed itself — Chrome's Heavy Ad Intervention, or an empty response —
+   * which is `display: none` precisely so the reader is not left looking at a
+   * gap, and which only a new creative can bring back. Such a slot has to stay
+   * refreshable or the collapse is permanent.
+   *
+   * But only when our own collapse is the *sole* reason it is hidden. A slot can
+   * be collapsed and independently out of view: `mobile_post_middle` sits inside
+   * the modal's image panel, so the mobile text view hides it too, and
+   * refreshing it there buys an impression nobody can see. Measured on the
+   * `mobile-toggle` case — a blanket collapse exemption put the hidden middle
+   * slot straight back into the batch.
+   *
+   * Lifting the collapse for the measurement is what tells the two apart. An
+   * inline `display` outranks the host's `:host(.dn-ad--hidden)` rule, so the
+   * slot lays out exactly as it would with an ad in it; a container still hidden
+   * after that is hidden by an ancestor, and no creative will change that.
+   */
+  private _isRefreshable(entry: LiveSlot): boolean {
+    if (this._isVisible(entry.el)) return true;
+    if (!this.collapsed.has(entry.id)) return false;
+
+    const host = entry.hostEl;
+    const previousDisplay = host.style.display;
+    host.style.display = 'block';
+    const visibleUncollapsed = this._isVisible(entry.el);
+    host.style.display = previousDisplay;
+
+    return visibleUncollapsed;
   }
 
   /**

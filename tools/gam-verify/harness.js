@@ -59,7 +59,7 @@ const AD_REQ = /\/gampad\/(live\/)?ads?(\?|$)/;
  */
 const INSTRUMENT = `
 (() => {
-  window.__gam = { define: [], display: [], refresh: [], destroy: [], gptLoaded: false };
+  window.__gam = { define: [], display: [], refresh: [], destroy: [], renders: [], gptLoaded: false };
   window.googletag = window.googletag || { cmd: [] };
   window.googletag.cmd.push(function () {
     const gt = window.googletag;
@@ -92,6 +92,19 @@ const INSTRUMENT = `
       window.__gam.refresh.push((slots || []).map(s => strip(s.getSlotElementId())));
       return orf.apply(this, arguments);
     };
+    // Whether GAM actually returned a creative. No *case* asserts on this — fill
+    // is not deterministic and is not something this codebase controls — but it
+    // is the only honest measure of "did the ad load", so measure-fill.js reads
+    // it, and it is what the app's own no-fill handling keys off.
+    pub.addEventListener('slotRenderEnded', function (ev) {
+      window.__gam.renders.push({
+        div: strip(ev.slot.getSlotElementId()),
+        unit: ev.slot.getAdUnitPath(),
+        empty: !!ev.isEmpty,
+        size: ev.size || null,
+        at: Date.now(),
+      });
+    });
   });
 })();
 `;
@@ -126,6 +139,7 @@ const SNAP = `(() => {
     displays: window.__gam.display.slice(),
     refreshes: window.__gam.refresh.slice(),
     destroys: window.__gam.destroy.slice(),
+    renders: window.__gam.renders.slice(),
     slots, hosts,
     thumbs: document.querySelectorAll('.thumbnail-item').length,
     sections: document.querySelectorAll('.clickable-section').length,

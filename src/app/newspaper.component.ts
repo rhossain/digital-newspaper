@@ -1555,6 +1555,8 @@ export class NewspaperComponent implements OnInit, OnDestroy {
         this.modalImageTitle = this.selectedSection.title;
         this.modalLinkedSections = allSections.filter(s => s.id !== this.selectedSection!.id);
         this.mobileModalView = 'image';
+        // See openContentModal().
+        this.showContentModal = false;
         this.showImageModal = true;
       }
     }
@@ -1632,6 +1634,15 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   }
 
   openContentModal() {
+    // The two modals are kept mutually exclusive for GAM's sake, not the UI's:
+    // desktop_post_top_image and desktop_post_top_text share the ad unit path
+    // TDSEV3_Desktop_Post_Top-01, so if both were mounted they would be defined
+    // into the same single-request call and compete for that unit's inventory —
+    // a roadblock or competitive exclusion then fills one and leaves the other
+    // empty. Both openers are reached from the right panel, which every modal
+    // covers, so no reachable flow changes here; this closes the gap rather than
+    // altering behaviour.
+    this.showImageModal = false;
     this.showContentModal = true;
   }
 
@@ -1670,6 +1681,9 @@ export class NewspaperComponent implements OnInit, OnDestroy {
       // Rest of the sections
       this.modalLinkedSections = allSections.slice(1);
       this.mobileModalView = 'image';
+      // See openContentModal(): the two Post_Top slots must never be mounted at
+      // the same time.
+      this.showContentModal = false;
       this.showImageModal = true;
     }
   }
@@ -1913,6 +1927,8 @@ export class NewspaperComponent implements OnInit, OnDestroy {
       
       // Rest of the sections
       this.modalLinkedSections = allSections.slice(1);
+      // See openContentModal().
+      this.showContentModal = false;
       this.showImageModal = true;
     }
   }

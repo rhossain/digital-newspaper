@@ -26,12 +26,15 @@ export interface AdSlot {
 interface AdsConfigResponse {
   enabled: boolean;
   slots: AdSlot[];
+  /** Optional — absent on a backend predating the field, which falls back to the default. */
+  no_fill_retries?: number;
 }
 
 /** The GPT surface used for bootstrapping only. Slot APIs live in GamService. */
 interface GptBootstrap {
   cmd: Array<() => void>;
   setConfig(config: { singleRequest: boolean }): void;
+  pubads(): { disableInitialLoad(): void };
   enableServices(): void;
 }
 
@@ -70,9 +73,22 @@ export class AdService {
 
   // ── State signals ───────────────────────────────────────────────────────────
 
-  private readonly _enabled = signal<boolean>(false);
-  private readonly _slots   = signal<AdSlot[]>([]);
-  private readonly _ready   = signal<boolean>(false);
+  /**
+   * Retries a slot may spend re-requesting an ad after an empty response, used
+   * when the backend does not send `no_fill_retries`.
+   *
+   * Matches the plugin's own default so an older backend behaves like a current
+   * one rather than silently dropping the retry.
+   */
+  private static readonly DEFAULT_NO_FILL_RETRIES = 2;
+
+  /** Upper bound mirroring the plugin's clamp — a hostile response cannot loop a slot. */
+  private static readonly MAX_NO_FILL_RETRIES = 5;
+
+  private readonly _enabled        = signal<boolean>(false);
+  private readonly _slots          = signal<AdSlot[]>([]);
+  private readonly _ready          = signal<boolean>(false);
+  private readonly _noFillRetries  = signal<number>(AdService.DEFAULT_NO_FILL_RETRIES);
 
   /** True once the GPT library tag has been injected and services enabled. */
   private _gptBooted = false;
@@ -82,6 +98,14 @@ export class AdService {
 
   /** Full slot list (empty until the fetch resolves). */
   readonly slots: Signal<AdSlot[]> = this._slots.asReadonly();
+
+  /**
+   * How many times a slot may re-request an ad after GAM answered it empty.
+   *
+   * Server-controlled because it is a network-policy call, not an app one — see
+   * `gam_no_fill_retries()` in the plugin. 0 disables retries.
+   */
+  readonly noFillRetries: Signal<number> = this._noFillRetries.asReadonly();
 
   /**
    * True once the initial /ads/config fetch has settled (success OR error).
@@ -165,6 +189,27 @@ export class AdService {
     gt.cmd.push(() => {
       // Deprecated: pubads().enableSingleRequest(). See https://goo.gle/gpt-message#170
       gt.setConfig({ singleRequest: true });
+
+      // Detach the ad *fetch* from `display()`, so GamService owns when every
+      // request goes out and — the point — what correlator it carries.
+      //
+      // Measured (§8.6): with the fetch riding on `display()`, a slot that mounts
+      // mid-session joins the correlator the page already has, and is therefore
+      // judged against an auction the slots mounted earlier already won. The
+      // article modal's `desktop_post_middle` filled 0/16 that way while the
+      // right panel's `desktop_post_preview_middle` — same 300x250 demand — filled
+      // 30/30. Disabling the preview slots took the modal slot to 14/14.
+      //
+      // With initial load disabled, GamService issues every first fetch as an
+      // explicit `refresh(..., { changeCorrelator: true })`, so each mount is its
+      // own pageview and competes for inventory on its own terms.
+      //
+      // This makes `display()` necessary but no longer sufficient: a slot whose
+      // refresh never fires now shows nothing at all. `_scheduleInitialFetch()`
+      // in GamService is the only thing standing between a mounted container and
+      // a permanently empty one.
+      gt.pubads().disableInitialLoad();
+
       gt.enableServices();
     });
   }
@@ -204,6 +249,7 @@ export class AdService {
       .pipe(
         tap(res => {
           this._enabled.set(res.enabled === true);
+          this._noFillRetries.set(AdService._clampRetries(res.no_fill_retries));
           if (Array.isArray(res.slots)) this._slots.set(res.slots);
         }),
         map(res => res.enabled === true),
@@ -215,6 +261,20 @@ export class AdService {
   }
 
   // ── Private ─────────────────────────────────────────────────────────────────
+
+  /**
+   * Coerce the server's retry budget into the supported range.
+   *
+   * A missing or non-numeric value falls back to the default rather than 0: the
+   * field is optional, and an older backend that never sends it should keep the
+   * behaviour a current one has, not lose it silently.
+   */
+  private static _clampRetries(value: unknown): number {
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      return AdService.DEFAULT_NO_FILL_RETRIES;
+    }
+    return Math.max(0, Math.min(AdService.MAX_NO_FILL_RETRIES, Math.floor(value)));
+  }
 
   private _fetch(): void {
     this.http
@@ -235,6 +295,7 @@ export class AdService {
       .subscribe(res => {
         if (res) {
           this._enabled.set(res.enabled === true);
+          this._noFillRetries.set(AdService._clampRetries(res.no_fill_retries));
           const slots = Array.isArray(res.slots) ? res.slots : [];
           this._slots.set(slots);
 
