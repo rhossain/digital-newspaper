@@ -2577,8 +2577,13 @@ HTACCESS;
     // ── Compress the raw serialized string ─────────────────────────────────
     if (function_exists('gzcompress')) {
       $gz_raw = gzcompress($raw_serial, 6);
-      unset($raw_serial);
+      // $raw_serial is released inside each branch, not here: the failure branch
+      // below needs it, and unsetting up front left it holding null — the
+      // fallback that exists to keep the backup restorable wrote an empty one
+      // instead. Costs no peak memory either way, since gzcompress() has already
+      // returned by this point and both strings have coexisted.
       if ($gz_raw !== false) {
+        unset($raw_serial);
         $entry['data_gz_serial'] = base64_encode($gz_raw);
         unset($gz_raw);
       } else {
