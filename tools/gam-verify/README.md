@@ -24,8 +24,19 @@ Exit code is non-zero if any case reports REVIEW.
 
 ## What it does and does not touch
 
-Content comes from the **production** WordPress backend, because the staging host
-(`nepaper.dailysangram.com`) does not answer. That is deliberate but bounded:
+Content comes from whichever WordPress backend the build baked in — see "Which backend a
+run talks to" below, and build with `--configuration staging` when you are verifying what
+is deployed to staging. An earlier note here said the staging host
+(`nepaper.dailysangram.com`) does not answer; **that is no longer true** — it returns 200,
+and a default `npm run build` reading from production is a choice the build makes, not a
+constraint.
+
+Both hosts are slow and intermittently unreachable (measured: roughly one request in three
+completes, the rest time out at 20-60 s). That is what produces
+`INCONCLUSIVE (environment)` verdicts, and it is a host problem rather than anything the
+suite or the app does — re-run the case.
+
+Whichever backend a run reads, it is bounded:
 
 - `dist/` is served locally, so the code under test is always your build.
 - `GET /ads/config` is answered from [`fixtures/ads-config.json`](fixtures/ads-config.json),
