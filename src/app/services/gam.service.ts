@@ -665,11 +665,16 @@ export class GamService implements OnDestroy {
 
     const host = entry.hostEl;
     const previousDisplay = host.style.display;
-    host.style.display = 'block';
-    const visibleUncollapsed = this._isVisible(entry.el);
-    host.style.display = previousDisplay;
-
-    return visibleUncollapsed;
+    try {
+      host.style.display = 'block';
+      return this._isVisible(entry.el);
+    } finally {
+      // Restored in `finally` because the alternative failure mode is ugly and
+      // permanent: an inline `display: block` left on the host would un-hide a
+      // slot this app collapsed on purpose, showing the reader the empty box
+      // the collapse exists to remove, for the rest of the session.
+      host.style.display = previousDisplay;
+    }
   }
 
   /**
