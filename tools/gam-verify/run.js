@@ -107,7 +107,10 @@ async function paginationRefresh(browser) {
     const s = await page.evaluate(SNAP);
     const mine = since(s, base);
     counts.push({ n, refreshes: mine.length, adReqs: state.adReqs, last: mine.at(-1) });
-    line(`page ${n}: refreshCalls=${s.refreshes.length} adReqs=${state.adReqs} batch=${JSON.stringify(s.refreshes.at(-1) ?? [])}`);
+    // Prints the baselined count, which is what the verdict below is computed
+    // from — printing the raw total instead would read as 2,3,4 against an
+    // "expect 1,2,3" and contradict its own PASS.
+    line(`page ${n}: refreshCalls=${mine.length} adReqs=${state.adReqs} batch=${JSON.stringify(mine.at(-1) ?? [])}`);
   }
   const rightIncluded = counts.every(c => (c.last || []).includes(DIV.desktop_page_right));
   const oneEach = counts.every((c, i) => c.refreshes === i + 1);
