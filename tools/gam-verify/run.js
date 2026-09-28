@@ -268,6 +268,36 @@ async function mobilePagination(browser) {
   await ctx.close();
 }
 
+/**
+ * Every mobile slot is defined with its per-viewport size mapping, exactly as
+ * the config declares it — so each screen width asks only for sizes that fit.
+ */
+async function mobileSizeMapping(browser) {
+  const { ctx, page, state, cfg } = await boot(browser, {
+    viewport: { width: 390, height: 844 },
+    mutateConfig: c => enable(c, MOBILE_SLOTS),
+  });
+  if (!(await openArticleModal(page))) throw new Inconclusive('article modal did not open');
+  await page.waitForTimeout(2000);
+  const s = await page.evaluate(SNAP);
+  const byId = Object.fromEntries(cfg.slots.map(x => [x.id, x]));
+  const bad = [];
+  for (const id of MOBILE_SLOTS) {
+    const got = s.mappings[DIV[id]] ?? null;
+    const want = byId[id].size_mapping ?? null;
+    const ok = JSON.stringify(got) === JSON.stringify(want);
+    if (!ok) bad.push(id);
+    line(`${id}: mapping ${ok ? 'matches config' : 'MISMATCH'} ${JSON.stringify(got)}`);
+  }
+  // No mobile size may be under 100px high — the publisher's floor.
+  const short = MOBILE_SLOTS.flatMap(id => (byId[id].size_mapping || []).flatMap(r => r.sizes))
+    .filter(([, h]) => h < 100);
+  line(`sizes under 100px high=${JSON.stringify(short)} (expect [])`);
+  errLine(state);
+  report('mobile-size-mapping', bad.length === 0 && short.length === 0 && state.errs.length === 0, { bad, short });
+  await ctx.close();
+}
+
 /** Guard 3 (RC-8): a hidden slot must never be refreshed. */
 async function mobileNoRefresh(browser) {
   const { ctx, page, state } = await boot(browser, {
@@ -541,6 +571,7 @@ const CASES = [
   ['hidden-tab', hiddenTab],
   ['mobile-placement', mobilePlacement],
   ['mobile-pagination', mobilePagination],
+  ['mobile-size-mapping', mobileSizeMapping],
   ['mobile-no-refresh', mobileNoRefresh],
   ['no-hidden-define', noHiddenDefine],
   ['deferred-refresh', deferredRefresh],

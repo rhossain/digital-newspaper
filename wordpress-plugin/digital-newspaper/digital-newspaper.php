@@ -588,6 +588,19 @@ class Digital_Newspaper_API {
    * The 'enabled' field is merged from OPTION_GAM_SLOT_STATES so the Angular app
    * knows which individual slots to render without extra round-trips.
    */
+  /**
+   * Per-viewport sizes for the mobile "top" slots (mobile_page_top,
+   * mobile_post_top). Rules are [viewport width, height] => sizes; GPT applies
+   * the one with the largest viewport the screen fits. Measured room for the ad:
+   * ~298px under 340px wide, 338px+ from 340px. From 768px the desktop slots take
+   * over and mobile slots are never defined, so that rule is a safety net.
+   */
+  const MOBILE_TOP_SIZE_MAPPING = [
+    [ 'viewport' => [768, 0], 'sizes' => [] ],
+    [ 'viewport' => [340, 0], 'sizes' => [[320, 100]] ],
+    [ 'viewport' => [0, 0],   'sizes' => [[300, 100]] ],
+  ];
+
   private function gam_ad_slots(): array {
     // Use WordPress object cache (wp_cache_get/set) to avoid redundant DB reads
     // when gam_ad_slots() is called more than once per request (e.g. wp_head +
@@ -677,16 +690,19 @@ class Digital_Newspaper_API {
         'min_height'=> 60,
       ],
       // ── Mobile post ───────────────────────────────────────────────────────
-      // Fixed sizes by position, set by the publisher: every mobile "top" slot
-      // is 320x100 and every mobile "bottom" slot is 300x250. The Top unit only
-      // fills if GAM has 320x100 line items booked on it — measured on staging,
-      // it returned empty for banner sizes while the 300x250 Middle unit filled.
+      // Per the publisher: "top" slots follow the screen width
+      // (MOBILE_TOP_SIZE_MAPPING, above) — 300x100 under 340px, 320x100 from
+      // 340px; for them 'sizes' is the union GPT's defineSlot requires. "Bottom"
+      // slots are a fixed 300x250 on every screen, which fits every phone. No
+      // size under 100px high. The Top unit only fills if GAM has these banner
+      // sizes booked on it.
       [
         'id'        => 'mobile_post_top',
         'unit'      => '/22062727803/TDSEV3_Mobile_Post_Top-01',
-        'sizes'     => [[320, 100]],
+        'sizes'     => [[320, 100], [300, 100]],
+        'size_mapping' => self::MOBILE_TOP_SIZE_MAPPING,
         'div'       => 'div-gpt-ad-1781520617033-0',
-        'min_width' => 320,
+        'min_width' => 300,
         'min_height'=> 100,
       ],
       [
@@ -706,9 +722,10 @@ class Digital_Newspaper_API {
       [
         'id'        => 'mobile_page_top',
         'unit'      => '/22062727803/TDSEV3_Mobile_Post_Top-01',
-        'sizes'     => [[320, 100]],
+        'sizes'     => [[320, 100], [300, 100]],
+        'size_mapping' => self::MOBILE_TOP_SIZE_MAPPING,
         'div'       => 'div-gpt-ad-1781520617033-1',
-        'min_width' => 320,
+        'min_width' => 300,
         'min_height'=> 100,
       ],
       [

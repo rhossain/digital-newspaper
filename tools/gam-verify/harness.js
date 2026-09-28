@@ -59,16 +59,38 @@ const AD_REQ = /\/gampad\/(live\/)?ads?(\?|$)/;
  */
 const INSTRUMENT = `
 (() => {
-  window.__gam = { define: [], display: [], refresh: [], destroy: [], renders: [], gptLoaded: false };
+  window.__gam = { define: [], display: [], refresh: [], destroy: [], renders: [], mappings: {}, gptLoaded: false };
   window.googletag = window.googletag || { cmd: [] };
   window.googletag.cmd.push(function () {
     const gt = window.googletag;
     window.__gam.gptLoaded = true;
     const strip = d => String(d).replace('div-gpt-ad-', '');
+    // Size mappings are opaque once built, so record the rules on the way in
+    // (builder.addSize) and attach them to whichever slot receives the result.
+    const built = new WeakMap();
+    const osm = gt.sizeMapping;
+    if (osm) {
+      gt.sizeMapping = function () {
+        const b = osm.apply(this, arguments);
+        const rules = [];
+        const oadd = b.addSize, obuild = b.build;
+        b.addSize = function (vp, sz) { rules.push({ viewport: vp, sizes: sz }); oadd.apply(b, arguments); return b; };
+        b.build = function () { const m = obuild.apply(b, arguments); if (m && typeof m === 'object') built.set(m, rules); return m; };
+        return b;
+      };
+    }
     const od = gt.defineSlot;
     gt.defineSlot = function (unit, sizes, div) {
       window.__gam.define.push(strip(div));
-      return od.apply(this, arguments);
+      const slot = od.apply(this, arguments);
+      if (slot && slot.defineSizeMapping) {
+        const odsm = slot.defineSizeMapping;
+        slot.defineSizeMapping = function (m) {
+          window.__gam.mappings[strip(div)] = built.get(m) || null;
+          return odsm.apply(slot, arguments);
+        };
+      }
+      return slot;
     };
     const odisp = gt.display;
     gt.display = function (d) {
@@ -140,6 +162,7 @@ const SNAP = `(() => {
     refreshes: window.__gam.refresh.slice(),
     destroys: window.__gam.destroy.slice(),
     renders: window.__gam.renders.slice(),
+    mappings: window.__gam.mappings,
     slots, hosts,
     thumbs: document.querySelectorAll('.thumbnail-item').length,
     sections: document.querySelectorAll('.clickable-section').length,

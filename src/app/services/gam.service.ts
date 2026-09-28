@@ -18,6 +18,13 @@ interface GptSlot {
   addService(service: unknown): GptSlot;
   clearTargeting(): GptSlot;
   setTargeting(key: string, value: string): GptSlot;
+  defineSizeMapping(mapping: unknown): GptSlot;
+}
+
+/** GPT's size-mapping builder: `sizeMapping().addSize(...).build()`. */
+interface SizeMappingBuilder {
+  addSize(viewport: number[], sizes: number[][]): SizeMappingBuilder;
+  build(): unknown;
 }
 
 /** The subset of GPT's slotRenderEnded event this app reads. */
@@ -39,6 +46,7 @@ interface GoogleTag {
   display(div: string): void;
   destroySlots(slots: GptSlot[]): boolean;
   pubads(): PubAdsService;
+  sizeMapping(): SizeMappingBuilder;
 }
 
 /** A slot that currently has both a live container in the DOM and a GPT slot object. */
@@ -251,6 +259,7 @@ export class GamService implements OnDestroy {
         return;
       }
 
+      this._applySizeMapping(gt, gptSlot, def);
       gptSlot.addService(gt.pubads());
       this._applyTargeting(gptSlot, this.targeting);
 
@@ -454,6 +463,23 @@ export class GamService implements OnDestroy {
   setCollapsed(id: string, collapsed: boolean): void {
     if (collapsed) this.collapsed.add(id);
     else this.collapsed.delete(id);
+  }
+
+  /**
+   * Give a slot its per-viewport sizes, when the config declares them.
+   *
+   * GPT evaluates the mapping against the viewport at every request, so an
+   * initial fetch and each later refresh both ask only for sizes that fit the
+   * screen the reader has now. A slot without a mapping keeps its plain `sizes`.
+   * A build() that returns null (a malformed rule) is skipped rather than
+   * passed on, which would make GPT drop the slot's sizes entirely.
+   */
+  private _applySizeMapping(gt: GoogleTag, gptSlot: GptSlot, def: AdSlot): void {
+    if (!def.size_mapping?.length) return;
+    const builder = gt.sizeMapping();
+    for (const rule of def.size_mapping) builder.addSize(rule.viewport, rule.sizes);
+    const mapping = builder.build();
+    if (mapping) gptSlot.defineSizeMapping(mapping);
   }
 
   ngOnDestroy(): void {

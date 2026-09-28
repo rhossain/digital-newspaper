@@ -5,6 +5,15 @@ import { catchError, map, Observable, of, retry, tap, timer } from 'rxjs';
 import { WP_BASE_URL } from '../config';
 import { AuthService } from './auth.service';
 
+/**
+ * One responsive size rule: from `viewport` [width, height] upward, request
+ * `sizes`. GPT applies the rule with the largest viewport the browser fits.
+ */
+export interface SizeMappingRule {
+  viewport: [number, number];
+  sizes: number[][];
+}
+
 /** Single ad slot definition, mirroring the PHP gam_ad_slots() structure. */
 export interface AdSlot {
   /** Stable identifier used as Angular input (e.g. 'desktop_page_left'). */
@@ -21,6 +30,12 @@ export interface AdSlot {
   min_height: number;
   /** Whether this specific slot is enabled (persisted via OPTION_GAM_SLOT_STATES). */
   enabled: boolean;
+  /**
+   * Optional per-viewport sizes. When present, the slot asks only for the sizes
+   * that fit the current screen; `sizes` must be their union. Optional so a
+   * backend predating the field keeps working with plain `sizes`.
+   */
+  size_mapping?: SizeMappingRule[];
 }
 
 interface AdsConfigResponse {
