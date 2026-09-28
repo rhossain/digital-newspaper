@@ -195,18 +195,10 @@
         [
           320,
           100
-        ],
-        [
-          300,
-          100
-        ],
-        [
-          300,
-          250
         ]
       ],
       "div": "div-gpt-ad-1781520617033-0",
-      "min_width": 300,
+      "min_width": 320,
       "min_height": 100,
       "enabled": false
     },
@@ -215,21 +207,13 @@
       "unit": "/22062727803/TDSEV3_Mobile_Post_Middle-01",
       "sizes": [
         [
-          320,
-          100
-        ],
-        [
-          300,
-          100
-        ],
-        [
           300,
           250
         ]
       ],
       "div": "div-gpt-ad-1781521397082-0",
       "min_width": 300,
-      "min_height": 100,
+      "min_height": 250,
       "enabled": false
     },
     {
@@ -239,18 +223,10 @@
         [
           320,
           100
-        ],
-        [
-          300,
-          100
-        ],
-        [
-          300,
-          250
         ]
       ],
       "div": "div-gpt-ad-1781520617033-1",
-      "min_width": 300,
+      "min_width": 320,
       "min_height": 100,
       "enabled": false
     },
@@ -259,21 +235,13 @@
       "unit": "/22062727803/TDSEV3_Mobile_Post_Middle-01",
       "sizes": [
         [
-          320,
-          100
-        ],
-        [
-          300,
-          100
-        ],
-        [
           300,
           250
         ]
       ],
       "div": "div-gpt-ad-1781521397082-1",
       "min_width": 300,
-      "min_height": 100,
+      "min_height": 250,
       "enabled": false
     }
   ]

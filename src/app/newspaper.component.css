@@ -1022,6 +1022,16 @@
   margin-top: 16px;
 }
 
+/* The page-top ad is a fixed 320x100. With the column's 25px side padding the
+   page scroll box is only 310px wide on a 360px phone, so on narrow phones the
+   padding drops to 10px: the box becomes 340px and, with the 20px bleed above,
+   the 320px creative fits. Wider screens are untouched. */
+@media (max-width: 400px) {
+  .main-page-container {
+    padding: 0 10px;
+  }
+}
+
 /* A 300px ad on a narrow phone can meet the scroll box's edge; never let that
    turn into a sideways scroll. The page image is width:100%, so nothing else in
    the box overflows horizontally. Mobile only, matching the ads' breakpoint. */

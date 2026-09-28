@@ -136,6 +136,21 @@
   padding: 12px 20px 20px;
 }
 
+/* Mobile popup ads (mobile_post_top 320x100, mobile_post_middle 300x250) are
+   direct children of the scroll body. They bleed into its 20px side padding: on
+   a 360px phone the padded content box is ~313px, too narrow for the 320px top
+   ad. Desktop popup slots live inside the panels, so this never touches them. */
+.modal-image-scroll-body > app-ad-slot {
+  margin-left: -20px;
+  margin-right: -20px;
+}
+
+@media (max-width: 767px) {
+  .modal-image-scroll-body {
+    overflow-x: hidden;
+  }
+}
+
 .modal-images-container {
   display: flex;
   flex-direction: column;

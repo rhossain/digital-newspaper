@@ -677,25 +677,25 @@ class Digital_Newspaper_API {
         'min_height'=> 60,
       ],
       // ── Mobile post ───────────────────────────────────────────────────────
-      // [300, 250] was added to the Top unit after measurement: banner-only, it
-      // answered every request empty while the Middle unit, which carries
-      // [300, 250], filled. Same fix as desktop_post_top above — declaring the
-      // size only widens eligibility, so it is inert if nothing is booked.
+      // Fixed sizes by position, set by the publisher: every mobile "top" slot
+      // is 320x100 and every mobile "bottom" slot is 300x250. The Top unit only
+      // fills if GAM has 320x100 line items booked on it — measured on staging,
+      // it returned empty for banner sizes while the 300x250 Middle unit filled.
       [
         'id'        => 'mobile_post_top',
         'unit'      => '/22062727803/TDSEV3_Mobile_Post_Top-01',
-        'sizes'     => [[320, 100], [300, 100], [300, 250]],
+        'sizes'     => [[320, 100]],
         'div'       => 'div-gpt-ad-1781520617033-0',
-        'min_width' => 300,
+        'min_width' => 320,
         'min_height'=> 100,
       ],
       [
         'id'        => 'mobile_post_middle',
         'unit'      => '/22062727803/TDSEV3_Mobile_Post_Middle-01',
-        'sizes'     => [[320, 100], [300, 100], [300, 250]],
+        'sizes'     => [[300, 250]],
         'div'       => 'div-gpt-ad-1781521397082-0',
         'min_width' => 300,
-        'min_height'=> 100,
+        'min_height'=> 250,
       ],
       // ── Mobile page ───────────────────────────────────────────────────────
       // Above and below the newspaper page on mobile. They reuse the two mobile
@@ -706,18 +706,18 @@ class Digital_Newspaper_API {
       [
         'id'        => 'mobile_page_top',
         'unit'      => '/22062727803/TDSEV3_Mobile_Post_Top-01',
-        'sizes'     => [[320, 100], [300, 100], [300, 250]],
+        'sizes'     => [[320, 100]],
         'div'       => 'div-gpt-ad-1781520617033-1',
-        'min_width' => 300,
+        'min_width' => 320,
         'min_height'=> 100,
       ],
       [
         'id'        => 'mobile_page_bottom',
         'unit'      => '/22062727803/TDSEV3_Mobile_Post_Middle-01',
-        'sizes'     => [[320, 100], [300, 100], [300, 250]],
+        'sizes'     => [[300, 250]],
         'div'       => 'div-gpt-ad-1781521397082-1',
         'min_width' => 300,
-        'min_height'=> 100,
+        'min_height'=> 250,
       ],
     ];
 
