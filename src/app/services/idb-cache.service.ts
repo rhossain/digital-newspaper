@@ -22,7 +22,10 @@ import { NewspaperEdition } from './newspaper-data.service';
  *   Version:   1
  *   Store:     editions
  *     key:     date string (YYYY-MM-DD)
- *     value:   { date, editions: NewspaperEdition[], storedAt: number }
+ *     value:   { date, editions: NewspaperEdition[], storedAt: number, validAt?: number }
+ *              validAt — the server dataVersion this copy was known current at
+ *              (see EditionCacheService). Optional: entries written before it
+ *              existed simply lack it and are treated as needing revalidation.
  *
  * Eviction policy:
  *   Past dates are kept indefinitely — they are immutable once published.
@@ -34,6 +37,7 @@ interface IdbEditionEntry {
   date: string;
   editions: NewspaperEdition[];
   storedAt: number;
+  validAt?: number;
 }
 
 const DB_NAME    = 'dn-edition-cache';
@@ -91,12 +95,22 @@ export class IdbCacheService {
    * or any error occurs.
    */
   async get(date: string): Promise<NewspaperEdition[] | null> {
+    return (await this.getEntry(date))?.editions ?? null;
+  }
+
+  /**
+   * Like `get()`, but also returns the version stamp the entry was stored with
+   * (`validAt`, 0 for entries written before stamps existed), so the caller can
+   * decide whether the copy is still current.
+   */
+  async getEntry(date: string): Promise<{ editions: NewspaperEdition[]; validAt: number } | null> {
     const dbP = this._db();
     if (!dbP) return null;
     try {
       const db = await dbP;
       const entry: IdbEditionEntry | undefined = await db.get(STORE_NAME, date);
-      return entry?.editions ?? null;
+      if (!entry || !Array.isArray(entry.editions)) return null;
+      return { editions: entry.editions, validAt: entry.validAt ?? 0 };
     } catch (err) {
       console.warn(`[IdbCacheService] get(${date}) failed:`, err);
       return null;
@@ -108,12 +122,12 @@ export class IdbCacheService {
    * Only call for past dates — today's data must not be stale-cached.
    * Errors are silently swallowed so callers are never blocked on IDB writes.
    */
-  async set(date: string, editions: NewspaperEdition[]): Promise<void> {
+  async set(date: string, editions: NewspaperEdition[], validAt = 0): Promise<void> {
     const dbP = this._db();
     if (!dbP) return;
     try {
       const db = await dbP;
-      const entry: IdbEditionEntry = { date, editions, storedAt: Date.now() };
+      const entry: IdbEditionEntry = { date, editions, storedAt: Date.now(), validAt };
       await db.put(STORE_NAME, entry);
     } catch (err) {
       console.warn(`[IdbCacheService] set(${date}) failed:`, err);

@@ -33,6 +33,22 @@ import { IdbCacheService } from './idb-cache.service';
  *   `evict(date)`   — removes entry from all layers for that date. Must be
  *                     called after any admin save so the next read is fresh.
  *   `clearMemory()` — wipes layer 1 + schedules async clear of layer 2b.
+ *
+ * Version stamps (readers' browsers):
+ *   evict()/clearMemory() only run in the admin's own browser, so on their own
+ *   they never reach readers — whose layers 2a/2b used to keep a past date
+ *   forever. When a past date's pages were re-uploaded under new file names, a
+ *   reader who had opened that date before kept requesting the old names and
+ *   saw "Image unavailable" until they cleared their browser data.
+ *
+ *   Every cached copy is therefore stamped `validAt`: the server's global
+ *   dataVersion it is known to be current at. The global version bumps on every
+ *   publish, so a copy stamped below the latest version this browser has seen
+ *   (`noteServerVersion`, persisted under `dn_server_version`) is revalidated
+ *   from the network before use — at most one cheap request per date per
+ *   publish (the static snapshot answers 304 when it has not changed). A copy
+ *   read from a persistent layer never outranks the network, but when the
+ *   network is unavailable it is still served rather than showing nothing.
  */
 
 interface MemCacheEntry {
@@ -40,12 +56,28 @@ interface MemCacheEntry {
   fetchedAt: number;
   /** Number of pages across all editions — used as a quick sanity check. */
   pageCount: number;
+  /** Server dataVersion this copy is known current at (0 = unknown). */
+  validAt:   number;
+  /**
+   * Fetched from the network during this page session. Such a copy is current
+   * by definition, even though its stamp may predate a version learned a moment
+   * later in the same boot batch — refetching it would only repeat the request.
+   */
+  fromNetwork: boolean;
+}
+
+/** A copy read from localStorage or IndexedDB, with its version stamp. */
+interface StoredEntry {
+  editions: NewspaperEdition[];
+  validAt:  number;
 }
 
 @Injectable({ providedIn: 'root' })
 export class EditionCacheService {
 
   private static readonly LS_PREFIX = 'dn_edition_';
+  /** Latest server dataVersion this browser has seen; see `noteServerVersion`. */
+  private static readonly SERVER_VERSION_KEY = 'dn_server_version';
   /** Today's edition expires from in-memory cache after 5 minutes. */
   private static readonly TODAY_TTL_MS = 5 * 60 * 1000;
   /**
@@ -87,10 +119,54 @@ export class EditionCacheService {
   private readonly platformId = inject(PLATFORM_ID);
   private get isBrowser(): boolean { return isPlatformBrowser(this.platformId); }
 
+  /**
+   * Latest global dataVersion this browser has seen, 0 when unknown. Loaded
+   * synchronously so the very first cache read of a session is already checked
+   * against what the previous session learned.
+   */
+  private _serverVersion = 0;
+
   constructor(
     private readonly http: HttpClient,
     private readonly idbCache: IdbCacheService,
-  ) {}
+  ) {
+    if (this.isBrowser) {
+      try {
+        const v = Number(localStorage.getItem(EditionCacheService.SERVER_VERSION_KEY));
+        if (Number.isFinite(v) && v > 0) this._serverVersion = v;
+      } catch {
+        // storage unavailable — start unknown; every copy is then accepted as
+        // before until the first version fetch of this session lands.
+      }
+    }
+  }
+
+  /**
+   * Record the server's global dataVersion (version.json / the version poll /
+   * the boot batch). Only ever moves forward. Copies stamped below it become
+   * stale and are revalidated on their next read.
+   */
+  noteServerVersion(version: number | null | undefined): void {
+    if (typeof version !== 'number' || !Number.isFinite(version) || version <= this._serverVersion) return;
+    this._serverVersion = version;
+    if (!this.isBrowser) return;
+    try {
+      localStorage.setItem(EditionCacheService.SERVER_VERSION_KEY, String(version));
+    } catch {
+      // best-effort — the in-memory value still applies for this session
+    }
+  }
+
+  /**
+   * Whether the copy currently held in memory for `date` is known to be
+   * current. False when there is no copy. Used by the boot path to decide
+   * whether a copy it already rendered from must be refetched now that the
+   * server version is known.
+   */
+  isCurrent(date: string): boolean {
+    const entry = this._memCache.get(date);
+    return !!entry && this._isEntryCurrent(entry);
+  }
 
   // ── Public API ─────────────────────────────────────────────────────────────
 
@@ -108,42 +184,54 @@ export class EditionCacheService {
   getEditionsForDate(date: string): Observable<NewspaperEdition[]> {
     // ── Layer 1: memory ──────────────────────────────────────────────────────
     const memEntry = this._memCache.get(date);
-    if (memEntry && this._isMemFresh(date, memEntry)) {
+    if (memEntry && this._isMemFresh(date, memEntry) && this._isEntryCurrent(memEntry)) {
       return of(memEntry.editions);
     }
 
+    // The best copy found that is present but out of date. Never preferred over
+    // the network; only served when the network cannot answer (offline), so a
+    // new publish never leaves an offline reader with an empty page.
+    let fallback: NewspaperEdition[] | undefined = memEntry?.editions;
+
     // ── Layer 2a: localStorage (all dates; TTL enforced for today) ───────────
     // Past dates are cached permanently. Today is cached with a 30-minute TTL
-    // (fetchedAt stored in the JSON payload). On a cache hit we seed the
+    // (fetchedAt stored in the JSON payload). On a current hit we seed the
     // in-memory layer and return immediately — no HTTP needed.
-    const lsEditions = this._readFromStorage(date);
-    if (lsEditions) {
-      this._setMem(date, lsEditions);
-      return of(lsEditions);
+    const stored = this._readFromStorage(date);
+    if (stored) {
+      if (this._isStampCurrent(stored.validAt)) {
+        this._setMem(date, stored.editions, stored.validAt, false);
+        return of(stored.editions);
+      }
+      fallback ??= stored.editions;
     }
 
     // ── Layer 2b: IndexedDB (past dates only, async) ─────────────────────────
-    // Only consulted when localStorage misses (quota exceeded or entry cleared).
-    // Today's date uses localStorage TTL; IDB is skipped to avoid the async
-    // overhead on every first-of-session access to today's content.
+    // Only consulted when localStorage misses (quota exceeded or entry cleared)
+    // or holds an out-of-date copy. Today's date uses localStorage TTL; IDB is
+    // skipped to avoid the async overhead on every first-of-session access to
+    // today's content.
     if (this._isPastDate(date)) {
-      return from(this.idbCache.get(date)).pipe(
-        switchMap(idbEditions => {
-          if (idbEditions && idbEditions.length > 0) {
-            this._setMem(date, idbEditions);
-            // Write-back to localStorage so future reads are synchronous again.
-            this._persistToLocalStorage(date, idbEditions);
-            return of(idbEditions);
+      return from(this.idbCache.getEntry(date)).pipe(
+        switchMap(idb => {
+          if (idb && idb.editions.length > 0) {
+            if (this._isStampCurrent(idb.validAt)) {
+              this._setMem(date, idb.editions, idb.validAt, false);
+              // Write-back to localStorage so future reads are synchronous again.
+              this._persistToLocalStorage(date, idb.editions, idb.validAt);
+              return of(idb.editions);
+            }
+            fallback ??= idb.editions;
           }
-          // ── Layer 3: HTTP (IDB miss) ──────────────────────────────────────
-          return this._fetchFromHttp(date, memEntry);
+          // ── Layer 3: HTTP (IDB miss or out-of-date copy) ─────────────────
+          return this._fetchFromHttp(date, fallback);
         }),
-        catchError(() => this._fetchFromHttp(date, memEntry))
+        catchError(() => this._fetchFromHttp(date, fallback))
       );
     }
 
     // ── Layer 3: HTTP (today localStorage miss / future dates) ──────────────
-    return this._fetchFromHttp(date, memEntry);
+    return this._fetchFromHttp(date, fallback);
   }
 
   /**
@@ -167,14 +255,17 @@ export class EditionCacheService {
     date: string,
   ): Observable<{ editions: NewspaperEdition[]; light: boolean }> {
     const memEntry = this._memCache.get(date);
-    if (memEntry && this._isMemFresh(date, memEntry)) {
+    if (memEntry && this._isMemFresh(date, memEntry) && this._isEntryCurrent(memEntry)) {
       return of({ editions: memEntry.editions, light: false });
     }
-    const lsEditions = this._readFromStorage(date);
-    if (lsEditions) {
-      this._setMem(date, lsEditions);
-      return of({ editions: lsEditions, light: false });
+    const stored = this._readFromStorage(date);
+    if (stored && this._isStampCurrent(stored.validAt)) {
+      this._setMem(date, stored.editions, stored.validAt, false);
+      return of({ editions: stored.editions, light: false });
     }
+    // An out-of-date stored copy falls through to the network: the light
+    // snapshot below, or getEditionsForDate(), which keeps that copy as its
+    // offline fallback.
     return this.http
       .get<{ editions: NewspaperEdition[] }>(`${this._staticBase}/${date}.light.json`)
       .pipe(
@@ -192,13 +283,29 @@ export class EditionCacheService {
   }
 
   /**
+   * Fetch a date from the network regardless of what is cached, without
+   * evicting anything first. On success the fresh copy replaces the cached one
+   * in every layer; on failure the cache is untouched and `null` is returned —
+   * so this is safe to call when the failure might be the reader being offline.
+   */
+  revalidate(date: string): Observable<NewspaperEdition[] | null> {
+    return this._fetchFromHttp(date, undefined).pipe(
+      map(editions => (editions.length > 0 ? editions : null)),
+      catchError(() => of(null)),
+    );
+  }
+
+  /**
    * Pre-populate the memory cache from editions already loaded by
    * NewspaperDataService.loadData().  Calling this avoids a redundant HTTP
    * request the first time a component asks for a date's editions.
    *
    * @param allEditions  Full list of editions from the NewspaperData response.
+   * @param dataVersion  The server dataVersion the list was loaded at, when
+   *                     known. Stamps the seeded copies; 0 marks them as needing
+   *                     revalidation once a server version is known.
    */
-  seedFromLoadedData(allEditions: NewspaperEdition[]): void {
+  seedFromLoadedData(allEditions: NewspaperEdition[], dataVersion = 0): void {
     if (!allEditions?.length) return;
 
     // Group editions by date
@@ -212,8 +319,9 @@ export class EditionCacheService {
     byDate.forEach((editions, date) => {
       // Only seed if not already in cache (don't overwrite a fresh HTTP entry)
       if (!this._memCache.has(date)) {
-        this._setMem(date, editions);
-        this._persistAll(date, editions);
+        const validAt = Math.max(0, dataVersion || 0);
+        this._setMem(date, editions, validAt, false);
+        this._persistAll(date, editions, validAt);
       }
     });
   }
@@ -290,7 +398,7 @@ export class EditionCacheService {
    */
   private _fetchFromHttp(
     date: string,
-    staleMemEntry: MemCacheEntry | undefined,
+    fallback: NewspaperEdition[] | undefined,
   ): Observable<NewspaperEdition[]> {
     // Static snapshot first (served by Apache/LiteSpeed with no PHP), REST
     // fallback when it's missing/empty/errors. Stable URL (no cache-buster): the
@@ -299,7 +407,7 @@ export class EditionCacheService {
     // fresh bytes after a publish.
     return this._tryStatic(date).pipe(
       switchMap(editions =>
-        editions.length > 0 ? of(editions) : this._fetchFromRest(date, staleMemEntry),
+        editions.length > 0 ? of(editions) : this._fetchFromRest(date, fallback),
       ),
     );
   }
@@ -316,13 +424,17 @@ export class EditionCacheService {
       )
       .pipe(
         timeout(6000),
-        map(res => (Array.isArray(res?.editions) ? res.editions : [])),
-        tap(editions => {
+        map(res => ({
+          editions: Array.isArray(res?.editions) ? res.editions : [],
+          validAt: this._stampFor(res?.dataVersion),
+        })),
+        tap(({ editions, validAt }) => {
           if (editions.length > 0) {
-            this._setMem(date, editions);
-            this._persistAll(date, editions);
+            this._setMem(date, editions, validAt, true);
+            this._persistAll(date, editions, validAt);
           }
         }),
+        map(({ editions }) => editions),
         catchError(() => of([] as NewspaperEdition[])),
       );
   }
@@ -333,7 +445,7 @@ export class EditionCacheService {
    */
   private _fetchFromRest(
     date: string,
-    staleMemEntry: MemCacheEntry | undefined,
+    fallback: NewspaperEdition[] | undefined,
   ): Observable<NewspaperEdition[]> {
     return this.http
       .get<{ date: string; editions: NewspaperEdition[]; dataVersion: number }>(
@@ -345,18 +457,26 @@ export class EditionCacheService {
         // below returns stale data rather than throwing, so the granular path
         // can still complete with whatever data is available.
         timeout(10000),
-        map(res => Array.isArray(res.editions) ? res.editions : []),
-        tap(editions => {
-          this._setMem(date, editions);
-          this._persistAll(date, editions);
+        map(res => ({
+          editions: Array.isArray(res.editions) ? res.editions : [],
+          validAt: this._stampFor(res?.dataVersion),
+        })),
+        tap(({ editions, validAt }) => {
+          this._setMem(date, editions, validAt, true);
+          this._persistAll(date, editions, validAt);
         }),
+        map(({ editions }) => editions),
         catchError(err => {
           console.warn(
             `[EditionCacheService] Failed to fetch editions for ${date}. Reason:`,
             err?.message ?? err
           );
-          // Return whatever stale data we have rather than throwing
-          return of(staleMemEntry?.editions ?? []);
+          // Return whatever stale data we have rather than throwing. Hold it in
+          // memory stamped 0 (not current): seedFromLoadedData() then leaves it
+          // alone instead of re-persisting it under the current version, and the
+          // next read of this date tries the network again.
+          if (fallback?.length) this._setMem(date, fallback, 0, false);
+          return of(fallback ?? []);
         })
       );
   }
@@ -373,7 +493,7 @@ export class EditionCacheService {
    * Fire-and-forget: returns void, self-subscribes, and swallows all errors.
    */
   prefetchStatic(date: string): void {
-    if (!date || this._memCache.has(date)) return;   // already warm or invalid
+    if (!date || this.isCurrent(date)) return;   // already warm and current, or invalid
     // Static-only (never REST — a non-urgent warm-up must not trigger PHP).
     // _tryStatic seeds the caches on success.
     this._tryStatic(date).subscribe();
@@ -399,24 +519,50 @@ export class EditionCacheService {
     return Date.now() - entry.fetchedAt < EditionCacheService.TODAY_TTL_MS;
   }
 
-  private _setMem(date: string, editions: NewspaperEdition[]): void {
+  private _setMem(date: string, editions: NewspaperEdition[], validAt: number, fromNetwork: boolean): void {
     this._memCache.set(date, {
       editions,
       fetchedAt: Date.now(),
       pageCount: editions.reduce((sum, e) => sum + (e.pages?.length ?? 0), 0),
+      validAt,
+      fromNetwork,
     });
+  }
+
+  /**
+   * Stamp for a copy just received from the network: the newest version known,
+   * which is at least the server version this session has seen. The response's
+   * own dataVersion only matters when it is newer still.
+   */
+  private _stampFor(responseVersion: unknown): number {
+    const v = typeof responseVersion === 'number' && Number.isFinite(responseVersion) ? responseVersion : 0;
+    return Math.max(this._serverVersion, v);
+  }
+
+  /** A stamp is current when no server version is known yet, or it is not older. */
+  private _isStampCurrent(validAt: number): boolean {
+    return this._serverVersion <= 0 || validAt >= this._serverVersion;
+  }
+
+  private _isEntryCurrent(entry: MemCacheEntry): boolean {
+    return entry.fromNetwork || this._isStampCurrent(entry.validAt);
   }
 
   private _lsKey(date: string): string {
     return EditionCacheService.LS_PREFIX + date;
   }
 
-  private _readFromStorage(date: string): NewspaperEdition[] | null {
+  /**
+   * Read a copy from localStorage, with its version stamp (0 for entries written
+   * before stamps existed). Whether the stamp is current is the caller's call —
+   * an out-of-date copy is still useful as an offline fallback.
+   */
+  private _readFromStorage(date: string): StoredEntry | null {
     if (!this.isBrowser) return null; // SSR — no localStorage
     try {
       const raw = localStorage.getItem(this._lsKey(date));
       if (!raw) return null;
-      const parsed = JSON.parse(raw) as { editions?: NewspaperEdition[]; fetchedAt?: number };
+      const parsed = JSON.parse(raw) as { editions?: NewspaperEdition[]; fetchedAt?: number; validAt?: number };
       if (!Array.isArray(parsed.editions)) return null;
       // Today's cached entry has a fetchedAt timestamp; treat as stale (and
       // re-fetch from HTTP) if the entry is older than TODAY_LS_TTL_MS.
@@ -427,7 +573,8 @@ export class EditionCacheService {
           return null; // expired — fall through to HTTP
         }
       }
-      return parsed.editions;
+      const validAt = typeof parsed.validAt === 'number' && Number.isFinite(parsed.validAt) ? parsed.validAt : 0;
+      return { editions: parsed.editions, validAt };
     } catch {
       return null; // corrupt entry — fall through to IDB / HTTP
     }
@@ -444,27 +591,27 @@ export class EditionCacheService {
    * Past dates continue to be persisted to both localStorage (permanent,
    * no TTL) and IndexedDB (overflow backstop for large datasets).
    */
-  private _persistAll(date: string, editions: NewspaperEdition[]): void {
+  private _persistAll(date: string, editions: NewspaperEdition[], validAt: number): void {
     if (!editions.length) return;
     // localStorage: all dates (TTL enforced for today inside _persistToLocalStorage).
-    this._persistToLocalStorage(date, editions);
+    this._persistToLocalStorage(date, editions, validAt);
     // IDB: past dates only — today is handled by the localStorage 30-min TTL.
     if (this._isPastDate(date)) {
       // IDB write is async and non-blocking; errors are handled inside IdbCacheService.
-      void this.idbCache.set(date, editions);
+      void this.idbCache.set(date, editions, validAt);
     }
   }
 
-  private _persistToLocalStorage(date: string, editions: NewspaperEdition[]): void {
+  private _persistToLocalStorage(date: string, editions: NewspaperEdition[], validAt: number): void {
     if (!this.isBrowser) return; // SSR — no localStorage
     if (!editions.length) return;
     try {
       if (this._isPastDate(date)) {
-        // Past dates: no TTL — content is immutable once published.
-        localStorage.setItem(this._lsKey(date), JSON.stringify({ editions }));
+        // Past dates: no TTL; kept until a newer server version supersedes the stamp.
+        localStorage.setItem(this._lsKey(date), JSON.stringify({ editions, validAt }));
       } else {
         // Today: include fetchedAt so _readFromStorage can enforce the TTL.
-        localStorage.setItem(this._lsKey(date), JSON.stringify({ editions, fetchedAt: Date.now() }));
+        localStorage.setItem(this._lsKey(date), JSON.stringify({ editions, fetchedAt: Date.now(), validAt }));
       }
     } catch {
       // Quota exceeded — silently skip. IDB write in _persistAll is the backstop

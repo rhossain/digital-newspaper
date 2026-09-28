@@ -402,7 +402,7 @@ export class NewspaperDataService {
       }
       if (inlineState.editions?.length) {
         this.dateIndexService.syncFromEditions(inlineState.editions);
-        this.editionCacheService.seedFromLoadedData(inlineState.editions);
+        this.editionCacheService.seedFromLoadedData(inlineState.editions, inlineState.dataVersion ?? 0);
       }
       // Seed the FULL available-dates list (not just the latest edition's date)
       // so the date picker is complete on the inline-gated first paint, which
@@ -613,7 +613,7 @@ export class NewspaperDataService {
           // would mask the full article content on later reads. The background
           // upgrade below fetches and seeds the full payload instead.
           if (!data._partial) {
-            this.editionCacheService.seedFromLoadedData(data.editions);
+            this.editionCacheService.seedFromLoadedData(data.editions, data.dataVersion ?? 0);
           }
         }
         // Light first-paint payload → upgrade to the full payload in the
@@ -662,7 +662,7 @@ export class NewspaperDataService {
         };
         this.dataSubject.next(merged);
         this.dateIndexService.syncFromEditions(full);
-        this.editionCacheService.seedFromLoadedData(full);
+        this.editionCacheService.seedFromLoadedData(full, current.dataVersion ?? 0);
       });
   }
 
@@ -705,6 +705,7 @@ export class NewspaperDataService {
         catchError(() => of({ dataVersion: 0 })),
       ).subscribe(res => {
         const remote = res?.dataVersion ?? 0;
+        this.editionCacheService.noteServerVersion(remote);
         if (remote > inlineVersion) {
           // Authoritative refresh of the currently-shown date (settings + dates
           // via REST, edition via the cache path). Emits through data$ exactly
@@ -844,11 +845,21 @@ export class NewspaperDataService {
       switchMap(({ settings, dates, version, speculativeEditions }) => {
         const today      = this.getTodayDate();
         const latestDate = dates[0] ?? today;
-        const specEditions = speculativeEditions.editions;
+        // The server version is known from here on. A speculative copy that was
+        // read from the browser's persistent cache and predates it must not be
+        // rendered: it may reference page images that have since been replaced.
+        this.editionCacheService.noteServerVersion(version.dataVersion ?? 0);
+        const specStale =
+          !speculativeEditions.light &&
+          speculativeEditions.editions.length > 0 &&
+          !this.editionCacheService.isCurrent(speculativeDate);
+        const specEditions = specStale ? [] : speculativeEditions.editions;
         const specLight    = speculativeEditions.light;
 
-        // Canonical set of dates needed for the initial view.
-        const datesToLoad = [...new Set([latestDate, today])].filter(Boolean);
+        // Canonical set of dates needed for the initial view. A stale speculative
+        // date is refetched even when it is neither latest nor today (e.g. the
+        // 'specific' date mode), so dropping its stale copy never drops the date.
+        const datesToLoad = [...new Set([latestDate, today, ...(specStale ? [speculativeDate] : [])])].filter(Boolean);
 
         if (datesToLoad.length === 0) {
           // Granular /data/dates returned an empty list — migration is
@@ -950,6 +961,33 @@ export class NewspaperDataService {
         this.dataRecoveredFromMediaLibrary = false;
         return this.hasAnyPages(data) ? of(data) : this.loadDataFromMediaLibrary(data);
       })
+    );
+  }
+
+  /**
+   * Re-read one date from the network and apply it only if it differs from what
+   * is on screen. Emits true when newer data was applied.
+   *
+   * Unlike reloadCurrentDateOnly() this evicts nothing first: when the network
+   * is unavailable the reader keeps the content they have, instead of the date
+   * being emptied. Used to self-heal a page whose image has disappeared from the
+   * server because the page was re-uploaded under a new file name.
+   */
+  refreshDateIfChanged(date: string): Observable<boolean> {
+    return this.editionCacheService.revalidate(date).pipe(
+      map(editions => {
+        if (!editions) return false;
+        const current = this.dataSubject.value;
+        const before = current.editions.filter(e => e.date === date);
+        if (JSON.stringify(before) === JSON.stringify(editions)) return false;
+        const merged = [...current.editions.filter(e => e.date !== date), ...editions].sort((a, b) => {
+          const d = b.date.localeCompare(a.date);
+          return d !== 0 ? d : ((a.edition ?? 1) - (b.edition ?? 1));
+        });
+        this.dataSubject.next({ ...current, editions: merged });
+        return true;
+      }),
+      catchError(() => of(false)),
     );
   }
 
@@ -2113,6 +2151,10 @@ export class NewspaperDataService {
       )
     ).subscribe(res => {
       if (!res) return;
+      // Marks every cached copy older than this version for revalidation, so a
+      // reader who later opens another date gets its current pages too — not
+      // only the date the reload below refreshes.
+      this.editionCacheService.noteServerVersion(res.dataVersion);
       const local = this.dataSubject.value.dataVersion ?? 0;
       if (res.dataVersion > local) {
         this.remoteDataChanged$.next(res.dataVersion);

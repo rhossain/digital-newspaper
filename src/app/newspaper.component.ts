@@ -219,6 +219,12 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   /** One-shot guard so the main image is retried at most once per page. */
   private _mainImageRetried = false;
   /**
+   * Dates whose page data has already been re-read from the network this
+   * session because a page image failed to load. Bounds the self-heal in
+   * onImageError() to one attempt per date.
+   */
+  private readonly _dataHealedDates = new Set<string>();
+  /**
    * Bundled, app-shipped last-resort image shown when a page image or thumbnail
    * cannot load. Lives in src/assets (precached by the service-worker app-shell,
    * works offline). An app-relative path — never run through resolveImageUrl().
@@ -1321,9 +1327,38 @@ export class NewspaperComponent implements OnInit, OnDestroy {
       }
     }
 
-    // Step 2 — give up: show the bundled placeholder. Clear the next-gen
-    // <source> srcsets too, otherwise the <picture> would keep trying a failed
-    // variant instead of falling through to this <img>.
+    // Step 2 — the page data itself may be out of date: a page re-uploaded
+    // under a new file name leaves this copy pointing at an image that no longer
+    // exists. Re-read this date once, without evicting anything (an offline
+    // reader keeps their content). When newer data arrives, the render it
+    // triggers resets this chain and loads the new image; otherwise fall through
+    // to the placeholder. Flagged like the version-poll reload, so it is not
+    // mistaken for a reader's navigation and does not refresh ads.
+    const date = this.selectedDate;
+    const failedUrl = (this.currentPage?.fullImage ?? '').trim();
+    if (date && !this._dataHealedDates.has(date)) {
+      this._dataHealedDates.add(date);
+      this.pollDrivenReload = true;
+      this.dataService.refreshDateIfChanged(date)
+        .pipe(finalize(() => { this.pollDrivenReload = false; }))
+        .subscribe(changed => {
+          const stillSamePage =
+            this.selectedDate === date && (this.currentPage?.fullImage ?? '').trim() === failedUrl;
+          if (!changed && stillSamePage) this.showMainImagePlaceholder();
+        });
+      this.cdr.markForCheck();
+      return;
+    }
+
+    this.showMainImagePlaceholder();
+  }
+
+  /**
+   * Last step of the main image's error chain: show the bundled placeholder.
+   * Clears the next-gen <source> srcsets too, otherwise the <picture> would keep
+   * trying a failed variant instead of falling through to this <img>.
+   */
+  private showMainImagePlaceholder(): void {
     this.mainImageFailed = true;
     this.mainAvifSrcset = '';
     this.mainWebpSrcset = '';
