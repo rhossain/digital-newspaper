@@ -677,10 +677,14 @@ class Digital_Newspaper_API {
         'min_height'=> 60,
       ],
       // ── Mobile post ───────────────────────────────────────────────────────
+      // [300, 250] was added to the Top unit after measurement: banner-only, it
+      // answered every request empty while the Middle unit, which carries
+      // [300, 250], filled. Same fix as desktop_post_top above — declaring the
+      // size only widens eligibility, so it is inert if nothing is booked.
       [
         'id'        => 'mobile_post_top',
         'unit'      => '/22062727803/TDSEV3_Mobile_Post_Top-01',
-        'sizes'     => [[320, 100], [300, 100]],
+        'sizes'     => [[320, 100], [300, 100], [300, 250]],
         'div'       => 'div-gpt-ad-1781520617033-0',
         'min_width' => 300,
         'min_height'=> 100,
@@ -690,6 +694,28 @@ class Digital_Newspaper_API {
         'unit'      => '/22062727803/TDSEV3_Mobile_Post_Middle-01',
         'sizes'     => [[320, 100], [300, 100], [300, 250]],
         'div'       => 'div-gpt-ad-1781521397082-0',
+        'min_width' => 300,
+        'min_height'=> 100,
+      ],
+      // ── Mobile page ───────────────────────────────────────────────────────
+      // Above and below the newspaper page on mobile. They reuse the two mobile
+      // post ad units but need their own ids and GAM div ids: the article modal
+      // opens on top of the page, so both pairs are mounted at once, and GPT
+      // requires every div on the page to be unique. Same pattern as
+      // desktop_post_top_image / desktop_post_top_text sharing one unit.
+      [
+        'id'        => 'mobile_page_top',
+        'unit'      => '/22062727803/TDSEV3_Mobile_Post_Top-01',
+        'sizes'     => [[320, 100], [300, 100], [300, 250]],
+        'div'       => 'div-gpt-ad-1781520617033-1',
+        'min_width' => 300,
+        'min_height'=> 100,
+      ],
+      [
+        'id'        => 'mobile_page_bottom',
+        'unit'      => '/22062727803/TDSEV3_Mobile_Post_Middle-01',
+        'sizes'     => [[320, 100], [300, 100], [300, 250]],
+        'div'       => 'div-gpt-ad-1781521397082-1',
         'min_width' => 300,
         'min_height'=> 100,
       ],

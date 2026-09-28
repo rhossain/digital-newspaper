@@ -1004,6 +1004,33 @@
   width: 100%;
 }
 
+/* Mobile page ads (mobile_page_top / mobile_page_bottom) inside .image-wrapper.
+   The negative side margin lets the ad use the wrapper's 20px side padding: a
+   300px creative needs it, since on a 360px phone the padded content box is only
+   ~268px wide. The ad-slot component still owns visibility (mobile-only, hidden
+   when empty), so these rules only ever affect a slot that is showing. */
+.page-ad {
+  margin-left: -20px;
+  margin-right: -20px;
+}
+
+.page-ad--top {
+  margin-bottom: 16px;
+}
+
+.page-ad--bottom {
+  margin-top: 16px;
+}
+
+/* A 300px ad on a narrow phone can meet the scroll box's edge; never let that
+   turn into a sideways scroll. The page image is width:100%, so nothing else in
+   the box overflows horizontally. Mobile only, matching the ads' breakpoint. */
+@media (max-width: 767px) {
+  .image-wrapper {
+    overflow-x: hidden;
+  }
+}
+
 /* Transparent wrapper: makes <picture> behave as a full-width block so the
    inner <img> sizes against it identically to when it was a direct child of
    .image-inner. This keeps the rendered image box — and therefore the absolute

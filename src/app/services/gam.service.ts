@@ -648,11 +648,11 @@ export class GamService implements OnDestroy {
    * refreshable or the collapse is permanent.
    *
    * But only when our own collapse is the *sole* reason it is hidden. A slot can
-   * be collapsed and independently out of view: `mobile_post_middle` sits inside
-   * the modal's image panel, so the mobile text view hides it too, and
-   * refreshing it there buys an impression nobody can see. Measured on the
-   * `mobile-toggle` case — a blanket collapse exemption put the hidden middle
-   * slot straight back into the batch.
+   * be collapsed and independently out of view: a slot inside the modal's image
+   * panel is hidden by the mobile text view too, and refreshing it there buys an
+   * impression nobody can see. Measured on the `mobile-toggle` case (when
+   * `mobile_post_middle` still sat in that panel) — a blanket collapse exemption
+   * put the hidden slot straight back into the batch.
    *
    * Lifting the collapse for the measurement is what tells the two apart. An
    * inline `display` outranks the host's `:host(.dn-ad--hidden)` rule, so the

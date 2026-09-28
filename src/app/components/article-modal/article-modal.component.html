@@ -81,10 +81,6 @@
           }
           <!-- Slot 6: desktop_post_middle — before the linked section images -->
           <app-ad-slot slotId="desktop_post_middle" />
-          <!-- Slot 8: mobile_post_middle — mirrors slot 6 so "middle" means the
-               same thing on both. Inside the image panel, so the mobile text view
-               hides it; GamService then skips it and buys no unviewable impression. -->
-          <app-ad-slot slotId="mobile_post_middle" />
           <!-- Linked Section Images -->
           @for (linkedSection of modalLinkedSections; track trackByLinkedSectionId($index, linkedSection)) {
             <div class="modal-image-item">
@@ -106,6 +102,10 @@
             <div class="article-body" [innerHTML]="section.content | normalizeContent"></div>
           </div>
         }
+        <!-- Slot 8: mobile_post_middle — the end of the news. Outside both
+             panels, like slot 7, so it shows in the image view and the text view
+             alike and the image/text toggle refreshes it together with slot 7. -->
+        <app-ad-slot slotId="mobile_post_middle" />
       </div>
 
     </div>

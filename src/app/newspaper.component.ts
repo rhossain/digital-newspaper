@@ -50,6 +50,8 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   private static readonly PAGE_SLOTS = [
     'desktop_page_left',
     'desktop_page_right',
+    'mobile_page_top',
+    'mobile_page_bottom',
   ];
 
   /** Right-panel article preview — turns over when the selected article changes. */
@@ -1700,12 +1702,12 @@ export class NewspaperComponent implements OnInit, OnDestroy {
   /**
    * Mobile image/text toggle inside the article modal.
    *
-   * A genuine content swap that mounts nothing: `mobile_post_top` sits outside
-   * `.modal-images-container` and stays visible across the toggle, so without
-   * this it would hold one creative for the whole modal session no matter how
-   * often the reader switched views. `mobile_post_middle` is inside the image
-   * panel and is hidden in text view — GamService's visibility guard drops it on
-   * that half of the toggle, which is the intended outcome.
+   * A genuine content swap that mounts nothing: `mobile_post_top` (above the
+   * article) and `mobile_post_middle` (end of the article) both sit outside the
+   * image and text panels and stay visible across the toggle, so without this
+   * they would hold one creative for the whole modal session no matter how
+   * often the reader switched views. Every switch between Image and Text asks
+   * for a new ad in both; GamService's per-slot rate floor still applies.
    *
    * Guarded on an actual change so that re-tapping the active tab is not a
    * content change.

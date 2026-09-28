@@ -16,6 +16,9 @@ const { launch, boot, makeContext, enable, DIV, SNAP, Inconclusive } = require('
 const results = {};
 const MIN_REFRESH_GAP = 5200; // GamService enforces a 5s floor per slot.
 
+/** Every mobile slot: two in the article modal, two around the newspaper page. */
+const MOBILE_SLOTS = ['mobile_post_top', 'mobile_post_middle', 'mobile_page_top', 'mobile_page_bottom'];
+
 const line = s => console.log(`   ${s}`);
 
 /**
@@ -197,7 +200,7 @@ async function pollGate(browser) {
   await ctx.close();
 }
 
-/** Mobile: the two mobile slots are the only visible ones, and appear once each. */
+/** Mobile: the four mobile slots are the only visible ones, and appear once each. */
 async function mobilePlacement(browser) {
   // needSections is left at its default. This case asserts `opened`, and the only
   // route into the modal is clicking a section — so with needSections:false a boot
@@ -206,7 +209,7 @@ async function mobilePlacement(browser) {
   // `modal opened=false`, every mobile assertion reported 0/2.
   const { ctx, page, state } = await boot(browser, {
     viewport: { width: 390, height: 844 },
-    mutateConfig: c => enable(c, ['mobile_post_top', 'mobile_post_middle']),
+    mutateConfig: c => enable(c, MOBILE_SLOTS),
   });
   const opened = await openArticleModal(page);
   await page.waitForTimeout(4000);
@@ -220,15 +223,48 @@ async function mobilePlacement(browser) {
   const deskShown = placement.filter(h => (h.slot || '').startsWith('desktop_') && h.shown).map(h => h.slot);
   const counts = s.hosts.reduce((a, h) => (h.div && (a[h.div] = (a[h.div] || 0) + 1), a), {});
   const dupes = Object.entries(counts).filter(([, n]) => n > 1).map(([d]) => d);
-  const defined = ['mobile_post_top', 'mobile_post_middle'].filter(id => s.defined.includes(DIV[id]));
+  const defined = MOBILE_SLOTS.filter(id => s.defined.includes(DIV[id]));
+  const n = MOBILE_SLOTS.length;
 
-  line(`modal opened=${opened}   mobile hosts=${mob.length}/2 placed=${mob.filter(h => h.shown).length}/2 GPT-defined=${defined.length}/2`);
+  line(`modal opened=${opened}   mobile hosts=${mob.length}/${n} placed=${mob.filter(h => h.shown).length}/${n} GPT-defined=${defined.length}/${n}`);
   line(`desktop hosts placed on mobile=${JSON.stringify(deskShown)} (expect [])   duplicate divs=${JSON.stringify(dupes)} (expect [])`);
   errLine(state);
   report('mobile-placement',
-    opened && mob.length === 2 && mob.every(h => h.shown) && defined.length === 2 &&
+    opened && mob.length === n && mob.every(h => h.shown) && defined.length === n &&
     deskShown.length === 0 && dupes.length === 0 && state.errs.length === 0,
     { mob, deskShown, dupes });
+  await ctx.close();
+}
+
+/**
+ * Mobile counterpart of `pagination`: every page change gives the two mobile
+ * page slots (above and below the newspaper page) a new ad, once per navigation.
+ */
+async function mobilePagination(browser) {
+  const { ctx, page, state } = await boot(browser, {
+    viewport: { width: 390, height: 844 }, needSections: false,
+    mutateConfig: c => enable(c, MOBILE_SLOTS),
+  });
+  const pageDivs = [DIV.mobile_page_top, DIV.mobile_page_bottom];
+  const s0 = await page.evaluate(SNAP);
+  const definedAtBoot = pageDivs.filter(d => s0.defined.includes(d)).length;
+  const base = await baseline(page);
+  const counts = [];
+  for (const n of [2, 3, 4]) {
+    await page.waitForTimeout(MIN_REFRESH_GAP);
+    await paginate(page, n);
+    const s = await page.evaluate(SNAP);
+    const mine = since(s, base);
+    const last = mine.at(-1) || [];
+    counts.push({ n, refreshes: mine.length, both: pageDivs.every(d => last.includes(d)) });
+    line(`page ${n}: refreshCalls=${mine.length} adReqs=${state.adReqs} batch=${JSON.stringify(last)}`);
+  }
+  const oneEach = counts.every((c, i) => c.refreshes === i + 1);
+  const bothEvery = counts.every(c => c.both);
+  line(`page slots defined at boot=${definedAtBoot}/2   one refresh per navigation=${oneEach}   both page slots in every batch=${bothEvery}`);
+  errLine(state);
+  report('mobile-pagination', definedAtBoot === 2 && oneEach && bothEvery && state.errs.length === 0,
+    { counts, errs: state.errs });
   await ctx.close();
 }
 
@@ -263,7 +299,7 @@ async function mobileNoRefresh(browser) {
 async function noHiddenDefine(browser) {
   const { ctx, page, state } = await boot(browser, {
     viewport: { width: 390, height: 844 }, needSections: false,
-    mutateConfig: c => enable(c, ['mobile_post_top', 'mobile_post_middle']),
+    mutateConfig: c => enable(c, MOBILE_SLOTS),
   });
   await openArticleModal(page);
   await page.waitForTimeout(4000);
@@ -340,9 +376,10 @@ async function deferredRefresh(browser) {
 
 /**
  * The mobile image/text toggle is a content swap that mounts nothing, so only a
- * refresh can turn its ad over. `mobile_post_top` sits outside the image panel
- * and stays visible across the toggle; `mobile_post_middle` is inside it and is
- * hidden in text view, so guard 3 must leave that one alone.
+ * refresh can turn its ads over. `mobile_post_top` (above the article) and
+ * `mobile_post_middle` (end of the article) both sit outside the image and text
+ * panels, so both stay visible and both must get a new ad on every switch — in
+ * each direction. The page slots under the modal did not change and must not.
  */
 async function mobileToggle(browser) {
   // needSections is left at its default: this case has to click a section to
@@ -350,29 +387,39 @@ async function mobileToggle(browser) {
   // carrying into a verdict.
   const { ctx, page, state } = await boot(browser, {
     viewport: { width: 390, height: 844 },
-    mutateConfig: c => enable(c, ['mobile_post_top', 'mobile_post_middle']),
+    mutateConfig: c => enable(c, MOBILE_SLOTS),
   });
   if (!(await openArticleModal(page))) throw new Inconclusive('article modal did not open');
 
   const tabs = page.locator('.mobile-modal-tab');
   if ((await tabs.count()) < 2) throw new Inconclusive('no image/text toggle — this article has no text body');
 
-  await page.waitForTimeout(MIN_REFRESH_GAP);    // clear the slots' mount stamp
-  const before = await page.evaluate(SNAP);
-  await tabs.nth(1).click({ force: true, timeout: 8000 }).catch(() => {});
-  await page.waitForTimeout(3000);
-  const after = await page.evaluate(SNAP);
-
-  const batch = after.refreshes.at(-1) || [];
-  const fired = after.refreshes.length === before.refreshes.length + 1;
-  const topRefreshed = batch.includes(DIV.mobile_post_top);
-  const middleLeftAlone = !batch.includes(DIV.mobile_post_middle);
-  line(`refreshCalls before=${before.refreshes.length} after=${after.refreshes.length} (expect +1)`);
-  line(`batch=${JSON.stringify(batch)}`);
-  line(`mobile_post_top refreshed=${topRefreshed}   mobile_post_middle (now hidden) left alone=${middleLeftAlone}`);
+  const modalDivs = [DIV.mobile_post_top, DIV.mobile_post_middle];
+  const pageDivs  = [DIV.mobile_page_top, DIV.mobile_page_bottom];
+  const toggles = [];
+  // Image -> Text, then Text -> Image: a switch in either direction is a new view.
+  for (const [tab, label] of [[1, 'image->text'], [0, 'text->image']]) {
+    await page.waitForTimeout(MIN_REFRESH_GAP);  // clear the slots' last stamp
+    const before = await page.evaluate(SNAP);
+    await tabs.nth(tab).click({ force: true, timeout: 8000 }).catch(() => {});
+    await page.waitForTimeout(3000);
+    const after = await page.evaluate(SNAP);
+    const batch = after.refreshes.at(-1) || [];
+    const t = {
+      label,
+      fired: after.refreshes.length === before.refreshes.length + 1,
+      bothModal: modalDivs.every(d => batch.includes(d)),
+      noPage: !pageDivs.some(d => batch.includes(d)),
+      batch,
+    };
+    toggles.push(t);
+    line(`${label}: refreshCalls +${after.refreshes.length - before.refreshes.length} (expect +1)  batch=${JSON.stringify(batch)}`);
+    line(`   both modal slots refreshed=${t.bothModal}   page slots left alone=${t.noPage}`);
+  }
   errLine(state);
-  report('mobile-toggle', fired && topRefreshed && middleLeftAlone && state.errs.length === 0,
-    { batch, before: before.refreshes.length, after: after.refreshes.length });
+  report('mobile-toggle',
+    toggles.every(t => t.fired && t.bothModal && t.noPage) && state.errs.length === 0,
+    { toggles });
   await ctx.close();
 }
 
@@ -493,6 +540,7 @@ const CASES = [
   ['burst', paginationBurst],
   ['hidden-tab', hiddenTab],
   ['mobile-placement', mobilePlacement],
+  ['mobile-pagination', mobilePagination],
   ['mobile-no-refresh', mobileNoRefresh],
   ['no-hidden-define', noHiddenDefine],
   ['deferred-refresh', deferredRefresh],

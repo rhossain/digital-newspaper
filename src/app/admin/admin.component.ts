@@ -4315,7 +4315,9 @@ export class AdminComponent implements OnInit, OnDestroy {
     desktop_post_top_text:       'Article modal — before article title (text panel)',
     desktop_post_middle:         'Article modal — before linked section images',
     mobile_post_top:             'Article modal, mobile only — above the article',
-    mobile_post_middle:          'Article modal, mobile only — before linked section images',
+    mobile_post_middle:          'Article modal, mobile only — end of the article (image and text view)',
+    mobile_page_top:             'Newspaper page, mobile only — above the page',
+    mobile_page_bottom:          'Newspaper page, mobile only — below the page',
   };
 
   getSlotPlacement(id: string): string {

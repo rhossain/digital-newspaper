@@ -602,6 +602,16 @@
             </div>
           }
           <div class="image-wrapper">
+            <!-- Slot 9: mobile_page_top — above the newspaper page (mobile only).
+                 Inside .image-wrapper, which is the page's scroll box: the column
+                 around it is locked to the viewport height, so an ad placed
+                 outside would squeeze the page image instead of scrolling with it.
+                 Kept outside .image-inner so the section overlay is unaffected.
+                 Refreshed on every page change with the PAGE_SLOTS group, and
+                 gated like the other always-mounted slots so ads-off leaves no host. -->
+            @if (adService.slotEnabledMap().get('mobile_page_top')) {
+              <app-ad-slot slotId="mobile_page_top" class="page-ad page-ad--top" />
+            }
             <div class="image-inner">
               @if (!imageLoaded && !mainThumbSrc) {
                 <div class="skeleton-loader main-image-skeleton"></div>
@@ -677,6 +687,11 @@
                 ></app-section-overlay>
               }
             </div>
+            <!-- Slot 10: mobile_page_bottom — below the newspaper page (mobile
+                 only), in the same scroll box as slot 9. -->
+            @if (adService.slotEnabledMap().get('mobile_page_bottom')) {
+              <app-ad-slot slotId="mobile_page_bottom" class="page-ad page-ad--bottom" />
+            }
           </div>
           <!-- Page Footer Info -->
           @if (localizedEditor || localizedAddressLine1 || settings?.address?.phone || settings?.address?.email || settings?.address?.website) {
