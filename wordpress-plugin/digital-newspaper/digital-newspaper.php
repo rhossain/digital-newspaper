@@ -594,11 +594,17 @@ class Digital_Newspaper_API {
    * the one with the largest viewport the screen fits. Measured room for the ad:
    * ~298px under 340px wide, 338px+ from 340px. From 768px the desktop slots take
    * over and mobile slots are never defined, so that rule is a safety net.
+   *
+   * 300x250 is the backup size, per the publisher: banner-only, the Top unit
+   * returned empty on about half its requests on staging, while 300x250 (the
+   * Middle unit) filled almost every time. Both sizes go in the same request and
+   * GAM serves whichever pays more, so a slot never waits on a second request
+   * and never takes a cheaper banner over a better-paying rectangle.
    */
   const MOBILE_TOP_SIZE_MAPPING = [
     [ 'viewport' => [768, 0], 'sizes' => [] ],
-    [ 'viewport' => [340, 0], 'sizes' => [[320, 100]] ],
-    [ 'viewport' => [0, 0],   'sizes' => [[300, 100]] ],
+    [ 'viewport' => [340, 0], 'sizes' => [[320, 100], [300, 250]] ],
+    [ 'viewport' => [0, 0],   'sizes' => [[300, 100], [300, 250]] ],
   ];
 
   private function gam_ad_slots(): array {
@@ -692,14 +698,13 @@ class Digital_Newspaper_API {
       // ── Mobile post ───────────────────────────────────────────────────────
       // Per the publisher: "top" slots follow the screen width
       // (MOBILE_TOP_SIZE_MAPPING, above) — 300x100 under 340px, 320x100 from
-      // 340px; for them 'sizes' is the union GPT's defineSlot requires. "Bottom"
-      // slots are a fixed 300x250 on every screen, which fits every phone. No
-      // size under 100px high. The Top unit only fills if GAM has these banner
-      // sizes booked on it.
+      // 340px, each with 300x250 as the backup size; for them 'sizes' is the
+      // union GPT's defineSlot requires. "Bottom" slots are a fixed 300x250 on
+      // every screen, which fits every phone. No size under 100px high.
       [
         'id'        => 'mobile_post_top',
         'unit'      => '/22062727803/TDSEV3_Mobile_Post_Top-01',
-        'sizes'     => [[320, 100], [300, 100]],
+        'sizes'     => [[320, 100], [300, 100], [300, 250]],
         'size_mapping' => self::MOBILE_TOP_SIZE_MAPPING,
         'div'       => 'div-gpt-ad-1781520617033-0',
         'min_width' => 300,
@@ -722,7 +727,7 @@ class Digital_Newspaper_API {
       [
         'id'        => 'mobile_page_top',
         'unit'      => '/22062727803/TDSEV3_Mobile_Post_Top-01',
-        'sizes'     => [[320, 100], [300, 100]],
+        'sizes'     => [[320, 100], [300, 100], [300, 250]],
         'size_mapping' => self::MOBILE_TOP_SIZE_MAPPING,
         'div'       => 'div-gpt-ad-1781520617033-1',
         'min_width' => 300,
