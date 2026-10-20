@@ -16,8 +16,13 @@ interface GptSlot {
   getSlotElementId(): string;
   getAdUnitPath(): string;
   addService(service: unknown): GptSlot;
-  clearTargeting(): GptSlot;
-  setTargeting(key: string, value: string): GptSlot;
+  /**
+   * Per-slot configuration; we use the `targeting` key only. It MERGES per key
+   * (keys left out keep their old value); `targeting: null` clears them all.
+   * Replaces the deprecated `clearTargeting()` / `setTargeting()` (GPT message
+   * #171), which are omitted here so they can't creep back in.
+   */
+  setConfig(config: { targeting?: AdTargeting | null }): GptSlot;
   defineSizeMapping(mapping: unknown): GptSlot;
 }
 
@@ -717,15 +722,21 @@ export class GamService implements OnDestroy {
   }
 
   /**
-   * `setTargeting` appends to any existing values for a key, so without the
-   * `clearTargeting()` first, targeting would degrade to `page=[1,2,3,…]` after a
-   * few navigations.
+   * Replace the slot's targeting with the given key-values.
+   *
+   * `setConfig({ targeting })` merges per key, so a key that is empty now
+   * (e.g. `section` after the reader closes a section) would keep its previous
+   * value. Clearing with `null` first reproduces the old `clearTargeting()` +
+   * `setTargeting()` loop exactly.
    */
   private _applyTargeting(gptSlot: GptSlot, targeting: AdTargeting): void {
-    gptSlot.clearTargeting();
+    // Empty values are left out rather than sent as `page=""`.
+    const clean: AdTargeting = {};
     for (const [key, value] of Object.entries(targeting)) {
-      if (value) gptSlot.setTargeting(key, value);
+      if (value) clean[key] = value;
     }
+    gptSlot.setConfig({ targeting: null });
+    gptSlot.setConfig({ targeting: clean });
   }
 
   /**

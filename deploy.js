@@ -245,10 +245,11 @@ const htaccessContent = `# Redirect all routes to index.html for Angular HTML5 p
 # bundle hash that no longer exists after a deploy → the SPA fallback returns HTML
 # in the script's place → the browser can't execute it → BLANK PAGE for up to an
 # hour. Forcing revalidation makes every load pick up the current shell, while the
-# hashed assets keep their long cache. "always set" overrides LiteSpeed's default.
+# hashed assets keep their long cache. Plain "Header set" (as on ngsw.json):
+# production still served max-age=3600 under "Header always set".
 <IfModule mod_headers.c>
   <FilesMatch "^index(\\.csr)?\\.html$">
-    Header always set Cache-Control "no-cache, must-revalidate"
+    Header set Cache-Control "no-cache, must-revalidate"
   </FilesMatch>
 </IfModule>
 

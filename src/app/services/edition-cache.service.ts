@@ -1,8 +1,8 @@
 import { Injectable, PLATFORM_ID, inject } from '@angular/core';
 import { isPlatformBrowser } from '@angular/common';
-import { HttpClient } from '@angular/common/http';
-import { Observable, of, from } from 'rxjs';
-import { tap, map, catchError, switchMap, timeout } from 'rxjs/operators';
+import { HttpClient, HttpErrorResponse } from '@angular/common/http';
+import { Observable, of, from, timer, throwError } from 'rxjs';
+import { tap, map, catchError, switchMap, timeout, retry } from 'rxjs/operators';
 import { NewspaperEdition } from './newspaper-data.service';
 import { WP_BASE_URL } from '../config';
 import { IdbCacheService } from './idb-cache.service';
@@ -269,6 +269,8 @@ export class EditionCacheService {
     return this.http
       .get<{ editions: NewspaperEdition[] }>(`${this._staticBase}/${date}.light.json`)
       .pipe(
+        // Same retry policy as _tryStatic(); 6 s still covers both attempts.
+        this._retryTransient(),
         timeout(6000),
         map(res => (Array.isArray(res?.editions) ? res.editions : [])),
         switchMap(editions =>
@@ -423,7 +425,12 @@ export class EditionCacheService {
         `${this._staticBase}/${date}.json`,
       )
       .pipe(
-        timeout(6000),
+        // A 504 from the shared host gets one retry; a 404 (no snapshot for this
+        // date) goes straight to REST. The timeout spans both attempts and stays
+        // at 8 s so static + REST (10 s) fits the 20 s chain budget in
+        // NewspaperDataService.
+        this._retryTransient(),
+        timeout(8000),
         map(res => ({
           editions: Array.isArray(res?.editions) ? res.editions : [],
           validAt: this._stampFor(res?.dataVersion),
@@ -437,6 +444,17 @@ export class EditionCacheService {
         map(({ editions }) => editions),
         catchError(() => of([] as NewspaperEdition[])),
       );
+  }
+
+  /** Retry once after 1 s, but only on a server error or dropped connection. */
+  private _retryTransient<T>() {
+    return retry<T>({
+      count: 1,
+      delay: err =>
+        err instanceof HttpErrorResponse && (err.status === 0 || err.status >= 500)
+          ? timer(1000)
+          : throwError(() => err),
+    });
   }
 
   /**

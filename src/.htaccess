@@ -114,11 +114,12 @@
 # bundle hash that no longer exists after a deploy → the SPA fallback returns HTML
 # in the script's place → the browser can't execute it → BLANK PAGE for up to an
 # hour. Forcing revalidation makes every load pick up the current shell, while the
-# hashed assets below keep their 1-year cache. `Header always set` is used because
-# LiteSpeed overrides mod_expires for static HTML.
+# hashed assets below keep their 1-year cache. Plain `Header set`, as on ngsw.json
+# below: production still answered index.csr.html with `max-age=3600` under
+# `Header always set`, while the ngsw.json rule has been taking effect.
 <IfModule mod_headers.c>
   <FilesMatch "^index(\.csr)?\.html$">
-    Header always set Cache-Control "no-cache, must-revalidate"
+    Header set Cache-Control "no-cache, must-revalidate"
   </FilesMatch>
 </IfModule>
 

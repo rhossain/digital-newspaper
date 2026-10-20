@@ -21,6 +21,12 @@ export interface InlineBootstrapState {
   dates?: string[];
   /** Editions for the inlined date(s) — typically today / latest. */
   editions?: NewspaperEdition[];
+  /**
+   * Same as `editions`, but with article bodies kept for the first page only
+   * (what the plugin inlines now, to keep index.html small). Must never be
+   * cached as full content; the app upgrades to the full payload after paint.
+   */
+  lightEditions?: NewspaperEdition[];
   /** Server dataVersion at the moment the blob was generated. */
   dataVersion?: number;
   /** ISO-8601 generation timestamp (diagnostic only). */
@@ -70,12 +76,13 @@ export class BootstrapStateService {
 
       // Minimal structural validation — only accept shapes we can safely use.
       const editionsOk = state.editions === undefined || Array.isArray(state.editions);
+      const lightOk = state.lightEditions === undefined || Array.isArray(state.lightEditions);
       const datesOk = state.dates === undefined || Array.isArray(state.dates);
       const settingsOk =
         state.settings === undefined ||
         (state.settings !== null && typeof state.settings === 'object');
 
-      if (!editionsOk || !datesOk || !settingsOk) return null;
+      if (!editionsOk || !lightOk || !datesOk || !settingsOk) return null;
 
       return state;
     } catch {

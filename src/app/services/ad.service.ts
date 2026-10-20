@@ -48,8 +48,7 @@ interface AdsConfigResponse {
 /** The GPT surface used for bootstrapping only. Slot APIs live in GamService. */
 interface GptBootstrap {
   cmd: Array<() => void>;
-  setConfig(config: { singleRequest: boolean }): void;
-  pubads(): { disableInitialLoad(): void };
+  setConfig(config: { singleRequest?: boolean; disableInitialLoad?: boolean }): void;
   enableServices(): void;
 }
 
@@ -223,7 +222,11 @@ export class AdService {
       // refresh never fires now shows nothing at all. `_scheduleInitialFetch()`
       // in GamService is the only thing standing between a mounted container and
       // a permanently empty one.
-      gt.pubads().disableInitialLoad();
+      //
+      // Deprecated: pubads().disableInitialLoad(). See https://goo.gle/gpt-message#170
+      // Must run before enableServices(). Same setting, new API — but it is the
+      // §8.6 lever, so re-check modal vs panel fill after deploying.
+      gt.setConfig({ disableInitialLoad: true });
 
       gt.enableServices();
     });

@@ -1775,7 +1775,7 @@ googletag.cmd.push(function() {
       // feature with its own flag and its own clear-on-disable handler, so it
       // must not be touched here.
       if (is_string($cleared) && $count > 0 && $cleared !== $html) {
-        $this->atomic_write($path, $cleared);
+        $this->write_index_html($path, $cleared);
       }
     } catch (\Throwable $e) {
       error_log('[DigitalNewspaper] inline index clear-on-disable failed: ' . $e->getMessage());
@@ -1800,10 +1800,50 @@ googletag.cmd.push(function() {
       if (!is_string($html) || $html === '') return;
       $cleared = preg_replace('#\s*<!--dn-preload-->.*?<!--/dn-preload-->#s', '', $html, 1, $count);
       if (is_string($cleared) && $count > 0 && $cleared !== $html) {
-        $this->atomic_write($path, $cleared);
+        $this->write_index_html($path, $cleared);
       }
     } catch (\Throwable $e) {
       error_log('[DigitalNewspaper] preload clear-on-disable failed: ' . $e->getMessage());
+    }
+  }
+
+  /**
+   * Write the served entry HTML and re-pin its hash in the Angular service
+   * worker manifest. ngsw.json records a SHA-1 for every file the SW caches;
+   * once the index is rewritten the build-time hash no longer matches and the
+   * SW refuses to install or update ("Hash mismatch"). Updating the entry makes
+   * the rewritten index an ordinary app update instead.
+   */
+  private function write_index_html(string $path, string $html): bool {
+    if (!$this->atomic_write($path, $html)) return false;
+    $this->sync_ngsw_index_hash($path, $html);
+    return true;
+  }
+
+  private function sync_ngsw_index_hash(string $indexPath, string $html): void {
+    try {
+      $manifestPath = dirname($indexPath) . '/ngsw.json';
+      if (!@is_file($manifestPath) || !@is_writable($manifestPath)) return;
+      $raw = @file_get_contents($manifestPath);
+      if (!is_string($raw) || $raw === '') return;
+      // Decode to objects so `{}` values survive the round trip as objects.
+      $manifest = json_decode($raw);
+      if (!is_object($manifest) || !isset($manifest->hashTable) || !is_object($manifest->hashTable)) return;
+      $key = '/' . basename($indexPath);
+      if (!property_exists($manifest->hashTable, $key)) return;
+      $hash = sha1($html);
+      if ($manifest->hashTable->{$key} === $hash) return;
+      $manifest->hashTable->{$key} = $hash;
+      // .htaccess serves the build's ngsw.json.br/.gz in preference to the
+      // plain file, so remove them; atomic_write() regenerates what it can.
+      @unlink($manifestPath . '.br');
+      @unlink($manifestPath . '.gz');
+      $json = wp_json_encode($manifest, JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT);
+      if (is_string($json) && $json !== '') {
+        $this->atomic_write($manifestPath, $json);
+      }
+    } catch (\Throwable $e) {
+      error_log('[DigitalNewspaper] ngsw.json hash sync failed: ' . $e->getMessage());
     }
   }
 
@@ -2060,12 +2100,17 @@ HTACCESS;
       if (is_string($latest) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $latest)) {
         try {
           $latestEd = $this->get_edition_for_date_granular($latest);
+          // Light editions (article bodies kept for the first page only): the
+          // full set made the served index ~1 MB, which the host was timing out
+          // on (504). The app upgrades to the full payload after first paint.
+          // Under `lightEditions`, not `editions`, so an app build that predates
+          // this ignores the blob instead of caching stripped articles as full.
           $initialStateJson = wp_json_encode([
-            'settings'    => $granularSettings['settings'],
-            'dates'       => $dates,
-            'editions'    => $this->dn_attach_page_dimensions($latestEd['editions']),
-            'dataVersion' => $latestEd['dataVersion'],
-            'generatedAt' => gmdate('c'),
+            'settings'      => $granularSettings['settings'],
+            'dates'         => $dates,
+            'lightEditions' => $this->build_light_editions($this->dn_attach_page_dimensions($latestEd['editions'])),
+            'dataVersion'   => $latestEd['dataVersion'],
+            'generatedAt'   => gmdate('c'),
           ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
           if (!$this->atomic_write(
             $this->static_snapshot_path('initial-state.json'),
@@ -2080,7 +2125,7 @@ HTACCESS;
           // Angular viewer resolves, so the image is fetched exactly once. No-op
           // unless an operator enabled OPTION_INLINE_INDEX or OPTION_PRELOAD_LCP;
           // never throws.
-          $this->maybe_rewrite_index_html($initialStateJson, $latestEd['editions']);
+          $this->maybe_rewrite_index_html($initialStateJson, $latestEd['editions'], $latest);
         } catch (\Throwable $is) {
           $indexFailures[] = 'initial-state.json';
           error_log('[DigitalNewspaper] static snapshot: initial-state.json failed: ' . $is->getMessage());
@@ -2166,8 +2211,10 @@ HTACCESS;
    * @param string $payloadJson Already-encoded initial-state.json string.
    * @param array  $editions    Latest edition list (domain-normalised) for the
    *                            preload builder. Ignored unless preload is on.
+   * @param string $date        Date of $editions (YYYY-MM-DD), used to limit
+   *                            the preload to the routes that show that page.
    */
-  private function maybe_rewrite_index_html(string $payloadJson, array $editions = []): void {
+  private function maybe_rewrite_index_html(string $payloadJson, array $editions = [], string $date = ''): void {
     try {
       $inlineOn  = (bool) get_option(self::OPTION_INLINE_INDEX, false);
       $preloadOn = (bool) get_option(self::OPTION_PRELOAD_LCP, false);
@@ -2207,7 +2254,7 @@ HTACCESS;
       // parallel with the app bundle) than Angular rendering the <img> would.
       $newHtml = preg_replace('#\s*<!--dn-preload-->.*?<!--/dn-preload-->#s', '', $newHtml, 1) ?? $newHtml;
       if ($preloadOn) {
-        $preloadBlock = $this->build_first_page_preload_block($editions);
+        $preloadBlock = $this->build_first_page_preload_block($editions, $date);
         if ($preloadBlock !== '') {
           $injected = preg_replace('#</head>#i', $preloadBlock . '</head>', $newHtml, 1, $hc);
           if ($injected !== null && $hc > 0) {
@@ -2216,10 +2263,14 @@ HTACCESS;
         }
       }
 
-      if ($newHtml === $html) return; // already identical — skip the write
+      if ($newHtml === $html) {
+        // Already identical — skip the write, but still re-pin the SW hash so a
+        // manifest left stale by an earlier failed sync heals on this publish.
+        $this->sync_ngsw_index_hash($path, $html);
+        return;
+      }
 
-      // Reuse the atomic temp-file+rename writer (no .gz siblings for .html).
-      $this->atomic_write($path, $newHtml);
+      $this->write_index_html($path, $newHtml);
     } catch (\Throwable $e) {
       // These are optimisations, never a correctness requirement.
       error_log('[DigitalNewspaper] index.html rewrite failed: ' . $e->getMessage());
@@ -2227,12 +2278,12 @@ HTACCESS;
   }
 
   /**
-   * Build the `<link rel="preload">` markup (wrapped in <!--dn-preload--> markers)
+   * Build the image-preload markup (wrapped in <!--dn-preload--> markers)
    * for the first page the public viewer displays: the page with the LOWEST id in
    * edition 1 (falling back to the first edition present), matching the viewer's
    * default selection. Returns '' when no usable image URL is found.
    */
-  private function build_first_page_preload_block(array $editions): string {
+  private function build_first_page_preload_block(array $editions, string $date = ''): string {
     if (empty($editions)) return '';
 
     // Prefer edition number 1; fall back to the first edition present.
@@ -2259,16 +2310,36 @@ HTACCESS;
     // crossfades in the full image. So preload the THUMBNAIL first at high
     // priority (it is the first paint) and the full image right after at default
     // priority. With no thumbnail, the full image is the first paint → high.
-    $links = '';
+    // Each entry is [url, high priority?].
+    $preloads = [];
     if ($thumbOk) {
-      $links .= '<link rel="preload" as="image" fetchpriority="high" href="' . esc_url($thumb) . '">';
+      $preloads[] = [esc_url_raw($thumb), true];
       if ($fullOk) {
-        $links .= '<link rel="preload" as="image" href="' . esc_url($fullImage) . '">';
+        $preloads[] = [esc_url_raw($fullImage), false];
       }
     } elseif ($fullOk) {
-      $links .= '<link rel="preload" as="image" fetchpriority="high" href="' . esc_url($fullImage) . '">';
+      $preloads[] = [esc_url_raw($fullImage), true];
     }
-    return $links === '' ? '' : '<!--dn-preload-->' . $links . '<!--/dn-preload-->';
+    if (empty($preloads)) return '';
+
+    // Only the home route and this page's own URL show this image; on a deep
+    // link to any other page the preload is a wasted download and a "preloaded
+    // but not used" warning. A static <link> can't see the URL, so a tiny inline
+    // script checks the path and adds the links. The page slug is positional
+    // (lowest id → page-01), matching NewspaperComponent.getPageSlug().
+    $pagePath = '';
+    if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
+      $edNum    = isset($chosen['edition']) ? max(1, (int) $chosen['edition']) : 1;
+      $pagePath = sprintf('/%s/page-01/edition-%02d', $date, $edNum);
+    }
+    $flags = JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT;
+    $js = '(function(p,x,l){'
+        . 'if(p!=="/"&&!(x&&(p===x||p.indexOf(x+"/")===0)))return;'
+        . 'l.forEach(function(i){var e=document.createElement("link");'
+        . 'e.rel="preload";e.as="image";if(i[1])e.setAttribute("fetchpriority","high");'
+        . 'e.href=i[0];document.head.appendChild(e);});'
+        . '})(location.pathname,' . wp_json_encode($pagePath, $flags) . ',' . wp_json_encode($preloads, $flags) . ');';
+    return '<!--dn-preload--><script>' . $js . '</script><!--/dn-preload-->';
   }
 
   /**

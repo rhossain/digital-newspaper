@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/@angular/service-worker/config/schema.json",
-  "index": "/index.html",
+  "index": "/index.csr.html",
   "navigationUrls": [
     "/**",
     "!/**/*.*",
@@ -21,7 +21,6 @@
           "/favicon.ico",
           "/assets/favicon.png",
           "/assets/image-unavailable.svg",
-          "/index.html",
           "/index.csr.html",
           "/manifest.webmanifest",
           "/*.css",

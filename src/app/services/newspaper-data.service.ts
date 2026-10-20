@@ -403,6 +403,10 @@ export class NewspaperDataService {
       if (inlineState.editions?.length) {
         this.dateIndexService.syncFromEditions(inlineState.editions);
         this.editionCacheService.seedFromLoadedData(inlineState.editions, inlineState.dataVersion ?? 0);
+      } else if (inlineState.lightEditions?.length) {
+        // Light editions only feed the date index — never the edition cache,
+        // where stripped article bodies would mask the full content later.
+        this.dateIndexService.syncFromEditions(inlineState.lightEditions);
       }
       // Seed the FULL available-dates list (not just the latest edition's date)
       // so the date picker is complete on the inline-gated first paint, which
@@ -417,11 +421,11 @@ export class NewspaperDataService {
       // the blocking network batch entirely (see loadDataFromGranular). Only
       // retained when it carries everything needed to render — settings, full
       // editions, and a numeric dataVersion — so partial blobs fall through to
-      // the normal network path. initial-state.json carries FULL article content
-      // (not the light variant), so the emitted data is never marked _partial.
+      // the normal network path. A blob with `lightEditions` is emitted as
+      // _partial, so loadData() upgrades it to the full payload after paint.
       const hasAll =
         !!inlineState.settings &&
-        Array.isArray(inlineState.editions) && inlineState.editions.length > 0 &&
+        (!!inlineState.editions?.length || !!inlineState.lightEditions?.length) &&
         typeof inlineState.dataVersion === 'number';
       this._freshInlineState = hasAll ? inlineState : null;
     }
@@ -794,11 +798,12 @@ export class NewspaperDataService {
     if (lightFirst && this._freshInlineState) {
       const inline = this._freshInlineState;
       this._freshInlineState = null;
+      const full = !!inline.editions?.length;
       const data: NewspaperData = {
         settings: inline.settings!,
-        editions: inline.editions!,
+        editions: full ? inline.editions! : inline.lightEditions!,
         dataVersion: inline.dataVersion ?? 0,
-        // NOT _partial: initial-state.json carries full article content.
+        ...(full ? {} : { _partial: true }),
       };
       this.scheduleInlineRevalidation(inline.dataVersion ?? 0);
       return of(data);
