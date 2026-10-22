@@ -198,6 +198,19 @@ export class GamService implements OnDestroy {
    */
   private targeting: AdTargeting = {};
 
+  /**
+   * False until the newspaper component has said what is on screen.
+   *
+   * On a repeat visit the service worker serves the shell from cache and gpt.js
+   * comes from the HTTP cache, so the right-rail slot can mount and be defined
+   * before the first edition render primes `targeting`. Its first request then
+   * went out with `{}` — measured on staging and production alike. While this is
+   * false the initial fetch waits for `primeTargeting()` (bounded by
+   * UNPRIMED_FETCH_MS, so a render that never primes still gets its ad).
+   */
+  private targetingKnown = false;
+  private static readonly UNPRIMED_FETCH_MS = 3000;
+
   /** Per-slot render callbacks, keyed by slot id. */
   private readonly renderListeners = new Map<string, (ev: SlotRenderEvent) => void>();
 
@@ -311,7 +324,18 @@ export class GamService implements OnDestroy {
     this.initialFetchTimer = setTimeout(() => {
       this.initialFetchTimer = null;
       this._flushInitialFetch();
-    }, 0);
+    }, this.targetingKnown ? 0 : GamService.UNPRIMED_FETCH_MS);
+  }
+
+  /** Targeting is now known: release an initial fetch that was waiting for it. */
+  private _markTargetingKnown(): void {
+    if (this.targetingKnown) return;
+    this.targetingKnown = true;
+    if (this.initialFetchTimer !== null) {
+      clearTimeout(this.initialFetchTimer);
+      this.initialFetchTimer = null;
+      this._scheduleInitialFetch();
+    }
   }
 
   private _flushInitialFetch(): void {
@@ -327,6 +351,9 @@ export class GamService implements OnDestroy {
 
       const now = Date.now();
       for (const entry of batch) {
+        // Re-applied here, not just at define time: the slot may have been
+        // defined before `primeTargeting()` ran (see `targetingKnown`).
+        this._applyTargeting(entry.gptSlot, this.targeting);
         entry.initialFetchDone = true;
         entry.lastRefreshedAt = now;
       }
@@ -385,6 +412,7 @@ export class GamService implements OnDestroy {
   primeTargeting(targeting: AdTargeting): void {
     if (!isPlatformBrowser(this.platformId)) return;
     this.targeting = targeting;
+    this._markTargetingKnown();
   }
 
   /**
@@ -399,6 +427,7 @@ export class GamService implements OnDestroy {
     if (!isPlatformBrowser(this.platformId)) return;
 
     this.targeting = targeting;
+    this._markTargetingKnown();
     const now = Date.now();
     // Default to `claimed` rather than `live`: a slot mid-definition when this is
     // called will be live by the time the debounce elapses.
